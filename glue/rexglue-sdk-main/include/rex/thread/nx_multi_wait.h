@@ -90,6 +90,9 @@ class NxConditionBase {
   static std::pair<Result, size_t> WaitMultiple(
       std::vector<NxConditionBase*>&& handles, bool wait_all,
       std::chrono::milliseconds timeout) {
+    if (!nx_sync::SubscribedMultiWait().load(std::memory_order_relaxed)) {
+      return PollingWaitMultiple(std::move(handles), wait_all, timeout);
+    }
     if (handles.empty()) return {Result::kFailed, 0};
     if (handles.size() == 1) return {handles[0]->Wait(timeout), 0};
 
@@ -170,6 +173,81 @@ class NxConditionBase {
         continue;
       }
       waiter.WaitForChange(previous, deadline);
+    }
+  }
+
+  // The original multi-object wait (before C2): try-lock every object, check,
+  // and poll again a millisecond later (nx_sync::SubscribedMultiWait off).
+  static std::pair<Result, size_t> PollingWaitMultiple(
+      std::vector<NxConditionBase*>&& handles, bool wait_all,
+      std::chrono::milliseconds timeout) {
+    if (handles.empty()) return {Result::kFailed, 0};
+    if (handles.size() == 1) return {handles[0]->Wait(timeout), 0};
+    const auto start_time = std::chrono::steady_clock::now();
+    const auto end_time = timeout == std::chrono::milliseconds::max()
+                              ? std::chrono::steady_clock::time_point::max()
+                              : start_time + timeout;
+    while (true) {
+      size_t first_signaled = std::numeric_limits<size_t>::max();
+      bool condition_met = false;
+      bool all_locked = true;
+      std::vector<std::unique_lock<std::mutex>> locks;
+      locks.reserve(handles.size());
+      for (size_t i = 0; i < handles.size(); ++i) {
+        locks.emplace_back(handles[i]->mutex_, std::try_to_lock);
+        if (!locks.back().owns_lock()) {
+          all_locked = false;
+          break;
+        }
+      }
+      if (!all_locked) {
+        locks.clear();
+        std::this_thread::yield();
+        continue;
+      }
+      if (wait_all) {
+        bool all_signaled = true;
+        for (size_t i = 0; i < handles.size(); ++i) {
+          if (!handles[i]->signaled()) {
+            all_signaled = false;
+            break;
+          }
+          if (first_signaled == std::numeric_limits<size_t>::max()) {
+            first_signaled = i;
+          }
+        }
+        condition_met = all_signaled;
+      } else {
+        for (size_t i = 0; i < handles.size(); ++i) {
+          if (handles[i]->signaled()) {
+            first_signaled = i;
+            condition_met = true;
+            break;
+          }
+        }
+      }
+      if (condition_met) {
+        if (wait_all) {
+          for (size_t i = 0; i < handles.size(); ++i) {
+            handles[i]->post_execution();
+          }
+        } else {
+          handles[first_signaled]->post_execution();
+        }
+        return {Result::kSuccess, first_signaled};
+      }
+      locks.clear();
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= end_time) {
+        return {Result::kTimeout, 0};
+      }
+      if (timeout == std::chrono::milliseconds::max()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      } else {
+        const auto remaining =
+            std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now);
+        std::this_thread::sleep_for(std::min(remaining, std::chrono::milliseconds(1)));
+      }
     }
   }
 

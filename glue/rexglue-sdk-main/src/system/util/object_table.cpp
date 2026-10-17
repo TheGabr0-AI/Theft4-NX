@@ -82,12 +82,16 @@ bool ObjectTable::Resize(uint32_t new_capacity) {
   uint32_t old_size = table_capacity_ * sizeof(ObjectTableEntry);
   // C2: never move the table under a lock-free reader. The new table is a
   // copy; the old one is retired, not freed (a few hundred KiB at most), so a
-  // reader that loaded the old pointer still reads valid memory.
-  auto new_table = reinterpret_cast<ObjectTableEntry*>(malloc(new_size));
+  // reader that loaded the old pointer still reads valid memory. Without
+  // lock-free lookups, the original realloc.
+  const bool retire_old_table =
+      rex::thread::nx_sync::FastObjectLookup().load(std::memory_order_relaxed);
+  auto new_table = reinterpret_cast<ObjectTableEntry*>(
+      retire_old_table ? malloc(new_size) : realloc(table_, new_size));
   if (!new_table) {
     return false;
   }
-  if (table_ && old_size) {
+  if (retire_old_table && table_ && old_size) {
     std::memcpy(new_table, table_, std::min(old_size, new_size));
   }
 

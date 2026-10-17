@@ -67,12 +67,7 @@ REXCVAR_DEFINE_BOOL(vulkan_tessellation_wireframe, false, "GPU/Vulkan",
                     "Render tessellation as wireframe")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
-REXCVAR_DEFINE_BOOL(vulkan_specialize_alpha_coverage,
-#if defined(REX_PLATFORM_NX) && REX_PLATFORM_NX
-                    true,
-#else
-                    false,
-#endif
+REXCVAR_DEFINE_BOOL(vulkan_specialize_alpha_coverage, false,
                     "GPU/Vulkan",
                     "Omit disabled host alpha-coverage shader paths using per-draw specialization")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -81,10 +76,22 @@ namespace rex::graphics::vulkan {
 
 namespace {
 
+REXCVAR_DEFINE_BOOL(vulkan_pipeline_worker_priority, false, "GPU/Vulkan",
+                    "Switch: pipeline creation and storage writer threads in the Horizon band "
+                    "of their role instead of the default host priority")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(vulkan_synchronous_pipeline_creation, false, "GPU/Vulkan",
+                    "Switch: compile a missing pipeline on the command processor instead of "
+                    "drawing with a placeholder while a worker compiles it")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 void ApplyPipelineWorkerPriority(std::string_view role) {
 #if defined(REX_PLATFORM_NX) && REX_PLATFORM_NX
   // Raw rex::thread workers do not go through XThread's role assignment.
   // A name alone doesn't change the default host priority set at thread start.
+  if (!REXCVAR_GET(vulkan_pipeline_worker_priority)) {
+    return;
+  }
   if (auto* thread = rex::thread::Thread::GetCurrentThread()) {
     thread->set_nx_priority(rex::thread::nx_priority_for_thread(false, role));
   }
@@ -1361,8 +1368,11 @@ bool VulkanPipelineCache::ConfigurePipeline(
   // The inherited placeholder route drops guest draws and suppresses complete
   // frames, then drains compiler work on the command processor at submission.
   // Preserve every draw: known pipelines are prepared before guest startup,
-  // and an unforeseen cache miss is compiled synchronously rather than skipped.
-  bool use_async = false;
+  // and an unforeseen cache miss is compiled synchronously rather than skipped
+  // (cvar vulkan_synchronous_pipeline_creation; off: the original route).
+  bool use_async = !REXCVAR_GET(vulkan_synchronous_pipeline_creation) &&
+                   REXCVAR_GET(async_shader_compilation) && !creation_threads_.empty() &&
+                   pixel_shader && placeholder_pixel_shader_ != VK_NULL_HANDLE;
 #else
   bool use_async = REXCVAR_GET(async_shader_compilation) && !creation_threads_.empty() &&
                    pixel_shader && placeholder_pixel_shader_ != VK_NULL_HANDLE;

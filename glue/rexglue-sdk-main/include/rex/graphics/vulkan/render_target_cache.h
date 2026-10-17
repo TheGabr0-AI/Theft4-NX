@@ -628,6 +628,9 @@ class VulkanRenderTargetCache final : public RenderTargetCache {
     bool operator<(const TransferShaderKey& other_key) const { return key < other_key.key; }
   };
 
+  // cvar vulkan_transfer_pitch_specialization (init only).
+  static bool TransferPitchSpecialization();
+
   struct TransferPipelineKey {
     RenderPassKey render_pass_key;
     TransferShaderKey shader_key;
@@ -636,12 +639,16 @@ class VulkanRenderTargetCache final : public RenderTargetCache {
     // so these modes do not create variants for an unused value.
     std::array<uint32_t, 3> pitch_tiles;
 
+    // Without pitch specialization the pitches stay zero: one pipeline for
+    // all pitches, as before.
     TransferPipelineKey(RenderPassKey render_pass_key, TransferShaderKey shader_key,
                         uint32_t dest_pitch_tiles, uint32_t source_pitch_tiles,
                         uint32_t host_depth_source_pitch_tiles = 0)
         : render_pass_key(render_pass_key),
           shader_key(shader_key),
-          pitch_tiles{dest_pitch_tiles, source_pitch_tiles, host_depth_source_pitch_tiles} {}
+          pitch_tiles{TransferPitchSpecialization() ? dest_pitch_tiles : 0,
+                      TransferPitchSpecialization() ? source_pitch_tiles : 0,
+                      TransferPitchSpecialization() ? host_depth_source_pitch_tiles : 0} {}
 
     struct Hasher {
       size_t operator()(const TransferPipelineKey& key) const {

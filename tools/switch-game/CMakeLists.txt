@@ -122,8 +122,12 @@ set_source_files_properties(${GENERATED_SOURCES} PROPERTIES COMPILE_OPTIONS "-g1
 # The registration routine contains ~37,000 consecutive virtual calls and only
 # runs at startup. GCC's -O3 processing of this single basic block takes minutes
 # and substantial memory; gameplay functions above retain their -O3 setting.
-set_source_files_properties("${THEFT4_GENERATED_DIR}/gta4_register.cpp"
-    PROPERTIES COMPILE_OPTIONS "-g1;-O1")
+# Off by default: the same flags as the builds up to run 26.
+option(THEFT4_REGISTER_O1 "Compile gta4_register.cpp at -O1 (faster, less memory)" OFF)
+if(THEFT4_REGISTER_O1)
+    set_source_files_properties("${THEFT4_GENERATED_DIR}/gta4_register.cpp"
+        PROPERTIES COMPILE_OPTIONS "-g1;-O1")
+endif()
 
 target_link_libraries(switch-game PRIVATE
     -Wl,--start-group

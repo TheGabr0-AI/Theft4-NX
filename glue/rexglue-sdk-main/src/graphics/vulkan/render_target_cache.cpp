@@ -63,12 +63,7 @@ REXCVAR_DEFINE_BOOL(
     "guest draw pass (experimental on tile-based GPUs)");
 
 REXCVAR_DEFINE_BOOL(
-    vulkan_image_copy_ownership,
-#if defined(REX_PLATFORM_NX) && REX_PLATFORM_NX
-    true,
-#else
-    false,
-#endif
+    vulkan_image_copy_ownership, false,
     "GPU/Vulkan",
     "Use bit-preserving image copies for matching render-target ownership transfers")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -93,18 +88,28 @@ REXCVAR_DEFINE_BOOL(
 // of the D24_UNORM saved-depth-metadata policy. This is an init-only experiment;
 // hardware timings decide its cost, including any loss of driver metadata.
 REXCVAR_DEFINE_BOOL(
-    vulkan_image_copy_float_depth_ownership, REX_PLATFORM_NX != 0, "GPU/Vulkan",
+    vulkan_image_copy_float_depth_ownership, false, "GPU/Vulkan",
     "Allow matching float-depth ownership copies independently of UNORM depth")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(
-    vulkan_partial_image_copy_ownership, REX_PLATFORM_NX != 0, "GPU/Vulkan",
+    vulkan_partial_image_copy_ownership, false, "GPU/Vulkan",
     "Copy independent matching-format regions in mixed ownership batches");
-REXCVAR_DEFINE_BOOL(vulkan_raw_depth_ownership, REX_PLATFORM_NX != 0, "GPU/Vulkan",
+REXCVAR_DEFINE_BOOL(vulkan_raw_depth_ownership, false, "GPU/Vulkan",
                     "Use bounded integer scratch for large exact D32 depth ownership copies.")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(
-    vulkan_shader_ownership_large_copies, REX_PLATFORM_NX != 0, "GPU/Vulkan",
+    vulkan_shader_ownership_large_copies, false, "GPU/Vulkan",
     "Use preflighted transfer shaders for ownership copies with many mapped row strips")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(
+    vulkan_transfer_pitch_specialization, false, "GPU/Vulkan",
+    "Ownership transfer shaders take the EDRAM pitches as specialization constants "
+    "(one pipeline per pitch combination) instead of from the push constants")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(
+    vulkan_transfer_stencil_from_stencil, false, "GPU/Vulkan",
+    "Stencil-bit ownership transfers from a depth source test the fetched stencil byte; "
+    "false: the original path, which tests an unset value and sets every bit")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 // DEFINE_string(
@@ -132,6 +137,10 @@ REXCVAR_DEFINE_BOOL(
 #include <rex/graphics/vulkan/raw_depth_plan.h>
 
 namespace rex::graphics::vulkan {
+
+bool VulkanRenderTargetCache::TransferPitchSpecialization() {
+  return REXCVAR_GET(vulkan_transfer_pitch_specialization);
+}
 
 // Generated with `xb buildshaders`.
 namespace shaders {
@@ -3493,17 +3502,24 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(TransferShaderKey key)
   // Constant pitches let the driver strength-reduce the per-fragment source
   // tile divisions. Base offsets stay in the existing packed push constants.
   // Share shader modules across pitches and specialize only the pipelines.
-  spv::Id spec_const_dest_pitch_tiles = builder.makeUintConstant(1, true);
-  builder.addName(spec_const_dest_pitch_tiles, "xe_transfer_dest_pitch_tiles");
-  builder.addDecoration(spec_const_dest_pitch_tiles, spv::DecorationSpecId,
-                        kTransferSpecIdDestPitch);
-  spv::Id spec_const_source_pitch_tiles = builder.makeUintConstant(1, true);
-  builder.addName(spec_const_source_pitch_tiles, "xe_transfer_source_pitch_tiles");
-  builder.addDecoration(spec_const_source_pitch_tiles, spv::DecorationSpecId,
-                        kTransferSpecIdSourcePitch);
+  // Off (vulkan_transfer_pitch_specialization): the pitches come from the
+  // push constants, as before.
+  const bool pitch_specialization = TransferPitchSpecialization();
+  spv::Id spec_const_dest_pitch_tiles = spv::NoResult;
+  spv::Id spec_const_source_pitch_tiles = spv::NoResult;
+  if (pitch_specialization) {
+    spec_const_dest_pitch_tiles = builder.makeUintConstant(1, true);
+    builder.addName(spec_const_dest_pitch_tiles, "xe_transfer_dest_pitch_tiles");
+    builder.addDecoration(spec_const_dest_pitch_tiles, spv::DecorationSpecId,
+                          kTransferSpecIdDestPitch);
+    spec_const_source_pitch_tiles = builder.makeUintConstant(1, true);
+    builder.addName(spec_const_source_pitch_tiles, "xe_transfer_source_pitch_tiles");
+    builder.addDecoration(spec_const_source_pitch_tiles, spv::DecorationSpecId,
+                          kTransferSpecIdSourcePitch);
+  }
   spv::Id spec_const_host_depth_source_pitch_tiles = spv::NoResult;
-  if (pipeline_layout_info.used_descriptor_sets &
-      kTransferUsedDescriptorSetHostDepthStencilTexturesBit) {
+  if (pitch_specialization && (pipeline_layout_info.used_descriptor_sets &
+                               kTransferUsedDescriptorSetHostDepthStencilTexturesBit)) {
     spec_const_host_depth_source_pitch_tiles = builder.makeUintConstant(1, true);
     builder.addName(spec_const_host_depth_source_pitch_tiles,
                     "xe_transfer_host_depth_source_pitch_tiles");
@@ -3566,8 +3582,14 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(TransferShaderKey key)
   // Calculate the 32bpp tile index from its X and Y parts.
   spv::Id dest_tile_index = builder.createBinOp(
       spv::OpIAdd, type_uint,
-      builder.createBinOp(spv::OpIMul, type_uint, spec_const_dest_pitch_tiles,
-                          dest_tile_index_y),
+      builder.createBinOp(
+          spv::OpIMul, type_uint,
+          pitch_specialization
+              ? spec_const_dest_pitch_tiles
+              : builder.createTriOp(spv::OpBitFieldUExtract, type_uint, address_constant,
+                                    builder.makeUintConstant(0),
+                                    builder.makeUintConstant(xenos::kEdramPitchTilesBits)),
+          dest_tile_index_y),
       dest_tile_index_x);
 
   // Load the destination sample index.
@@ -3908,7 +3930,12 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(TransferShaderKey key)
       builder.makeUintConstant(xenos::kEdramTileCount - 1));
   // Split the source 32bpp tile index into X and Y tile index within the source
   // image.
-  spv::Id source_pitch_tiles = spec_const_source_pitch_tiles;
+  spv::Id source_pitch_tiles =
+      pitch_specialization
+          ? spec_const_source_pitch_tiles
+          : builder.createTriOp(spv::OpBitFieldUExtract, type_uint, address_constant,
+                                builder.makeUintConstant(xenos::kEdramPitchTilesBits),
+                                builder.makeUintConstant(xenos::kEdramPitchTilesBits));
   spv::Id source_tile_index_y =
       builder.createBinOp(spv::OpUDiv, type_uint, source_tile_index, source_pitch_tiles);
   spv::Id source_tile_index_x =
@@ -4635,7 +4662,8 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(TransferShaderKey key)
         }
       }
     }
-    if (mode.output == TransferOutput::kStencilBit && !source_is_color) {
+    if (mode.output == TransferOutput::kStencilBit && !source_is_color &&
+        (key.stencil_copy_output || REXCVAR_GET(vulkan_transfer_stencil_from_stencil))) {
       // Stencil-only modes intentionally never load the depth texture. Use
       // the fetched stencil byte directly rather than testing an unset packed
       // value (the previous bit path consequently set every bit).
@@ -4918,8 +4946,15 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(TransferShaderKey key)
                 builder.makeUintConstant(xenos::kEdramTileCount - 1));
             // Split the host depth source tile index into X and Y tile index
             // within the source image.
-            assert_true(spec_const_host_depth_source_pitch_tiles != spv::NoResult);
-            spv::Id host_depth_source_pitch_tiles = spec_const_host_depth_source_pitch_tiles;
+            assert_true(!pitch_specialization ||
+                        spec_const_host_depth_source_pitch_tiles != spv::NoResult);
+            spv::Id host_depth_source_pitch_tiles =
+                pitch_specialization
+                    ? spec_const_host_depth_source_pitch_tiles
+                    : builder.createTriOp(spv::OpBitFieldUExtract, type_uint,
+                                          host_depth_address_constant,
+                                          builder.makeUintConstant(xenos::kEdramPitchTilesBits),
+                                          builder.makeUintConstant(xenos::kEdramPitchTilesBits));
             spv::Id host_depth_source_tile_index_y =
                 builder.createBinOp(spv::OpUDiv, type_uint, host_depth_source_tile_index,
                                     host_depth_source_pitch_tiles);
@@ -5243,14 +5278,17 @@ VkPipeline const* VulkanRenderTargetCache::GetTransferPipelines(TransferPipeline
       (kTransferPipelineLayoutInfos[size_t(mode.pipeline_layout)].used_descriptor_sets &
        kTransferUsedDescriptorSetHostDepthStencilTexturesBit) != 0;
   const uint32_t specialization_first_entry = dest_is_masked_sample ? 0 : 1;
+  // Without pitch specialization only the masked sample ID, as before.
+  const uint32_t specialization_end_entry =
+      TransferPitchSpecialization() ? (host_depth_source_is_texture ? 4 : 3) : 1;
   VkSpecializationInfo specialization_info = {};
-  specialization_info.mapEntryCount =
-      (host_depth_source_is_texture ? 4 : 3) - specialization_first_entry;
+  specialization_info.mapEntryCount = specialization_end_entry - specialization_first_entry;
   specialization_info.pMapEntries =
       specialization_map_entries.data() + specialization_first_entry;
   specialization_info.dataSize = sizeof(specialization_constants);
   specialization_info.pData = specialization_constants.data();
-  shader_stages[1].pSpecializationInfo = &specialization_info;
+  shader_stages[1].pSpecializationInfo =
+      specialization_info.mapEntryCount ? &specialization_info : nullptr;
 
   VkVertexInputBindingDescription vertex_input_binding;
   vertex_input_binding.binding = 0;

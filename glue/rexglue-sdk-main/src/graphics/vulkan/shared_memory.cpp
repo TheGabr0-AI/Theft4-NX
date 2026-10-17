@@ -24,6 +24,11 @@
 #include <rex/ui/vulkan/gpu_only_allocation.h>
 #include <rex/ui/vulkan/util.h>
 
+REXCVAR_DEFINE_BOOL(vulkan_shared_memory_compute_write_access, false, "GPU/Vulkan",
+                    "Compute writes to the shared memory buffer (resolves, EDRAM dumps) "
+                    "released with SHADER_WRITE access; false: SHADER_READ as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(vulkan_sparse_shared_memory, true, "GPU/Vulkan",
                     "Use sparse shared memory on Vulkan")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
@@ -425,7 +430,9 @@ void VulkanSharedMemory::GetUsageMasks(Usage usage, VkPipelineStageFlags& stage_
       // Resolve and EDRAM dump compute shaders write the guest buffer. The
       // following consumer must see those storage writes before sampling or
       // fetching the updated data; a read access never flushes the producer.
-      access_mask = VK_ACCESS_SHADER_WRITE_BIT;
+      access_mask = REXCVAR_GET(vulkan_shared_memory_compute_write_access)
+                        ? VK_ACCESS_SHADER_WRITE_BIT
+                        : VK_ACCESS_SHADER_READ_BIT;
       return;
     case Usage::kTransferDestination:
       stage_mask = VK_PIPELINE_STAGE_TRANSFER_BIT;

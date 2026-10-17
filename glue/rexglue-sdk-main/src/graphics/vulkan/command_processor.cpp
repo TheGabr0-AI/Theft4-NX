@@ -63,7 +63,7 @@ REXCVAR_DEFINE_BOOL(vulkan_readback_memexport, false, "GPU/Vulkan",
                     "Read data written by memory export in shaders on the CPU")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
-REXCVAR_DEFINE_BOOL(vulkan_dynamic_uniform_constants, REX_PLATFORM_NX != 0, "GPU/Vulkan",
+REXCVAR_DEFINE_BOOL(vulkan_dynamic_uniform_constants, false, "GPU/Vulkan",
                     "Bind guest constants through dynamic UBO descriptors on supported Switch devices")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
@@ -81,11 +81,11 @@ REXCVAR_DEFINE_BOOL(vulkan_dynamic_rendering, true, "GPU/Vulkan",
                     "device (falls back to render passes otherwise)")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
-REXCVAR_DEFINE_BOOL(vulkan_reuse_constant_descriptors, bool(REX_PLATFORM_NX), "GPU/Vulkan",
+REXCVAR_DEFINE_BOOL(vulkan_reuse_constant_descriptors, false, "GPU/Vulkan",
                     "Reuse immutable guest constant sets while binding exact allocation offsets")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(vulkan_reuse_texture_descriptors, bool(REX_PLATFORM_NX), "GPU/Vulkan",
+REXCVAR_DEFINE_BOOL(vulkan_reuse_texture_descriptors, false, "GPU/Vulkan",
                     "Reuse unchanged texture and sampler descriptor contents within a submission")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
@@ -95,17 +95,17 @@ REXCVAR_DEFINE_BOOL(
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_BOOL(
-    vulkan_submission_timestamps, REX_PLATFORM_NX != 0, "GPU/Vulkan",
+    vulkan_submission_timestamps, false, "GPU/Vulkan",
     "Measure command-buffer GPU elapsed time without additional fence waits")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_BOOL(
-    vulkan_operation_timestamps, REX_PLATFORM_NX != 0, "GPU/Vulkan",
+    vulkan_operation_timestamps, false, "GPU/Vulkan",
     "Partition GPU completion time by render, texture, resolve, transfer and barrier work")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_BOOL(
-    vulkan_device_uniform_buffers, REX_PLATFORM_NX != 0, "GPU/Vulkan",
+    vulkan_device_uniform_buffers, false, "GPU/Vulkan",
     "Copy shader constants to unmapped GPU-only buffers before drawing (Switch GPU L2 caching)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 

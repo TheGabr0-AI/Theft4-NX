@@ -148,7 +148,10 @@ REXCVAR_DEFINE_BOOL(nx_log_durable, false, "Switch",
                     "close on the thread that logs: slow on the SD, for crash hunting); false: a "
                     "writer thread appends the lines once a second, and the exit steps, "
                     "terminations, the stop and faults write them at once (run 19)");
-REXCVAR_DEFINE_BOOL(nx_trace_exports, false, "Switch",
+REXCVAR_DEFINE_STRING(nx_game_dir, "sdmc:/switch/theft4/game", "Switch",
+                      "Directory of the game files (game: and d:), default.xex included")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(nx_trace_exports, true, "Switch",
                     "Trace every export (counts, first calls, the export each thread is inside "
                     "for the snapshots); false for measurement runs (export_stubs.h)");
 REXCVAR_DEFINE_BOOL(nx_disable_auto_sleep, true, "Switch",
@@ -158,8 +161,12 @@ REXCVAR_DEFINE_INT32(nx_nvmap_mb, 0, "Switch",
                      "nx_gpu = vulkan: MB of libnx's nvdrv transfer memory "
                      "(__nx_nv_transfermem_size, bookkeeping of every GPU allocation; libnx 8). 0 = "
                      "leave libnx's (nfsmw-nx: 0x235C SharedMemoryTooSmall when it runs out)");
-REXCVAR_DEFINE_BOOL(nx_audio, true, "Switch", "Native stereo sound via the Switch audio renderer");
-REXCVAR_DEFINE_BOOL(nx_vk_capture_frames, false, "Switch", "Diagnostic GPU readback and pixel statistics; may stall rendering");
+REXCVAR_DEFINE_BOOL(nx_audio, false, "Switch",
+                    "Native stereo sound via the Switch audio renderer; false: the null audio "
+                    "system (cvar nx_null_audio), as up to run 26");
+REXCVAR_DEFINE_BOOL(nx_vk_capture_frames, true, "Switch",
+                    "nx_gpu = vulkan: read the guest output back at 20, 40, 60, 120 and 240 s "
+                    "and log its pixel statistics (as up to run 26); may stall rendering");
 REXCVAR_DEFINE_BOOL(nx_vk_dump_frames, false, "Switch",
                     "nx_gpu = vulkan: also write the guest output captured at 20, 40, 60, 120 "
                     "and 240 s as PPM files in sdmc:/switch/theft4/frames (the capture and its "
@@ -175,7 +182,7 @@ REXCVAR_DEFINE_BOOL(nx_apm_clock, true, "Switch",
                     "460.8 MHz, memory 1331.2, CPU 1020) through apm, at start and on every "
                     "dock/handheld change; docked is left alone. No boost, no overclock; the "
                     "clocks read back are in the heartbeat (nx_clocks.h)");
-REXCVAR_DEFINE_BOOL(nx_audio_guest_priority, true, "Switch",
+REXCVAR_DEFINE_BOOL(nx_audio_guest_priority, false, "Switch",
                     "Switch: deadline scheduling for the verified GTA IV guest audio mixer");
 REXCVAR_DEFINE_BOOL(nx_perf_csv, false, "Switch",
                     "Write a separate performance CSV for each run, once per Vulkan heartbeat; "
@@ -184,18 +191,20 @@ REXCVAR_DEFINE_BOOL(nx_perf_csv, false, "Switch",
 // Run 3: run 2 was CPU-bound at 1020 MHz (pipeline compilation, the game's
 // threads, its audio mixer); these are sys-clk's job done in the game, with
 // Nintendo's own top steps only (nx_clocks.h).
-REXCVAR_DEFINE_INT32(nx_cpu_mhz, 1785, "Switch",
+REXCVAR_DEFINE_INT32(nx_cpu_mhz, 0, "Switch",
                      "CPU clock set through clkrst on top of the apm configuration, in MHz "
-                     "(0 = keep 1020; at most 1785, the boost-mode clock)")
+                     "(0 = keep 1020; at most 1785, the boost-mode clock; run 29: 1785)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_INT32(nx_gpu_mhz, 768, "Switch",
+REXCVAR_DEFINE_INT32(nx_gpu_mhz, 0, "Switch",
                      "GPU clock set through clkrst, in MHz (0 = keep 460.8; at most 768, the "
-                     "docked clock; above 460.8 in handheld mode only on Mariko consoles)")
+                     "docked clock; above 460.8 in handheld mode only on Mariko consoles; run "
+                     "29: 768)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_INT32(nx_emc_mhz, 1600, "Switch",
-                     "Memory clock set through clkrst, in MHz (0 = keep 1331.2; at most 1600)")
+REXCVAR_DEFINE_INT32(nx_emc_mhz, 0, "Switch",
+                     "Memory clock set through clkrst, in MHz (0 = keep 1331.2; at most 1600; "
+                     "run 29: 1600)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(nx_shader_storage, true, "Switch",
+REXCVAR_DEFINE_BOOL(nx_shader_storage, false, "Switch",
                     "Keep the guest shaders, the pipeline descriptions and NVK's compiled "
                     "pipelines in sdmc:/switch/theft4/runtime-cache/shaders, and build them "
                     "before the first draw of the next run (run 2 compiled ~290 pipelines at "
@@ -205,14 +214,14 @@ REXCVAR_DEFINE_INT32(nx_gpu_l2, 0, "Switch",
                      "Legacy NVK mapping override; ignored by this Mesa 26.2.4 build, "
                      "which preserves the driver's GPU cache and completion policy")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(nx_direct_resolve, true, "Switch",
+REXCVAR_DEFINE_BOOL(nx_direct_resolve, false, "Switch",
                     "Resolve supported host render targets directly into guest memory, "
                     "avoiding intermediate EDRAM dumps; unsupported cases use the existing path")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(nx_log_debug, false, "Switch",
-                    "true: the SDK's debug lines in game.log too. Run 2 wrote one per finished "
-                    "file read and one per frame, ~10000 SD writes competing with the game's "
-                    "own streaming; false: info and above")
+REXCVAR_DEFINE_BOOL(nx_log_debug, true, "Switch",
+                    "true: the SDK's debug lines in game.log too (as up to run 26). Run 2 wrote "
+                    "one per finished file read and one per frame, ~10000 SD writes competing "
+                    "with the game's own streaming; false: info and above")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 // C1 (Claude): CPU ceiling measurement inside one session. Once the game has
 // shown gameplay-sized frames for two heartbeats, the GPU work is switched off
@@ -234,15 +243,20 @@ REXCVAR_DEFINE_BOOL(nx_frame_structure_capture, false, "Switch",
                     "[NativeOracleState] lines, no XTR) when gameplay is first detected")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DECLARE(bool, native_renderer_oracle_capture);
-// C2: synchronisation fast paths (rex/thread/nx_sync_tuning.h).
-REXCVAR_DEFINE_BOOL(nx_sync_fast_lookup, true, "Switch",
+// C2: synchronisation fast paths (rex/thread/nx_sync_tuning.h). All false:
+// the synchronisation of run 26.
+REXCVAR_DEFINE_BOOL(nx_sync_multi_wait, false, "Switch",
+                    "Multi-object waits sleep until one of their objects changes instead of "
+                    "polling every object once a millisecond")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(nx_sync_fast_lookup, false, "Switch",
                     "Kernel object lookups (handles, dispatcher headers) without the global "
                     "critical region")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(nx_sync_notify_one, true, "Switch",
+REXCVAR_DEFINE_BOOL(nx_sync_notify_one, false, "Switch",
                     "Wake one waiter for auto-reset events, mutants and single semaphore counts")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(nx_sync_irq_lock_free, true, "Switch",
+REXCVAR_DEFINE_BOOL(nx_sync_irq_lock_free, false, "Switch",
                     "Guest mfmsr/mtmsrd interrupt lock per thread, not on the global mutex")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(nx_ab_transfer_modes, false, "Switch",
@@ -251,7 +265,7 @@ REXCVAR_DEFINE_BOOL(nx_ab_transfer_modes, false, "Switch",
 REXCVAR_DEFINE_INT32(nx_ownership_transfer_skip, 0, "Switch",
                      "EDRAM ownership transfers skipped: 0 none, 1 depth<->color, 2 all")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(nx_sync_lock_free_release, true, "Switch",
+REXCVAR_DEFINE_BOOL(nx_sync_lock_free_release, false, "Switch",
                     "Semaphore releases and event signals without the object mutex when nobody waits")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(nx_ab_stencil_modes, false, "Switch",
@@ -295,7 +309,6 @@ REXCVAR_DEFINE_STRING(nx_exit_mode, "D", "Switch",
 namespace {
 
 constexpr const char* kRootDir = "sdmc:/switch/theft4";
-constexpr const char* kGameDir = "sdmc:/LibertyRecomp/game";
 constexpr const char* kLogPath = "sdmc:/switch/theft4/game.log";
 constexpr const char* kPreviousLogPath = "sdmc:/switch/theft4/game.prev.log";
 constexpr const char* kCrashPath = "sdmc:/switch/theft4/game-crash.log";
@@ -1040,7 +1053,6 @@ void StartLogging() {
   g_logging_ready = true;
   rex::InitLogging(config);
   GAME_INFO("switch-game: log %s, crash log %s", kLogPath, kCrashPath);
-  GAME_INFO("build: nx-claude-c6 (C5 on the FBO path + stencil transfer A/B)");
   if (!policy_ok) {
     GAME_ERROR("diagnostics::Configure(logging): %s", policy_error.c_str());
   }
@@ -1062,8 +1074,11 @@ void StartLogging() {
   GAME_INFO("cvars from argv, then %s and %s; nx_gpu = %s", kConfigPath, kAltConfigPath,
             REXCVAR_GET(nx_gpu).c_str());
   // SetDefaultLevel, not SetAllLevels: run 3 still had the kernel's debug
-  // lines, from a category logger created after this point.
-  rex::SetDefaultLevel(REXCVAR_GET(nx_log_debug) ? spdlog::level::debug : spdlog::level::info);
+  // lines, from a category logger created after this point. nx_log_debug =
+  // true leaves the configuration above (debug) untouched, as up to run 26.
+  if (!REXCVAR_GET(nx_log_debug)) {
+    rex::SetDefaultLevel(spdlog::level::info);
+  }
   GAME_INFO("SDK log level: %s (cvar nx_log_debug)",
             REXCVAR_GET(nx_log_debug) ? "debug" : "info");
   // Run 24 (C): which NRO and which configuration are running, in one line:
@@ -1127,23 +1142,27 @@ void StartLogging() {
             int(appletGetAppletType()), total >> 20, used >> 20);
 }
 
+// cvar nx_game_dir.
+std::string GameDir() { return REXCVAR_GET(nx_game_dir); }
+
 bool CheckGameFiles() {
   std::error_code ec;
-  const std::filesystem::path game(kGameDir);
+  const std::string game_dir = GameDir();
+  const std::filesystem::path game(game_dir);
   const bool xex = std::filesystem::is_regular_file(game / "default.xex", ec);
   const bool xexp = std::filesystem::exists(game / "default.xexp", ec);
   const auto size = xex ? std::filesystem::file_size(game / "default.xex", ec) : 0;
-  GAME_INFO("game files in %s: default.xex %s (%" PRIu64 " bytes), default.xexp %s", kGameDir,
+  GAME_INFO("game files in %s: default.xex %s (%" PRIu64 " bytes), default.xexp %s", game_dir.c_str(),
             xex ? "present" : "MISSING", uint64_t(size), xexp ? "PRESENT" : "absent");
   if (!xex) {
-    GAME_ERROR("copy the European default.xex (and the game data) to %s", kGameDir);
+    GAME_ERROR("copy the European default.xex (and the game data) to %s", game_dir.c_str());
     return false;
   }
   if (xexp) {
     // The code was generated from the base executable; the loader would apply
     // the patch and run code that no longer matches (06 section 2).
     GAME_ERROR("remove %s/default.xexp: this build is generated from the base executable",
-               kGameDir);
+               game_dir.c_str());
     return false;
   }
   // Stream the XEX before allocating guest memory. Region alone cannot identify
@@ -3043,7 +3062,7 @@ void ProfileLog(const char* text) { GAME_INFO("%s", text); }
   padInitializeDefault(&g_pad);
   svcGetThreadId(&g_host_main_thread_id, CUR_THREAD_HANDLE);
   g_start_tick = armGetSystemTick();
-  ConsolePrint("Theft4 Switch nx-claude-c6\n\n");
+  ConsolePrint("Theft4 switch-game (no graphics)\n\n");
 
   StartLogging();
   CaptureTerminations();
@@ -3065,6 +3084,8 @@ void ProfileLog(const char* text) { GAME_INFO("%s", text); }
   rex::thread::nx_sync::LockFreeRelease().store(REXCVAR_GET(nx_sync_lock_free_release));
   GAME_INFO("C5 lock-free semaphore/event release: %d",
             int(REXCVAR_GET(nx_sync_lock_free_release)));
+  rex::thread::nx_sync::SubscribedMultiWait().store(REXCVAR_GET(nx_sync_multi_wait));
+  GAME_INFO("C2 multi-object waits by subscription: %d", int(REXCVAR_GET(nx_sync_multi_wait)));
   rex::graphics::nx_ab::OwnershipTransferSkip().store(REXCVAR_GET(nx_ownership_transfer_skip));
   rex::graphics::nx_ab::StencilTransferMode().store(REXCVAR_GET(nx_stencil_transfer_mode));
   GAME_INFO("C6 stencil transfer mode %d; A/B stencil modes %d",
@@ -3136,10 +3157,10 @@ void ProfileLog(const char* text) { GAME_INFO("%s", text); }
               trace_ns, tls_ns, REXCVAR_GET(nx_trace_exports) ? "on" : "OFF");
   }
 
-  GAME_INFO("about to construct rex::Runtime (game:, d: = %s)", kGameDir);
+  GAME_INFO("about to construct rex::Runtime (game:, d: = %s)", GameDir().c_str());
   const std::filesystem::path root(kRootDir);
   auto runtime = std::make_unique<rex::Runtime>(
-      std::filesystem::path(kGameDir), root / "user", std::filesystem::path(kGameDir) / "update",
+      std::filesystem::path(GameDir()), root / "user", std::filesystem::path(GameDir()) / "update",
       root / "runtime-cache", std::filesystem::path{}, root / "marketplace", root / "saves");
 
   rex::RuntimeConfig config;

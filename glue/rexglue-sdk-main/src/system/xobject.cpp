@@ -158,7 +158,12 @@ bool XObject::TryRetain() {
 
 void XObject::Release() {
   if (--pointer_ref_count_ == 0) {
-    DeferDelete(this);
+    // Lock-free lookups (C2) may still read the object: keep it 2 s.
+    if (rex::thread::nx_sync::FastObjectLookup().load(std::memory_order_relaxed)) {
+      DeferDelete(this);
+    } else {
+      delete this;
+    }
   }
 }
 

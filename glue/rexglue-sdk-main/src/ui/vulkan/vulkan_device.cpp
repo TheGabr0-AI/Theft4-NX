@@ -44,7 +44,7 @@ REXCVAR_DEFINE_BOOL(vulkan_require_fill_mode_non_solid, !REX_PLATFORM_DARWIN, "U
                     "Require fillModeNonSolid support for Vulkan GPU emulation (disable to "
                     "allow fallback to solid fill for line/point polygon modes)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(vulkan_stencil_copy_ownership, REX_PLATFORM_NX != 0, "GPU/Vulkan",
+REXCVAR_DEFINE_BOOL(vulkan_stencil_copy_ownership, false, "GPU/Vulkan",
                     "Enable maintenance8 color-to-stencil copies for ownership transfers")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 

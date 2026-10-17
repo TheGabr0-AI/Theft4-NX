@@ -4127,3 +4127,125 @@ Come leggere:
   compare nelle letture, il problema è prima del gioco.
 - **Clock:** con la GPU a 460,8 MHz il fotogramma in partita dovrebbe
   tornare a 1,4–1,7 s (run 24).
+
+## 28. Il lavoro di DevZer0D4Y (sync-clean) e i run 27, 28 e 29 (piano, 2026-10-17)
+
+Il 2026-10-17 DevZer0D4Y ha pubblicato su `origin/main` tre commit: `4858a98`
+(R5–R17: copie di ownership Vulkan, raw depth, costanti dinamiche, audio
+nativo, clock, CSV di prestazioni), `c2c3200` (C1–C6: sync lock-free, lock
+d'interrupt per thread, schedule A/B, modi del trasferimento stencil,
+`tools/switch-perf`) e il merge `cf6bfa7` con il nostro `a25ce24`. Il ramo
+locale `sync-clean` è `a25ce24` più quel lavoro, con queste differenze:
+
+- **Tolto:** `include/rex/audio/nx_exact_wave_helpers.h`: 16 funzioni del gioco
+  in PowerPC tradotto istruzione per istruzione (col disassemblato nei
+  commenti), incluso da nessun file tracciato; ora in `.gitignore`.
+- **Percorsi personali:** `/Volumes/Untitled/...` del ramo
+  `REXGLUE_LOCAL_CODEGEN_ONLY` diventa la variabile di cache
+  `REXGLUE_LOCAL_FILE_BACKING_DIRECTORY` (vuota: `shm_open` come prima);
+  `/Volumes/SWITCH SD` del README di `tools/switch-perf` diventa `/path/to/sd`.
+- **Cartella del gioco:** di nuovo `sdmc:/switch/theft4/game` (loro:
+  `sdmc:/LibertyRecomp/game`), con la cvar `nx_game_dir` per cambiarla.
+- **Ogni novità spegnibile, spenta di default:** i default di `sync-clean` sono
+  quelli del run 26 (audio nullo, apm `0x92220008` senza override dei clock,
+  sync originale, direct resolve e shader storage spenti; Vulkan acceso).
+
+### A. Cvar e default
+
+| Cvar | Default `sync-clean` | Loro default | Cosa fa |
+|---|---|---|---|
+| `nx_game_dir` | `sdmc:/switch/theft4/game` | (costante `sdmc:/LibertyRecomp/game`) | cartella di `game:`/`d:` |
+| `nx_audio` | false (audio nullo) | true | audio nativo (audren, 48 kHz) |
+| `nx_audio_guest_priority` | false | true | banda di priorità audio per il mixer del gioco (`82169400`) |
+| `nx_cpu_mhz`, `nx_gpu_mhz`, `nx_emc_mhz` | 0 (nessun override) | 1785, 768, 1600 | clock alzati con clkrst sopra apm |
+| `nx_sync_fast_lookup` | false | true | C2: ricerche di oggetti senza lock globale (e `delete` rimandata di 2 s, tabella mai spostata) |
+| `nx_sync_notify_one` | false | true | C2: sveglia un solo waiter |
+| `nx_sync_irq_lock_free` | false | true | C3: lock d'interrupt guest per thread |
+| `nx_sync_lock_free_release` | false | true | C5: release/signal senza mutex |
+| `nx_sync_multi_wait` | false | (sempre attivo) | **nuova:** attese multiple per iscrizione invece del polling a 1 ms |
+| `nx_direct_resolve` | false | true | resolve diretti XeniOS (compilati nella NRO) |
+| `nx_shader_storage` | false | true | shader, pipeline e cache del driver su SD |
+| `nx_log_debug` | true (livello debug come fino al run 26) | false | false: solo info |
+| `nx_trace_exports` | true (come fino al run 26) | false | trace delle export |
+| `nx_vk_capture_frames` | true (come fino al run 26) | false | letture del fotogramma a 20–240 s |
+| `nx_gpu_guest_progress_wait` | false | true | attese del guest sui fence con eventi |
+| `nx_xthread_stack_kib` | 16384 (come prima) | 2048 | stack host degli XThread |
+| `vulkan_dynamic_uniform_constants`, `vulkan_reuse_constant_descriptors`, `vulkan_reuse_texture_descriptors`, `vulkan_device_uniform_buffers` | false | true | costanti e descrittori |
+| `vulkan_submission_timestamps`, `vulkan_operation_timestamps` | false | true | timestamp GPU (telemetria) |
+| `vulkan_specialize_alpha_coverage` | false | true | shader senza alpha coverage quando non serve |
+| `vulkan_image_copy_ownership`, `vulkan_image_copy_float_depth_ownership`, `vulkan_partial_image_copy_ownership`, `vulkan_raw_depth_ownership`, `vulkan_shader_ownership_large_copies`, `vulkan_stencil_copy_ownership` | false | true | trasferimenti di ownership EDRAM con copie |
+| `vulkan_transfer_pitch_specialization` | false | (sempre attivo) | **nuova:** pitch EDRAM come costanti di specializzazione |
+| `vulkan_transfer_stencil_from_stencil` | false | (sempre attivo) | **nuova:** correzione del bit di stencil da sorgente depth (prima: tutti i bit a 1) |
+| `vulkan_shared_memory_compute_write_access` | false | (sempre attivo) | **nuova:** barriera SHADER_WRITE dopo resolve/dump (prima SHADER_READ) |
+| `vulkan_synchronous_pipeline_creation` | false | (sempre attivo su Switch) | **nuova:** pipeline mancanti compilate subito invece del segnaposto asincrono |
+| `vulkan_pipeline_worker_priority` | false | (sempre attivo) | **nuova:** priorità Horizon dei thread di pipeline |
+
+Le cvar di misura (`nx_ab_*`, `nx_ownership_transfer_skip`,
+`nx_stencil_transfer_mode`, `nx_frame_structure_capture`, `nx_perf_csv`,
+`nx_profile`) erano già spente. CMake: `-O1` su `gta4_register.cpp` è ora
+l'opzione `THEFT4_REGISTER_O1` (OFF: stessi flag di prima).
+
+**Resta acceso senza cvar** (solo diagnostica o equivalente): righe di log in
+più (`NX scheduling` per ogni thread, `[FrameFlow]` ogni 10 s, nel battito
+`guest output cadence`, `GPU guest progress`, `GPU push fragments`, `nvdrv wait
+results`, le righe dei mapping GPU), la temperatura del SoC letta con i clock,
+il controllo SHA256 di `default.xex` all'avvio (deve valere `74d480d2…`, il
+nostro), i wrap di `nvioctlNvhostAsGpu_MapBufferEx` e
+`nvGpuChannelGetErrorNotification` (contano e registrano, non cambiano
+niente), la riscrittura di `Float7e3To32` (verificata equivalente), i pool di
+descrittori con anche il tipo dinamico, `variableMultisampleRate` abilitato
+(serve solo a FSI), i marcatori di operazione nel command buffer differito, i
+riordini sotto lock di `ObjectTable`/`StashHandle`, una notifica in più dopo
+un'attesa riuscita (`PassOnLocked`), le pipeline dei resolve diretti create
+all'avvio (usate solo con `nx_direct_resolve`).
+
+**Verifica statica** (script `cvar_compare.py`, stessa logica delle righe
+`build: Switch cvars` e `build: cvars not at the default`): con
+`run26-build/game.toml` su `a25ce24` e `run27/game.toml` su `sync-clean`, le
+312 cvar comuni hanno tutte lo stesso valore; le 48 nuove sono spente o
+neutre. Sul log del run 27 si verifica allo stesso modo, confrontando i
+valori: `build: Switch cvars` deve dare gli stessi valori del run 26 per le
+cvar che c'erano già; `build: cvars not at the default` può perdere `nx_gpu`
+(ora `vulkan` è il default) senza che il valore cambi.
+
+### B. Run 27, 28, 29 (`out/console-runs/run27-29-build/`)
+
+Una sola build su `sync-clean` (Vulkan, `THEFT4_SWITCH_DIRECT_RESOLVE=ON`):
+`switch-game.nro`, `switch-game.elf` e `COMMIT` in `run27-29-build/`; le
+differenze sono solo nei toml (`run27/`, `run28/`, `run29/game.toml`).
+
+| Run | Configurazione | Domanda |
+|---|---|---|
+| 27 | le 4 righe del run 26, tutto il nuovo spento | la build `sync-clean` si comporta come quella del run 26? |
+| 28 | come 27 con le funzioni di DevZer0D4Y accese (i loro default), clock standard | cosa danno le loro funzioni, a parità di clock? |
+| 29 | come 28 più `nx_cpu_mhz = 1785`, `nx_gpu_mhz = 768`, `nx_emc_mhz = 1600` | cosa danno i clock (sola differenza col 28)? |
+
+Nel 28 e nel 29 la diagnostica resta quella del run 26 (trace delle export,
+log debug, catture del fotogramma), così le differenze col 27 sono solo
+funzionali.
+
+Protocollo di ciascun run: quello del run 26 (§27, "Run 26: protocollo più
+lungo"), con `switch-game.nro` di `run27-29-build/` e il `game.toml` del run:
+3 avvii, fino a 15 minuti dall'ingresso in partita o fino al crash,
+`note.txt` per avvio, `sd.txt` una volta per run; log in
+`out/console-runs/runNN/1`–`3`. In più:
+
+- **I file del gioco** restano in `sdmc:/switch/theft4/game` (nessuno
+  spostamento).
+- **Run 28 e 29, shader storage:** prima dell'avvio 1 cancellare
+  `sdmc:/switch/theft4/runtime-cache/shaders` (il 28 parte da vuoto, il 29 dalla
+  cache lasciata dal 28: annotarlo); non cancellarla tra gli avvii 2 e 3. In
+  `sd.txt` anche la dimensione di `runtime-cache/shaders`. Il primo avvio può
+  restare minuti su "Preparing cached graphics".
+- **Run 28 e 29, audio:** annotare in `note.txt` se il suono si sente e se va a
+  scatti.
+- **Run 29, clock:** le righe `clocks (start-up): raised to …` e, se il SoC
+  arriva a 80 °C, `back to the configuration's clocks`: annotare il momento.
+
+Come leggere: 27 contro 26 (stessi tempi, stessa memoria `mem:`, stessa
+morte) dice se `sync-clean` è neutra; 28 contro 27 il valore delle loro
+funzioni (fotogramma in partita, righe `[GpuSubmissionTime]` e
+`[GpuOperationTime]`, memoria); 29 contro 28 il valore dei clock. I numeri
+dichiarati da DevZer0D4Y (`tools/switch-perf/README.md`: ~2,4 fps in partita;
+C3 da 10,9 a 15,7 swap/s solo a GPU spenta) vengono da un avvio per round,
+su build con modifiche a mano a file generati che non sono nel repository.

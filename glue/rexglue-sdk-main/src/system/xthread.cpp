@@ -53,7 +53,7 @@ REXCVAR_DEFINE_BOOL(ignore_thread_affinities, false, "Kernel",
 REXCVAR_DEFINE_BOOL(nx_hard_thread_affinity, false, "Kernel",
                     "Switch: pin a guest thread to the core of its CPU instead of preferring it "
                     "(soft affinity: ideal core plus every guest core)");
-REXCVAR_DEFINE_INT32(nx_xthread_stack_kib, 2048, "Kernel",
+REXCVAR_DEFINE_INT32(nx_xthread_stack_kib, 16384, "Kernel",
                     "Switch: native XThread stack size in KiB (clamped to 512-16384); "
                     "does not change the emulated guest stack");
 #else

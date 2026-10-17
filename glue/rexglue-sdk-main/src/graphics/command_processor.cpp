@@ -46,7 +46,7 @@
 REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");
 
 #if REX_PLATFORM_NX
-REXCVAR_DEFINE_BOOL(nx_gpu_guest_progress_wait, true, "GPU",
+REXCVAR_DEFINE_BOOL(nx_gpu_guest_progress_wait, false, "GPU",
     "Use bounded host progress events for repeated guest GPU fence polling")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 #endif
