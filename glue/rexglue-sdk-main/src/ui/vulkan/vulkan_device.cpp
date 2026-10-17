@@ -24,6 +24,7 @@
 #include <rex/platform.h>
 #include <rex/string.h>
 #include <rex/ui/vulkan/device.h>
+#include <rex/ui/vulkan/stencil_copy.h>
 
 REXCVAR_DEFINE_BOOL(vulkan_require_fragment_stores_and_atomics, true, "UI/Vulkan",
                     "Deprecated and ignored for parity; fragmentStoresAndAtomics is always "
@@ -43,11 +44,41 @@ REXCVAR_DEFINE_BOOL(vulkan_require_fill_mode_non_solid, !REX_PLATFORM_DARWIN, "U
                     "Require fillModeNonSolid support for Vulkan GPU emulation (disable to "
                     "allow fallback to solid fill for line/point polygon modes)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(vulkan_stencil_copy_ownership, REX_PLATFORM_NX != 0, "GPU/Vulkan",
+                    "Enable maintenance8 color-to-stencil copies for ownership transfers")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 namespace rex {
 namespace ui {
 namespace vulkan {
 
+namespace {
+std::mutex stencil_copy_devices_mutex;
+std::vector<VkDevice> stencil_copy_devices;
+
+void RegisterStencilCopyDevice(VkDevice device) {
+  if (device == VK_NULL_HANDLE) return;
+  std::lock_guard<std::mutex> lock(stencil_copy_devices_mutex);
+  if (std::find(stencil_copy_devices.begin(), stencil_copy_devices.end(), device) ==
+      stencil_copy_devices.end()) {
+    stencil_copy_devices.push_back(device);
+  }
+}
+
+void UnregisterStencilCopyDevice(VkDevice device) {
+  std::lock_guard<std::mutex> lock(stencil_copy_devices_mutex);
+  stencil_copy_devices.erase(
+      std::remove(stencil_copy_devices.begin(), stencil_copy_devices.end(), device),
+      stencil_copy_devices.end());
+}
+}  // namespace
+
+bool StencilCopyEnabled(VkDevice device) {
+  if (device == VK_NULL_HANDLE) return false;
+  std::lock_guard<std::mutex> lock(stencil_copy_devices_mutex);
+  return std::find(stencil_copy_devices.begin(), stencil_copy_devices.end(), device) !=
+         stencil_copy_devices.end();
+}
 #if REX_PLATFORM_NX
 // Run 26 (06 section 27, B.1): every vkAllocateMemory/vkFreeMemory of the
 // device counted by kind (rex::graphics::NxVkMemoryKind) in
@@ -265,6 +296,15 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
   request_promoted_extension("VK_" #name, major, minor, &ext_##major##_##minor##_##name);
 
   bool ext_KHR_portability_subset = false;
+  bool ext_KHR_maintenance8 = false;
+  const bool stencil_copy_requested =
+      with_gpu_emulation && REXCVAR_GET(vulkan_stencil_copy_ownership) &&
+      get_physical_device_properties2_supported &&
+      properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 1, 0);
+  if (stencil_copy_requested) {
+    // #575. This extension has no new command entry points.
+    XE_UI_VULKAN_LOCAL_EXTENSION(KHR_maintenance8)
+  }
   bool ext_1_2_KHR_driver_properties = false;
   if (get_physical_device_properties2_supported) {
     // #164. Must be enabled according to the specification if the physical
@@ -438,8 +478,14 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
   VulkanFeatures<VkPhysicalDeviceRobustness2FeaturesEXT,
                  VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT>
       features_EXT_robustness2;
+  VulkanFeatures<VkPhysicalDeviceMaintenance8FeaturesKHR,
+                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_8_FEATURES_KHR>
+      features_KHR_maintenance8;
 
   if (get_physical_device_properties2_supported) {
+    if (ext_KHR_maintenance8) {
+      features_KHR_maintenance8.Link(supported_features_2, device_create_info);
+    }
     if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 2, 0)) {
       features_1_2.Link(supported_features_2, device_create_info);
       properties_1_2.pNext = properties_2.pNext;
@@ -792,6 +838,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
     XE_UI_VULKAN_FEATURE(occlusionQueryPrecise)
     XE_UI_VULKAN_FEATURE(vertexPipelineStoresAndAtomics)
     XE_UI_VULKAN_FEATURE(fragmentStoresAndAtomics)
+    XE_UI_VULKAN_FEATURE(variableMultisampleRate)
     XE_UI_VULKAN_FEATURE(shaderCullDistance)
     XE_UI_VULKAN_FEATURE(sparseBinding)
     XE_UI_VULKAN_FEATURE(sparseResidencyBuffer)
@@ -940,6 +987,17 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
 #undef XE_UI_VULKAN_ENUM_PROPERTY_2
 #undef XE_UI_VULKAN_FEATURE_2
 
+  if (ext_KHR_maintenance8) {
+    features_KHR_maintenance8.enabled.maintenance8 =
+        features_KHR_maintenance8.supported.maintenance8;
+  }
+  REXLOG_INFO(
+      "Vulkan stencil ownership copy: requested={} maintenance8_extension={} "
+      "maintenance8_supported={} enabled={}",
+      stencil_copy_requested, ext_KHR_maintenance8,
+      features_KHR_maintenance8.supported.maintenance8 != VK_FALSE,
+      features_KHR_maintenance8.enabled.maintenance8 != VK_FALSE);
+
   // Create the device.
 
   const VkResult device_create_result =
@@ -1052,7 +1110,23 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
       device->memory_types_.host_cached |= memory_type_bit;
     }
   }
+  for (uint32_t heap_index = 0; heap_index < memory_properties.memoryHeapCount; ++heap_index) {
+    REXLOG_INFO("Vulkan memory heap {}: {} MiB, flags 0x{:X}", heap_index,
+                memory_properties.memoryHeaps[heap_index].size >> 20,
+                uint32_t(memory_properties.memoryHeaps[heap_index].flags));
+  }
+  for (uint32_t memory_type_index = 0; memory_type_index < memory_properties.memoryTypeCount;
+       ++memory_type_index) {
+    REXLOG_INFO("Vulkan memory type {}: heap {}, flags 0x{:X}", memory_type_index,
+                memory_properties.memoryTypes[memory_type_index].heapIndex,
+                uint32_t(memory_properties.memoryTypes[memory_type_index].propertyFlags));
+  }
 
+  // Publish capability only after logical-device creation and initialization
+  // succeed. Every unsupported/disabled path leaves the renderer fallback active.
+  if (features_KHR_maintenance8.enabled.maintenance8) {
+    RegisterStencilCopyDevice(device->device_);
+  }
 #if REX_PLATFORM_NX
   // Before anything allocates (VMA copies the pointers when it is created).
   g_nx_host_visible_types = device->memory_types_.host_visible;
@@ -1067,6 +1141,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
 
 VulkanDevice::~VulkanDevice() {
   if (device_) {
+    UnregisterStencilCopyDevice(device_);
     vulkan_instance_->functions().vkDestroyDevice(device_, nullptr);
   }
 }

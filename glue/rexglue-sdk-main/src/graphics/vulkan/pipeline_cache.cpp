@@ -23,6 +23,10 @@
 #include <utility>
 #include <vector>
 
+#if defined(REX_PLATFORM_NX) && REX_PLATFORM_NX
+#include <unistd.h>
+#endif
+
 #include <fmt/format.h>
 
 #include <rex/assert.h>
@@ -43,6 +47,7 @@
 #include <rex/graphics/util/draw.h>
 #include <rex/graphics/vulkan/command_processor.h>
 #include <rex/graphics/vulkan/pipeline_cache.h>
+#include <rex/graphics/vulkan/alpha_coverage.h>
 #include <rex/graphics/vulkan/shader.h>
 #include <rex/graphics/xenos.h>
 #include <rex/hash.h>
@@ -62,9 +67,66 @@ REXCVAR_DEFINE_BOOL(vulkan_tessellation_wireframe, false, "GPU/Vulkan",
                     "Render tessellation as wireframe")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+REXCVAR_DEFINE_BOOL(vulkan_specialize_alpha_coverage,
+#if defined(REX_PLATFORM_NX) && REX_PLATFORM_NX
+                    true,
+#else
+                    false,
+#endif
+                    "GPU/Vulkan",
+                    "Omit disabled host alpha-coverage shader paths using per-draw specialization")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 namespace rex::graphics::vulkan {
 
 namespace {
+
+void ApplyPipelineWorkerPriority(std::string_view role) {
+#if defined(REX_PLATFORM_NX) && REX_PLATFORM_NX
+  // Raw rex::thread workers do not go through XThread's role assignment.
+  // A name alone doesn't change the default host priority set at thread start.
+  if (auto* thread = rex::thread::Thread::GetCurrentThread()) {
+    thread->set_nx_priority(rex::thread::nx_priority_for_thread(false, role));
+  }
+#else
+  (void)role;
+#endif
+}
+
+// Build a new attachmentless FSI key. Copy only state that the FSI runtime
+// description also uses; host depth, stencil, blending and attachment formats
+// must never leak into this key. The FBO record is a prediction, not a draw.
+template <typename Description>
+Description MakeFsiPreparationDescription(const Description& source,
+                                         xenos::MsaaSamples samples) {
+  Description result;
+  result.Reset();
+  result.vertex_shader_hash = source.vertex_shader_hash;
+  result.vertex_shader_modification = source.vertex_shader_modification;
+  result.pixel_shader_hash = source.pixel_shader_hash;
+  if (source.pixel_shader_hash) {
+    SpirvShaderTranslator::Modification modification(source.pixel_shader_modification);
+    modification.pixel.depth_stencil_mode =
+        SpirvShaderTranslator::Modification::DepthStencilMode::kNoModifiers;
+    modification.pixel.omit_alpha_coverage = 0;
+    result.pixel_shader_modification = modification.value;
+  }
+  result.render_pass_key.msaa_samples = samples;
+  result.geometry_shader = source.geometry_shader;
+  result.primitive_topology = source.primitive_topology;
+  result.primitive_restart = source.primitive_restart;
+  result.tessellation_mode = source.tessellation_mode;
+  result.depth_clamp_enable = source.depth_clamp_enable;
+  result.rasterizer_discard = source.rasterizer_discard;
+  // GetCurrentStateDescription returns before these fields on discard draws.
+  if (!source.rasterizer_discard) {
+    result.polygon_mode = source.polygon_mode;
+    result.cull_front = source.cull_front;
+    result.cull_back = source.cull_back;
+    result.front_face_clockwise = source.front_face_clockwise;
+  }
+  return result;
+}
 
 constexpr std::string_view kPlaceholderPixelShaderSource = R"(#version 460
 layout(location = 0) out vec4 oC0;
@@ -411,6 +473,9 @@ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& c
       return;
     }
   }
+  // Before the preload below, so the stored pipelines come from the driver's
+  // cache instead of being compiled again.
+  LoadDriverPipelineCache(shader_storage_root / fmt::format("{:08X}.driver.vkpc", title_id));
 
   bool edram_fragment_shader_interlock =
       render_target_cache_.GetPath() == RenderTargetCache::Path::kPixelShaderInterlock;
@@ -634,6 +699,71 @@ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& c
            shader_storage_file_);
   }
 
+  // Predict complete FSI pipeline keys from known guest shader and raster state.
+  // Build fresh attachmentless keys; never import FBO pipeline keys verbatim.
+  if (edram_fragment_shader_interlock) {
+    const auto fbo_path = shader_storage_shareable_root /
+        fmt::format("{:08X}.fbo.vk.xpso", title_id);
+    if (FILE* file = rex::filesystem::OpenFile(fbo_path, "rb")) {
+      decltype(pipeline_storage_file_header) header{};
+      size_t valid_records = 0;
+      const size_t before = shader_translations_needed.size();
+      const size_t pipelines_before = pipeline_stored_descriptions.size();
+      std::set<PipelineDescription, bool(*)(const PipelineDescription&, const PipelineDescription&)> predicted(
+          [](const PipelineDescription& a, const PipelineDescription& b) {
+            return std::memcmp(&a, &b, sizeof(a)) < 0;
+          });
+      if (fread(&header, sizeof(header), 1, file) == 1 &&
+          header.magic == pipeline_storage_magic && header.magic_api == 0 &&
+          header.version_swapped == pipeline_storage_version_swapped) {
+        PipelineStoredDescription stored;
+        while (valid_records < 4096 && fread(&stored, sizeof(stored), 1, file) == 1) {
+          if (stored.description_hash != stored.description.GetHash()) break;
+          ++valid_records;
+          
+          const auto& d = stored.description;
+          auto vertex = shaders_.find(d.vertex_shader_hash);
+          if (vertex != shaders_.end() && vertex->second->type() == xenos::ShaderType::kVertex) {
+            shader_translations_needed.emplace(d.vertex_shader_hash,
+                                                 d.vertex_shader_modification);
+          }
+          auto pixel = shaders_.find(d.pixel_shader_hash);
+          if (pixel != shaders_.end() && pixel->second->type() == xenos::ShaderType::kPixel) {
+            // These are the only modification fields set exclusively by the
+            // FBO branch of GetCurrentPixelShaderModification. FSI uses its
+            // defaults; interpolation, parameter and register fields remain.
+            SpirvShaderTranslator::Modification modification(d.pixel_shader_modification);
+            modification.pixel.depth_stencil_mode =
+                SpirvShaderTranslator::Modification::DepthStencilMode::kNoModifiers;
+            modification.pixel.omit_alpha_coverage = 0;
+            shader_translations_needed.emplace(d.pixel_shader_hash, modification.value);
+          }
+          if (vertex == shaders_.end() || vertex->second->type() != xenos::ShaderType::kVertex ||
+              (d.pixel_shader_hash && (pixel == shaders_.end() ||
+               pixel->second->type() != xenos::ShaderType::kPixel))) continue;
+          // RenderTargetCache::Update records the raw guest sample count even
+          // when the FBO pipeline itself rasterizes a discard draw at 1x.
+          // Keep that count; do not create speculative sample-rate variants.
+          for (xenos::MsaaSamples samples :
+               std::array<xenos::MsaaSamples, 1>{static_cast<xenos::MsaaSamples>(d.render_pass_key.msaa_samples)}) {
+            auto candidate = MakeFsiPreparationDescription(d, samples);
+            if (!ArePipelineRequirementsMet(candidate) || predicted.size() >= 512 ||
+                !predicted.insert(candidate).second) continue;
+            PipelineStoredDescription entry;
+            entry.description = candidate;
+            entry.description_hash = candidate.GetHash();
+            pipeline_stored_descriptions.push_back(entry);
+          }
+        }
+      }
+      fclose(file);
+      REXGPU_INFO("FSI pipeline preparation: {} valid FBO records, {} additional shader "
+                  "references, {} predicted attachmentless pipeline keys",
+                  valid_records, shader_translations_needed.size() - before,
+                  pipeline_stored_descriptions.size() - pipelines_before);
+    }
+  }
+
   // Translate shader modifications needed for stored pipelines.
   for (const std::pair<uint64_t, uint64_t>& translation_needed : shader_translations_needed) {
     auto shader_it = shaders_.find(translation_needed.first);
@@ -728,8 +858,15 @@ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& c
           break;
         }
         if (EnsurePipelineCreated(pipeline_creations[creation_index])) {
-          created_pipeline_count.fetch_add(1);
+          const size_t completed = created_pipeline_count.fetch_add(1) + 1;
+          if ((completed % 16) == 0 || completed == pipeline_creations.size()) {
+            REXGPU_INFO("FSI native pipeline preparation: {}/{} completed", completed,
+                        pipeline_creations.size());
+          }
         }
+        // Preserve first-boot work if preparation is interrupted. This function
+        // serializes its writers and limits periodic saves to once per 30 s.
+        SaveDriverPipelineCache(false);
       }
     };
 
@@ -740,7 +877,10 @@ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& c
       creation_threads.reserve(creation_thread_count);
       for (size_t i = 0; i < creation_thread_count; ++i) {
         std::unique_ptr<rex::thread::Thread> creation_thread =
-            rex::thread::Thread::Create({}, creation_worker);
+            rex::thread::Thread::Create({}, [creation_worker]() {
+              ApplyPipelineWorkerPriority("Vulkan Pipelines");
+              creation_worker();
+            });
         assert_not_null(creation_thread);
         creation_thread->set_name("Vulkan Pipelines");
         creation_threads.push_back(std::move(creation_thread));
@@ -804,9 +944,13 @@ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& c
   storage_write_thread_ = rex::thread::Thread::Create({}, [this]() { StorageWriteThread(); });
   assert_not_null(storage_write_thread_);
   storage_write_thread_->set_name("Vulkan Storage writer");
+
+  // Pipelines the preload had to compile (no driver cache yet, or a new one).
+  SaveDriverPipelineCache(true);
 }
 
 void VulkanPipelineCache::ShutdownShaderStorage() {
+  SaveDriverPipelineCache(true);
   if (storage_write_thread_) {
     {
       std::lock_guard<std::mutex> lock(storage_write_request_lock_);
@@ -925,6 +1069,10 @@ void VulkanPipelineCache::Shutdown() {
     }
   }
   pipelines_.clear();
+  // Saved by ShutdownShaderStorage above; no creation thread is left.
+  if (VkPipelineCache driver_cache = driver_pipeline_cache_.exchange(VK_NULL_HANDLE)) {
+    dfn.vkDestroyPipelineCache(device, driver_cache, nullptr);
+  }
 
   // Destroy all internal shaders.
   ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyShaderModule, device,
@@ -1081,6 +1229,12 @@ SpirvShaderTranslator::Modification VulkanPipelineCache::GetCurrentPixelShaderMo
 
   if (render_target_cache_.GetPath() == RenderTargetCache::Path::kHostRenderTargets) {
     using DepthStencilMode = SpirvShaderTranslator::Modification::DepthStencilMode;
+    const auto color_control = regs.Get<reg::RB_COLORCONTROL>();
+    modification.pixel.omit_alpha_coverage =
+        REXCVAR_GET(vulkan_specialize_alpha_coverage) &&
+        CanOmitHostAlphaCoverage(color_control.alpha_test_enable,
+                                 color_control.alpha_func,
+                                 color_control.alpha_to_mask_enable);
     if (render_target_cache_.depth_float24_convert_in_pixel_shader() &&
         normalized_depth_control.z_enable &&
         regs.Get<reg::RB_DEPTH_INFO>().depth_format == xenos::DepthRenderTargetFormat::kD24FS8) {
@@ -1203,8 +1357,16 @@ bool VulkanPipelineCache::ConfigurePipeline(
     }
   }
 
+#if defined(REX_PLATFORM_NX) && REX_PLATFORM_NX
+  // The inherited placeholder route drops guest draws and suppresses complete
+  // frames, then drains compiler work on the command processor at submission.
+  // Preserve every draw: known pipelines are prepared before guest startup,
+  // and an unforeseen cache miss is compiled synchronously rather than skipped.
+  bool use_async = false;
+#else
   bool use_async = REXCVAR_GET(async_shader_compilation) && !creation_threads_.empty() &&
                    pixel_shader && placeholder_pixel_shader_ != VK_NULL_HANDLE;
+#endif
   uint8_t async_priority = pipeline_util::kPriorityLowest;
   if (use_async) {
     uint32_t bound_rts =
@@ -3062,6 +3224,7 @@ bool VulkanPipelineCache::TryGetPipelineCreationArgumentsForDescription(
 
   const ui::vulkan::VulkanDevice* const vulkan_device = command_processor_.GetVulkanDevice();
   bool use_dynamic_rendering =
+      render_target_cache_.GetPath() != RenderTargetCache::Path::kPixelShaderInterlock &&
       REXCVAR_GET(vulkan_dynamic_rendering) && vulkan_device->properties().dynamicRendering;
   VkRenderPass render_pass = VK_NULL_HANDLE;
   if (!use_dynamic_rendering) {
@@ -3215,6 +3378,13 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
     shader_stage_geometry.pName = "main";
     shader_stage_geometry.pSpecializationInfo = nullptr;
   }
+  // FSI shaders use the same raw guest sample value that populated the UBO
+  // flags before specialization. In particular 2x emulated at host 4x stays 1.
+  const uint32_t fsi_guest_msaa = uint32_t(description.render_pass_key.msaa_samples);
+  const VkSpecializationMapEntry fsi_msaa_entry = {
+      SpirvShaderTranslator::kFsiMsaaSpecializationId, 0, sizeof(fsi_guest_msaa)};
+  const VkSpecializationInfo fsi_msaa_info = {1, &fsi_msaa_entry,
+                                            sizeof(fsi_guest_msaa), &fsi_guest_msaa};
   // Fragment shader.
   VkPipelineShaderStageCreateInfo& shader_stage_fragment = shader_stages[shader_stage_count++];
   shader_stage_fragment.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -3223,7 +3393,8 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
   shader_stage_fragment.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
   shader_stage_fragment.module = VK_NULL_HANDLE;
   shader_stage_fragment.pName = "main";
-  shader_stage_fragment.pSpecializationInfo = nullptr;
+  shader_stage_fragment.pSpecializationInfo =
+      edram_fragment_shader_interlock ? &fsi_msaa_info : nullptr;
   if (fragment_shader_override != VK_NULL_HANDLE) {
     shader_stage_fragment.module = fragment_shader_override;
   } else if (creation_arguments.pixel_shader) {
@@ -3367,9 +3538,12 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
   VkSampleMask sample_mask = UINT32_MAX;
   VkPipelineMultisampleStateCreateInfo multisample_state = {};
   multisample_state.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-  if (description.rasterizer_discard) {
-    // Keep rasterizer-discard pipelines independent from guest MSAA state, as
-    // done by D3D12 when rasterization is disabled.
+  if (description.rasterizer_discard && !edram_fragment_shader_interlock) {
+    // Keep host-render-target discard pipelines independent from guest MSAA.
+    // FSI discard pipelines must retain the guest draw's sample count so every
+    // pipeline bound in its attachmentless subpass has the same rate when
+    // variableMultisampleRate is disabled. No fragments are generated either
+    // way when rasterizer discard is enabled.
     multisample_state.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
   } else if (!edram_fragment_shader_interlock && !subpass_has_attachments) {
     // Keep parity with D3D12 host-render-target path, where draws without
@@ -3537,6 +3711,7 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
   VkPipelineRenderingCreateInfo pipeline_rendering_create_info = {};
   VkFormat color_attachment_formats[xenos::kMaxColorRenderTargets] = {};
   bool use_dynamic_rendering =
+      render_target_cache_.GetPath() != RenderTargetCache::Path::kPixelShaderInterlock &&
       REXCVAR_GET(vulkan_dynamic_rendering) && vulkan_device->properties().dynamicRendering;
   if (use_dynamic_rendering) {
     pipeline_rendering_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
@@ -3594,8 +3769,9 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
   const VkDevice device = vulkan_device->device();
   VkPipeline pipeline;
   const uint64_t nx_create_start_ns = rex::graphics::NxGpuNowNs();
-  VkResult create_result = dfn.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1,
-                                                         &pipeline_create_info, nullptr, &pipeline);
+  VkResult create_result = dfn.vkCreateGraphicsPipelines(
+      device, driver_pipeline_cache_.load(std::memory_order_acquire), 1, &pipeline_create_info,
+      nullptr, &pipeline);
   {
     auto& c = rex::graphics::nx_gpu_counters();
     rex::graphics::NxGpuAddCall(c.pipelines, c.pipeline_ns, c.pipelines_cp, c.pipeline_ns_cp,
@@ -3637,6 +3813,7 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
 }
 
 void VulkanPipelineCache::CreationThread(size_t thread_index) {
+  ApplyPipelineWorkerPriority("Vulkan Pipelines");
   while (true) {
     PipelineCreationArguments creation_arguments;
     {
@@ -3741,37 +3918,192 @@ void VulkanPipelineCache::ProcessDeferredPipelineDestructions(bool force_all) {
   }
 }
 
-void VulkanPipelineCache::StorageWriteThread() {
-  ShaderStoredHeader shader_header;
-  // Don't leak anything in unused bits.
-  std::memset(&shader_header, 0, sizeof(shader_header));
+namespace {
 
+constexpr size_t kMaxDriverPipelineCacheBytes = size_t(192) << 20;
+
+uint64_t SteadyMs() {
+  return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now().time_since_epoch())
+                      .count());
+}
+
+std::vector<uint8_t> ReadWholeFile(const std::filesystem::path& path) {
+  std::vector<uint8_t> data;
+  FILE* file = rex::filesystem::OpenFile(path, "rb");
+  if (!file) {
+    return data;
+  }
+  if (fseek(file, 0, SEEK_END) == 0) {
+    const long size = ftell(file);
+    if (size > 0 && size_t(size) <= kMaxDriverPipelineCacheBytes && fseek(file, 0, SEEK_SET) == 0) {
+      data.resize(size_t(size));
+      if (fread(data.data(), 1, data.size(), file) != data.size()) {
+        data.clear();
+      }
+    }
+  }
+  fclose(file);
+  return data;
+}
+
+}  // namespace
+
+void VulkanPipelineCache::LoadDriverPipelineCache(const std::filesystem::path& path) {
+  if (driver_pipeline_cache_.load(std::memory_order_acquire) != VK_NULL_HANDLE) {
+    return;
+  }
+  const ui::vulkan::VulkanDevice* vulkan_device = command_processor_.GetVulkanDevice();
+  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+  const VkDevice device = vulkan_device->device();
+  const uint64_t start_ms = SteadyMs();
+  // A save writes "<path>.tmp" and then renames it over the file; if a run
+  // ended between the two steps, the temporary file is the newest copy.
+  std::filesystem::path tmp_path = path;
+  tmp_path += ".tmp";
+  std::vector<uint8_t> data = ReadWholeFile(path);
+  if (data.empty()) {
+    data = ReadWholeFile(tmp_path);
+  }
+  VkPipelineCacheCreateInfo create_info = {};
+  create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+  create_info.initialDataSize = data.size();
+  create_info.pInitialData = data.empty() ? nullptr : data.data();
+  VkPipelineCache cache = VK_NULL_HANDLE;
+  VkResult result = dfn.vkCreatePipelineCache(device, &create_info, nullptr, &cache);
+  if (result != VK_SUCCESS && !data.empty()) {
+    // Incompatible data should just be ignored, but a driver may refuse it.
+    create_info.initialDataSize = 0;
+    create_info.pInitialData = nullptr;
+    result = dfn.vkCreatePipelineCache(device, &create_info, nullptr, &cache);
+  }
+  if (result != VK_SUCCESS) {
+    REXGPU_ERROR("VulkanPipelineCache: vkCreatePipelineCache failed ({}): pipelines are compiled "
+                 "again every run",
+                 int32_t(result));
+    return;
+  }
+  size_t accepted = 0;
+  dfn.vkGetPipelineCacheData(device, cache, &accepted, nullptr);
+  driver_pipeline_cache_path_ = path;
+  driver_pipeline_cache_saved_size_ = accepted;
+  driver_pipeline_cache_saved_ms_ = SteadyMs();
+  driver_pipeline_cache_.store(cache, std::memory_order_release);
+  REXGPU_INFO("VulkanPipelineCache: driver pipeline cache {}: {} bytes read, {} bytes in the "
+              "cache, {} ms",
+              rex::path_to_utf8(path), data.size(), accepted, SteadyMs() - start_ms);
+}
+
+void VulkanPipelineCache::SaveDriverPipelineCache(bool final) {
+  std::lock_guard<std::mutex> save_lock(driver_pipeline_cache_save_lock_);
+  const VkPipelineCache cache = driver_pipeline_cache_.load(std::memory_order_acquire);
+  if (cache == VK_NULL_HANDLE || driver_pipeline_cache_path_.empty()) {
+    return;
+  }
+  const uint64_t start_ms = SteadyMs();
+  if (!final && start_ms - driver_pipeline_cache_saved_ms_ < 30000) {
+    return;
+  }
+  const ui::vulkan::VulkanDevice* vulkan_device = command_processor_.GetVulkanDevice();
+  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+  const VkDevice device = vulkan_device->device();
+  // Limit the query itself as well as successful writes. An unchanged cache
+  // must not make every following pipeline query and serialize its contents.
+  driver_pipeline_cache_saved_ms_ = start_ms;
+  size_t size = 0;
+  if (dfn.vkGetPipelineCacheData(device, cache, &size, nullptr) != VK_SUCCESS || !size ||
+      size == driver_pipeline_cache_saved_size_) {
+    return;
+  }
+  if (size > kMaxDriverPipelineCacheBytes) {
+    REXGPU_WARN("VulkanPipelineCache: driver pipeline cache is {} bytes, over the {} MiB limit: "
+                "not saved",
+                size, kMaxDriverPipelineCacheBytes >> 20);
+    driver_pipeline_cache_saved_size_ = size;
+    return;
+  }
+  std::vector<uint8_t> data(size);
+  // VK_INCOMPLETE: the cache grew in between; the next checkpoint gets it.
+  if (dfn.vkGetPipelineCacheData(device, cache, &size, data.data()) != VK_SUCCESS) {
+    return;
+  }
+  data.resize(size);
+  std::filesystem::path tmp_path = driver_pipeline_cache_path_;
+  tmp_path += ".tmp";
+  FILE* file = rex::filesystem::OpenFile(tmp_path, "wb");
+  if (!file) {
+    REXGPU_WARN("VulkanPipelineCache: cannot write {}", rex::path_to_utf8(tmp_path));
+    return;
+  }
+  const bool written = fwrite(data.data(), 1, data.size(), file) == data.size();
+  bool flushed = fflush(file) == 0;
+#if defined(REX_PLATFORM_NX) && REX_PLATFORM_NX
+  if (flushed) flushed = fsync(fileno(file)) == 0;
+#endif
+  const bool closed = fclose(file) == 0;
+  if (!written || !flushed || !closed) {
+    REXGPU_WARN("VulkanPipelineCache: writing {} failed", rex::path_to_utf8(tmp_path));
+    return;
+  }
+  // Horizon's rename does not replace an existing file.
+  std::error_code ec;
+  std::filesystem::remove(driver_pipeline_cache_path_, ec);
+  std::filesystem::rename(tmp_path, driver_pipeline_cache_path_, ec);
+  if (ec) {
+    REXGPU_WARN("VulkanPipelineCache: renaming {} failed: {}", rex::path_to_utf8(tmp_path),
+                ec.message());
+    return;
+  }
+  driver_pipeline_cache_saved_size_ = size;
+  driver_pipeline_cache_saved_ms_ = SteadyMs();
+  REXGPU_INFO("VulkanPipelineCache: driver pipeline cache saved ({}): {} bytes in {} ms",
+              final ? "checkpoint" : "periodic", size, driver_pipeline_cache_saved_ms_ - start_ms);
+}
+
+void VulkanPipelineCache::StorageWriteThread() {
+  ApplyPipelineWorkerPriority("Vulkan Storage writer");
+  ShaderStoredHeader shader_header;
+  std::memset(&shader_header, 0, sizeof(shader_header));
   std::vector<uint32_t> ucode_guest_endian;
   ucode_guest_endian.reserve(0xFFFF);
 
-  bool flush_shaders = false;
-  bool flush_pipelines = false;
+  // Include headers buffered by InitializeShaderStorage before this starts.
+  bool shader_dirty = true, pipeline_dirty = true;
+  uint64_t last_flush_ms = SteadyMs(), last_checkpoint_ms = last_flush_ms;
+  auto flush_stream = [](FILE* stream, bool& dirty) {
+    if (!dirty) return;
+    assert_not_null(stream);
+    bool flushed = fflush(stream) == 0;
+#if defined(REX_PLATFORM_NX) && REX_PLATFORM_NX
+    if (flushed) flushed = fsync(fileno(stream)) == 0;
+#endif
+    if (flushed) {
+      dirty = false;
+    } else {
+      REXGPU_WARN("VulkanPipelineCache: shader storage flush failed");
+    }
+  };
 
   while (true) {
-    if (flush_shaders) {
-      flush_shaders = false;
-      assert_not_null(shader_storage_file_);
-      fflush(shader_storage_file_);
+    const uint64_t now_ms = SteadyMs();
+    if (now_ms - last_flush_ms >= 1000) {
+      flush_stream(shader_storage_file_, shader_dirty);
+      flush_stream(pipeline_storage_file_, pipeline_dirty);
+      last_flush_ms = now_ms;
     }
-    if (flush_pipelines) {
-      flush_pipelines = false;
-      assert_not_null(pipeline_storage_file_);
-      fflush(pipeline_storage_file_);
+    if (now_ms - last_checkpoint_ms >= 1000) {
+      // SaveDriverPipelineCache has its own 30-second rate limit. Check it
+      // during busy periods too, rather than requiring ten seconds of idleness.
+      SaveDriverPipelineCache(false);
+      last_checkpoint_ms = now_ms;
     }
 
     const Shader* shader = nullptr;
     PipelineStoredDescription pipeline_description;
-    bool write_pipeline = false;
+    bool write_pipeline = false, flush_shaders = false, flush_pipelines = false;
+    bool stop = false;
     {
       std::unique_lock<std::mutex> lock(storage_write_request_lock_);
-      if (storage_write_thread_shutdown_) {
-        return;
-      }
       if (!storage_write_shader_queue_.empty()) {
         shader = storage_write_shader_queue_.front();
         storage_write_shader_queue_.pop_front();
@@ -3788,8 +4120,15 @@ void VulkanPipelineCache::StorageWriteThread() {
         storage_write_flush_pipelines_ = false;
         flush_pipelines = true;
       }
-      if (!shader && !write_pipeline) {
-        storage_write_request_cond_.wait(lock);
+      // Shutdown closes the producer side first. Drain its remaining records
+      // before acknowledging shutdown, while queued shader pointers are valid.
+      stop = storage_write_thread_shutdown_ && !shader && !write_pipeline;
+      if (!stop && !shader && !write_pipeline && !flush_shaders && !flush_pipelines) {
+        storage_write_request_cond_.wait_for(lock, std::chrono::seconds(1), [this] {
+          return storage_write_thread_shutdown_ || !storage_write_shader_queue_.empty() ||
+                 !storage_write_pipeline_queue_.empty() || storage_write_flush_shaders_ ||
+                 storage_write_flush_pipelines_;
+        });
         continue;
       }
     }
@@ -3802,19 +4141,21 @@ void VulkanPipelineCache::StorageWriteThread() {
       fwrite(&shader_header, sizeof(shader_header), 1, shader_storage_file_);
       if (shader_header.ucode_dword_count) {
         ucode_guest_endian.resize(shader_header.ucode_dword_count);
-        // Need to swap because the hash is calculated for the shader with guest
-        // endianness.
         memory::copy_and_swap(ucode_guest_endian.data(), shader->ucode_dwords(),
                               shader_header.ucode_dword_count);
-        fwrite(ucode_guest_endian.data(), shader_header.ucode_dword_count * sizeof(uint32_t), 1,
-               shader_storage_file_);
+        fwrite(ucode_guest_endian.data(), shader_header.ucode_dword_count * sizeof(uint32_t),
+               1, shader_storage_file_);
       }
+      shader_dirty = true;
     }
-
     if (write_pipeline) {
       assert_not_null(pipeline_storage_file_);
       fwrite(&pipeline_description, sizeof(pipeline_description), 1, pipeline_storage_file_);
+      pipeline_dirty = true;
     }
+    if (flush_shaders || stop) flush_stream(shader_storage_file_, shader_dirty);
+    if (flush_pipelines || stop) flush_stream(pipeline_storage_file_, pipeline_dirty);
+    if (stop) return;
   }
 }
 

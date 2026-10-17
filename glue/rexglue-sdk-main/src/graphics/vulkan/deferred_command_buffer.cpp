@@ -30,9 +30,11 @@ DeferredCommandBuffer::DeferredCommandBuffer(const VulkanCommandProcessor& comma
 
 void DeferredCommandBuffer::Reset() {
   command_stream_.clear();
+  recorded_render_operation_ = GpuOperation::kRender;
 }
 
-void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
+void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer, VkQueryPool timestamp_pool,
+                                    OperationTimestamps* timestamps) {
 #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
   SCOPE_profile_cpu_f("gpu");
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
@@ -41,12 +43,98 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
       command_processor_.GetVulkanDevice()->functions();
   const uintmax_t* stream = command_stream_.data();
   size_t stream_remaining = command_stream_.size();
+  const bool profile = timestamps && timestamp_pool != VK_NULL_HANDLE;
+  if (timestamps) {
+    timestamps->segment_count = 0;
+    timestamps->overflow_commands = 0;
+  }
+  bool in_render_pass = false;
+  GpuOperation render_operation = GpuOperation::kRender;
+  bool profile_exhausted = false;
+  auto profile_operation = [&](GpuOperation operation, uint64_t work_items) {
+    if (!profile) return;
+    if (profile_exhausted) {
+      ++timestamps->overflow_commands;
+      return;
+    }
+    uint32_t& count = timestamps->segment_count;
+    if (!count || timestamps->segments[count - 1].operation != operation) {
+      // Query 0/1 remain the full submission measurements. Query 2 begins
+      // the first operation interval; each subsequent query closes one.
+      dfn.vkCmdWriteTimestamp(command_buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                              timestamp_pool, count + 2);
+      if (count == OperationTimestamps::kMaxSegments) {
+        profile_exhausted = true;
+        ++timestamps->overflow_commands;
+        return;
+      }
+      timestamps->segments[count++] = {operation, 0, 0};
+    }
+    auto& segment = timestamps->segments[count - 1];
+    ++segment.commands;
+    segment.work_items += work_items;
+  };
   while (stream_remaining) {
     const CommandHeader& header = *reinterpret_cast<const CommandHeader*>(stream);
     stream += kCommandHeaderSizeElements;
     stream_remaining -= kCommandHeaderSizeElements;
 
+    if (header.command == Command::kSetRenderOperation) {
+      render_operation = reinterpret_cast<const ArgsSetRenderOperation*>(stream)->operation;
+    }
+
+    // Keep the active diagnostic category through allowed in-pass barriers
+    // and clears. Ownership markers partition completion timestamps only;
+    // they never end, split or create a Vulkan render pass.
+    if (header.command == Command::kVkBeginRenderPass ||
+        header.command == Command::kVkBeginRendering) {
+      in_render_pass = true;
+    }
+    if (in_render_pass) {
+      uint64_t vertices = 0;
+      if (header.command == Command::kVkDraw) {
+        const auto& args = *reinterpret_cast<const ArgsVkDraw*>(stream);
+        vertices = uint64_t(args.vertex_count) * args.instance_count;
+      } else if (header.command == Command::kVkDrawIndexed) {
+        const auto& args = *reinterpret_cast<const ArgsVkDrawIndexed*>(stream);
+        vertices = uint64_t(args.index_count) * args.instance_count;
+      }
+      if (header.command == Command::kVkDraw || header.command == Command::kVkDrawIndexed ||
+          header.command == Command::kVkBeginRenderPass ||
+          header.command == Command::kVkBeginRendering ||
+          header.command == Command::kVkClearAttachments) {
+        profile_operation(render_operation, vertices);
+      }
+    } else {
+      switch (header.command) {
+        case Command::kVkDispatch: {
+          const auto& args = *reinterpret_cast<const ArgsVkDispatch*>(stream);
+          profile_operation(args.operation,
+                            uint64_t(args.group_count_x) * args.group_count_y * args.group_count_z);
+        } break;
+        case Command::kVkCopyBuffer:
+        case Command::kVkCopyImage:
+        case Command::kVkCopyBufferToImage:
+        case Command::kVkCopyQueryPoolResults:
+        case Command::kVkClearColorImage:
+          // C6: the stencil scratch copy of an ownership transfer separately.
+          profile_operation(render_operation == GpuOperation::kOwnershipStencil
+                                ? GpuOperation::kOwnershipStencilCopy
+                                : GpuOperation::kTransfer,
+                            0);
+          break;
+        case Command::kVkPipelineBarrier:
+          profile_operation(GpuOperation::kBarrier, 0);
+          break;
+        default:
+          break;
+      }
+    }
+
     switch (header.command) {
+      case Command::kSetRenderOperation:
+        // A telemetry-only marker, including when sampling is disabled.
+        break;
       case Command::kVkBeginRenderPass: {
         auto& args = *reinterpret_cast<const ArgsVkBeginRenderPass*>(stream);
         size_t offset_bytes = sizeof(ArgsVkBeginRenderPass);
@@ -144,6 +232,15 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
                             reinterpret_cast<const VkBufferCopy*>(
                                 reinterpret_cast<const uint8_t*>(stream) +
                                 rex::align(sizeof(ArgsVkCopyBuffer), alignof(VkBufferCopy))));
+      } break;
+
+      case Command::kVkCopyImage: {
+        const auto& args = *reinterpret_cast<const ArgsVkCopyImage*>(stream);
+        dfn.vkCmdCopyImage(command_buffer, args.source, args.source_layout,
+                         args.destination, args.destination_layout, args.region_count,
+                         reinterpret_cast<const VkImageCopy*>(
+                             reinterpret_cast<const uint8_t*>(stream) +
+                             rex::align(sizeof(ArgsVkCopyImage), alignof(VkImageCopy))));
       } break;
 
       case Command::kVkCopyBufferToImage: {
@@ -321,6 +418,14 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
 
     stream += header.arguments_size_elements;
     stream_remaining -= header.arguments_size_elements;
+    if (header.command == Command::kVkEndRenderPass ||
+        header.command == Command::kVkEndRendering) {
+      in_render_pass = false;
+    }
+  }
+  if (profile && timestamps->segment_count && !profile_exhausted) {
+    dfn.vkCmdWriteTimestamp(command_buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                            timestamp_pool, timestamps->segment_count + 2);
   }
 }
 
@@ -427,6 +532,17 @@ void DeferredCommandBuffer::SetBeginRenderingRenderArea(
   auto& args = *reinterpret_cast<ArgsVkBeginRendering*>(
       command_stream_.data() + command_stream_index +
       kCommandHeaderSizeElements);
+  args.render_area = render_area;
+}
+
+void DeferredCommandBuffer::SetBeginRenderPassRenderArea(
+    size_t command_stream_index, const VkRect2D& render_area) {
+  assert_true(command_stream_index + kCommandHeaderSizeElements < command_stream_.size());
+  const CommandHeader& header = *reinterpret_cast<const CommandHeader*>(
+      command_stream_.data() + command_stream_index);
+  assert_true(header.command == Command::kVkBeginRenderPass);
+  auto& args = *reinterpret_cast<ArgsVkBeginRenderPass*>(
+      command_stream_.data() + command_stream_index + kCommandHeaderSizeElements);
   args.render_area = render_area;
 }
 
