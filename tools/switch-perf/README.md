@@ -82,10 +82,14 @@ tracked. The builds measured here also carried hand edits from earlier
 rounds in five generated files (`gta4_recomp.2/.3/.65/.74/.77.cpp`): a fast
 path for the audio packet copy `sub_8216DBB0` (translation cached when the
 packet stays in one 16 MiB slice, original kept as fallback), an exact wave
-helper (`include/rex/audio/nx_exact_wave_helpers.h`), and leaf functions that
+helper (`include/rex/audio/nx_exact_wave_helpers.h`, translated guest code,
+not included in this repository), and leaf functions that
 keep registers in host locals. They have to be reapplied after regenerating.
 
 ## Tooling
+
+The scripts below (`build.py`, `sd.py`, `sym.py`, `analysis/frame_structure.py`)
+are not included in this repository.
 
 * `build.py <overlay> <out> --build-id ID [-j N]`: incremental build of the
   NRO from an overlay directory (files with the same relative paths as the
@@ -95,7 +99,7 @@ keep registers in host locals. They have to be reapplied after regenerating.
   to that tree.
 * `sd.py install <build> <game.toml> <tag>` / `sd.py capture <tag>`: install
   on the SD (Hekate USB mass storage) with backup and read-back check, or copy
-  the logs. `SWITCH_SD` (default `/Volumes/SWITCH SD`), `THEFT4_PERF_DIR`.
+  the logs. `SWITCH_SD` (the SD card's mount point, e.g. `/path/to/sd`), `THEFT4_PERF_DIR`.
 * `sym.py <syms.txt> '+0x…'`: symbolize profiler offsets with
   `aarch64-none-elf-nm -n switch-game.elf > syms.txt`.
 * `configs/game-cN.toml`: the exact config of each round (copy to

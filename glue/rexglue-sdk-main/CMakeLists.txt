@@ -334,8 +334,14 @@ if(REXGLUE_CORE_ONLY)
     message(STATUS "ReXGlue minimal: ${REX_PLATFORM}; system runtime=${REXGLUE_RUNTIME_ONLY}; "
                    "Switch Vulkan backend=${REXGLUE_SWITCH_VULKAN}; no host tools")
     if(REXGLUE_LOCAL_CODEGEN_ONLY)
-        target_compile_definitions(rexcore PRIVATE
-          REX_LOCAL_FILE_BACKING_DIRECTORY="/Volumes/Untitled/LibertySwitchBuild/guest-backing")
+        # Guest memory backing files in a directory (e.g. external storage)
+        # instead of shm_open; empty keeps shm_open.
+        set(REXGLUE_LOCAL_FILE_BACKING_DIRECTORY "" CACHE PATH
+            "Directory for the guest memory backing files of the local codegen build (empty: shm)")
+        if(REXGLUE_LOCAL_FILE_BACKING_DIRECTORY)
+            target_compile_definitions(rexcore PRIVATE
+              REX_LOCAL_FILE_BACKING_DIRECTORY="${REXGLUE_LOCAL_FILE_BACKING_DIRECTORY}")
+        endif()
         if(NOT TARGET disasm)
             add_subdirectory(thirdparty/disasm)
         endif()
