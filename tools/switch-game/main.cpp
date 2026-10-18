@@ -162,7 +162,7 @@ REXCVAR_DEFINE_INT32(nx_nvmap_mb, 0, "Switch",
                      "nx_gpu = vulkan: MB of libnx's nvdrv transfer memory "
                      "(__nx_nv_transfermem_size, bookkeeping of every GPU allocation; libnx 8). 0 = "
                      "leave libnx's (nfsmw-nx: 0x235C SharedMemoryTooSmall when it runs out)");
-REXCVAR_DEFINE_BOOL(nx_audio, false, "Switch",
+REXCVAR_DEFINE_BOOL(nx_audio, true, "Switch",
                     "Native stereo sound via the Switch audio renderer; false: the null audio "
                     "system (cvar nx_null_audio), as up to run 26");
 REXCVAR_DEFINE_BOOL(nx_vk_capture_frames, true, "Switch",
@@ -183,7 +183,7 @@ REXCVAR_DEFINE_BOOL(nx_apm_clock, true, "Switch",
                     "460.8 MHz, memory 1331.2, CPU 1020) through apm, at start and on every "
                     "dock/handheld change; docked is left alone. No boost, no overclock; the "
                     "clocks read back are in the heartbeat (nx_clocks.h)");
-REXCVAR_DEFINE_BOOL(nx_audio_guest_priority, false, "Switch",
+REXCVAR_DEFINE_BOOL(nx_audio_guest_priority, true, "Switch",
                     "Switch: deadline scheduling for the verified GTA IV guest audio mixer");
 REXCVAR_DEFINE_BOOL(nx_perf_csv, false, "Switch",
                     "Write a separate performance CSV for each run, once per Vulkan heartbeat; "
@@ -205,7 +205,7 @@ REXCVAR_DEFINE_INT32(nx_emc_mhz, 0, "Switch",
                      "Memory clock set through clkrst, in MHz (0 = keep 1331.2; at most 1600; "
                      "run 29: 1600)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(nx_shader_storage, false, "Switch",
+REXCVAR_DEFINE_BOOL(nx_shader_storage, true, "Switch",
                     "Keep the guest shaders, the pipeline descriptions and NVK's compiled "
                     "pipelines in sdmc:/switch/theft4/runtime-cache/shaders, and build them "
                     "before the first draw of the next run (run 2 compiled ~290 pipelines at "
@@ -215,7 +215,7 @@ REXCVAR_DEFINE_INT32(nx_gpu_l2, 0, "Switch",
                      "Legacy NVK mapping override; ignored by this Mesa 26.2.4 build, "
                      "which preserves the driver's GPU cache and completion policy")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(nx_direct_resolve, false, "Switch",
+REXCVAR_DEFINE_BOOL(nx_direct_resolve, true, "Switch",
                     "Resolve supported host render targets directly into guest memory, "
                     "avoiding intermediate EDRAM dumps; unsupported cases use the existing path")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -246,18 +246,18 @@ REXCVAR_DEFINE_BOOL(nx_frame_structure_capture, false, "Switch",
 REXCVAR_DECLARE(bool, native_renderer_oracle_capture);
 // C2: synchronisation fast paths (rex/thread/nx_sync_tuning.h). All false:
 // the synchronisation of run 26.
-REXCVAR_DEFINE_BOOL(nx_sync_multi_wait, false, "Switch",
+REXCVAR_DEFINE_BOOL(nx_sync_multi_wait, true, "Switch",
                     "Multi-object waits sleep until one of their objects changes instead of "
                     "polling every object once a millisecond")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(nx_sync_fast_lookup, false, "Switch",
+REXCVAR_DEFINE_BOOL(nx_sync_fast_lookup, true, "Switch",
                     "Kernel object lookups (handles, dispatcher headers) without the global "
                     "critical region")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(nx_sync_notify_one, false, "Switch",
+REXCVAR_DEFINE_BOOL(nx_sync_notify_one, true, "Switch",
                     "Wake one waiter for auto-reset events, mutants and single semaphore counts")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(nx_sync_irq_lock_free, false, "Switch",
+REXCVAR_DEFINE_BOOL(nx_sync_irq_lock_free, true, "Switch",
                     "Guest mfmsr/mtmsrd interrupt lock per thread, not on the global mutex")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(nx_ab_transfer_modes, false, "Switch",
@@ -266,7 +266,7 @@ REXCVAR_DEFINE_BOOL(nx_ab_transfer_modes, false, "Switch",
 REXCVAR_DEFINE_INT32(nx_ownership_transfer_skip, 0, "Switch",
                      "EDRAM ownership transfers skipped: 0 none, 1 depth<->color, 2 all")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(nx_sync_lock_free_release, false, "Switch",
+REXCVAR_DEFINE_BOOL(nx_sync_lock_free_release, true, "Switch",
                     "Semaphore releases and event signals without the object mutex when nobody waits")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(nx_ab_stencil_modes, false, "Switch",
@@ -2106,6 +2106,36 @@ void LogVulkan(double window_s) {
   g_vk_beat.nv_wait_success = nv_success;
   g_vk_beat.nv_wait_timeout = nv_timeout;
   g_vk_beat.nv_wait_error = nv_error;
+  // Run 31 (C.2): the command processor's time by phase (nx_gpu_counters.h,
+  // NxCpPhase), per draw; "rest" is the thread's CPU time minus the phases
+  // (PM4 parsing, register writes, swaps, the packet loop), so it can be
+  // negative when the phases' wall time includes preemption.
+  {
+    static const char* const kPhaseNames[rex::graphics::kNxCpPhaseCount] = {
+        "primitives", "shaders", "textures", "render targets", "pipeline",
+        "state+descriptors", "memory+barriers", "record", "copies (resolves)",
+        "replay (vkCmd*)"};
+    static uint64_t previous[rex::graphics::kNxCpPhaseCount] = {};
+    std::string items;
+    double phases_ns = 0.0;
+    for (int i = 0; i < rex::graphics::kNxCpPhaseCount; ++i) {
+      const uint64_t now = c.cp_phase_ns[i].load(std::memory_order_relaxed);
+      const double d = double(now - previous[i]);
+      previous[i] = now;
+      phases_ns += d;
+      char item[96];
+      std::snprintf(item, sizeof(item), "%s%s %.0f ms %.1f us", i ? ", " : "",
+                    kPhaseNames[i], d * 1e-6, new_draws ? d / 1000.0 / double(new_draws) : 0.0);
+      items += item;
+    }
+    const double rest_ns = double(g_cp_window_ns) - phases_ns;
+    GAME_INFO("command processor phases (ms in the window, us per draw; no fence waits, "
+              "translations, pipeline creation): %s; sum %.0f ms %.1f us; rest of the "
+              "thread's CPU %.0f ms %.1f us; %" PRIu64 " draws",
+              items.c_str(), phases_ns * 1e-6,
+              new_draws ? phases_ns / 1000.0 / double(new_draws) : 0.0, rest_ns * 1e-6,
+              new_draws ? rest_ns / 1000.0 / double(new_draws) : 0.0, new_draws);
+  }
   // Pipeline creation and shader translation in this window. The renderer's
   // own shader storage is distinct from Mesa's environment-controlled cache.
   {

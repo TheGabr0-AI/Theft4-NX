@@ -63,7 +63,7 @@ REXCVAR_DEFINE_BOOL(vulkan_readback_memexport, false, "GPU/Vulkan",
                     "Read data written by memory export in shaders on the CPU")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
-REXCVAR_DEFINE_BOOL(vulkan_dynamic_uniform_constants, false, "GPU/Vulkan",
+REXCVAR_DEFINE_BOOL(vulkan_dynamic_uniform_constants, true, "GPU/Vulkan",
                     "Bind guest constants through dynamic UBO descriptors on supported Switch devices")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
@@ -81,11 +81,11 @@ REXCVAR_DEFINE_BOOL(vulkan_dynamic_rendering, true, "GPU/Vulkan",
                     "device (falls back to render passes otherwise)")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
-REXCVAR_DEFINE_BOOL(vulkan_reuse_constant_descriptors, false, "GPU/Vulkan",
+REXCVAR_DEFINE_BOOL(vulkan_reuse_constant_descriptors, true, "GPU/Vulkan",
                     "Reuse immutable guest constant sets while binding exact allocation offsets")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(vulkan_reuse_texture_descriptors, false, "GPU/Vulkan",
+REXCVAR_DEFINE_BOOL(vulkan_reuse_texture_descriptors, true, "GPU/Vulkan",
                     "Reuse unchanged texture and sampler descriptor contents within a submission")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
@@ -95,17 +95,17 @@ REXCVAR_DEFINE_BOOL(
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_BOOL(
-    vulkan_submission_timestamps, false, "GPU/Vulkan",
+    vulkan_submission_timestamps, true, "GPU/Vulkan",
     "Measure command-buffer GPU elapsed time without additional fence waits")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_BOOL(
-    vulkan_operation_timestamps, false, "GPU/Vulkan",
+    vulkan_operation_timestamps, true, "GPU/Vulkan",
     "Partition GPU completion time by render, texture, resolve, transfer and barrier work")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_BOOL(
-    vulkan_device_uniform_buffers, false, "GPU/Vulkan",
+    vulkan_device_uniform_buffers, true, "GPU/Vulkan",
     "Copy shader constants to unmapped GPU-only buffers before drawing (Switch GPU L2 caching)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
@@ -4267,6 +4267,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
 
   ++frame_flow_draw_calls_;
   rex::graphics::nx_gpu_counters().draws.fetch_add(1, std::memory_order_relaxed);
+  rex::graphics::NxCpLapTimer nx_lap;
   const RegisterFile& regs = *register_file_;
   (void)index_buffer_info;
   auto draw_fail = [&](const char* stage) {
@@ -4288,6 +4289,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
     // Special copy handling.
     ++frame_flow_copy_calls_;
     bool copy_succeeded = IssueCopy();
+    nx_lap.Lap(rex::graphics::kNxCpCopy);
     if (copy_succeeded) {
       ++frame_flow_copy_successes_;
     } else {
@@ -4377,6 +4379,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
   VulkanShader::VulkanTranslation* vertex_shader_translation;
   VulkanShader::VulkanTranslation* pixel_shader_translation;
   bool memexport_writes_possible = memexport_used_vertex || memexport_used_pixel;
+  nx_lap.Lap(rex::graphics::kNxCpDrawShaders);
 
   // Two iterations because a submission (even the current one - in which case
   // it needs to be ended, and a new one must be started) may need to be awaited
@@ -4418,6 +4421,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
                    uint32_t(host_vertex_shader_type));
       return false;
     }
+    nx_lap.Lap(rex::graphics::kNxCpDrawPrimitives);
 
     // Shader modifications.
     vertex_shader_modification = pipeline_cache_->GetCurrentVertexShaderModification(
@@ -4491,6 +4495,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
         }
       }
     }
+    nx_lap.Lap(rex::graphics::kNxCpDrawShaders);
     if (!samplers_overflowed_count) {
       break;
     }
@@ -4569,6 +4574,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
     ++frame_flow_textured_draws_;
   }
   texture_cache_->RequestTextures(used_texture_mask);
+  nx_lap.Lap(rex::graphics::kNxCpDrawTextures);
 
   const VulkanPipelineCache::PipelineLayoutProvider* pipeline_layout_provider;
   // Set up the render targets - this may perform dispatches and draws.
@@ -4576,6 +4582,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
                                     normalized_color_mask, *vertex_shader)) {
     return draw_fail("render_target_update");
   }
+  nx_lap.Lap(rex::graphics::kNxCpDrawRenderTargets);
 
   // Create the pipeline (for this, need the render pass from the render target
   // cache), translating the shaders - doing this now to obtain the used
@@ -4635,6 +4642,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
     }
     current_guest_graphics_pipeline_layout_ = pipeline_layout;
   }
+  nx_lap.Lap(rex::graphics::kNxCpDrawPipeline);
 
   bool host_render_targets_used =
       render_target_cache_->GetPath() == RenderTargetCache::Path::kHostRenderTargets;
@@ -4710,6 +4718,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
   if (!UpdateBindings(vertex_shader, pixel_shader)) {
     return draw_fail("update_bindings");
   }
+  nx_lap.Lap(rex::graphics::kNxCpDrawState);
 
   // Ensure vertex buffers are resident.
   const Shader::ConstantRegisterMap& constant_map_vertex = vertex_shader->constant_register_map();
@@ -4848,6 +4857,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
   SubmitBarriersAndEnterRenderTargetCacheRenderPass(
       render_target_cache_->last_update_render_pass(),
       render_target_cache_->last_update_framebuffer());
+  nx_lap.Lap(rex::graphics::kNxCpDrawMemory);
 
   if (render_target_cache_->HasPendingDrawPassTransfers()) {
     if (!render_target_cache_->EncodePendingDrawPassTransfers()) {
@@ -4872,6 +4882,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
     if (!UpdateBindings(vertex_shader, pixel_shader)) {
       return draw_fail("restore_bindings_after_draw_pass_transfers");
     }
+    nx_lap.Lap(rex::graphics::kNxCpDrawRenderTargets);
   }
 
   // The scissor is a conservative upper bound on all fragment writes for this
@@ -4945,6 +4956,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
       }
     }
   }
+  nx_lap.Lap(rex::graphics::kNxCpDrawRecord);
 
   return true;
 }
@@ -6454,10 +6466,14 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
         command_buffer.buffer);
     uniform_device_upload_copies_ += guest_uniform_uploads.copies + resolve_uniform_uploads.copies;
     uniform_device_upload_bytes_ += guest_uniform_uploads.bytes + resolve_uniform_uploads.bytes;
+    const uint64_t nx_replay_start_ns = rex::graphics::NxGpuNowNs();
     deferred_command_buffer_.Execute(
         command_buffer.buffer, command_buffer.timestamp_pool,
         command_buffer.timestamp_operations_sampled
             ? &command_buffer.operation_timestamps : nullptr);
+    rex::graphics::NxGpuAddTime(
+        rex::graphics::nx_gpu_counters().cp_phase_ns[rex::graphics::kNxCpReplay],
+        nx_replay_start_ns);
     if (command_buffer.timestamp_recorded) {
       dfn.vkCmdWriteTimestamp(command_buffer.buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                              command_buffer.timestamp_pool, 1);

@@ -67,7 +67,7 @@ REXCVAR_DEFINE_BOOL(vulkan_tessellation_wireframe, false, "GPU/Vulkan",
                     "Render tessellation as wireframe")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
-REXCVAR_DEFINE_BOOL(vulkan_specialize_alpha_coverage, false,
+REXCVAR_DEFINE_BOOL(vulkan_specialize_alpha_coverage, true,
                     "GPU/Vulkan",
                     "Omit disabled host alpha-coverage shader paths using per-draw specialization")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -76,11 +76,11 @@ namespace rex::graphics::vulkan {
 
 namespace {
 
-REXCVAR_DEFINE_BOOL(vulkan_pipeline_worker_priority, false, "GPU/Vulkan",
+REXCVAR_DEFINE_BOOL(vulkan_pipeline_worker_priority, true, "GPU/Vulkan",
                     "Switch: pipeline creation and storage writer threads in the Horizon band "
                     "of their role instead of the default host priority")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(vulkan_synchronous_pipeline_creation, false, "GPU/Vulkan",
+REXCVAR_DEFINE_BOOL(vulkan_synchronous_pipeline_creation, true, "GPU/Vulkan",
                     "Switch: compile a missing pipeline on the command processor instead of "
                     "drawing with a placeholder while a worker compiles it")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);

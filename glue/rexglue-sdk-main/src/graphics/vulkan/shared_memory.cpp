@@ -24,7 +24,7 @@
 #include <rex/ui/vulkan/gpu_only_allocation.h>
 #include <rex/ui/vulkan/util.h>
 
-REXCVAR_DEFINE_BOOL(vulkan_shared_memory_compute_write_access, false, "GPU/Vulkan",
+REXCVAR_DEFINE_BOOL(vulkan_shared_memory_compute_write_access, true, "GPU/Vulkan",
                     "Compute writes to the shared memory buffer (resolves, EDRAM dumps) "
                     "released with SHADER_WRITE access; false: SHADER_READ as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);

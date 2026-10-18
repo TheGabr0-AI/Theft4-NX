@@ -63,7 +63,7 @@ REXCVAR_DEFINE_BOOL(
     "guest draw pass (experimental on tile-based GPUs)");
 
 REXCVAR_DEFINE_BOOL(
-    vulkan_image_copy_ownership, false,
+    vulkan_image_copy_ownership, true,
     "GPU/Vulkan",
     "Use bit-preserving image copies for matching render-target ownership transfers")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -88,26 +88,26 @@ REXCVAR_DEFINE_BOOL(
 // of the D24_UNORM saved-depth-metadata policy. This is an init-only experiment;
 // hardware timings decide its cost, including any loss of driver metadata.
 REXCVAR_DEFINE_BOOL(
-    vulkan_image_copy_float_depth_ownership, false, "GPU/Vulkan",
+    vulkan_image_copy_float_depth_ownership, true, "GPU/Vulkan",
     "Allow matching float-depth ownership copies independently of UNORM depth")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(
-    vulkan_partial_image_copy_ownership, false, "GPU/Vulkan",
+    vulkan_partial_image_copy_ownership, true, "GPU/Vulkan",
     "Copy independent matching-format regions in mixed ownership batches");
-REXCVAR_DEFINE_BOOL(vulkan_raw_depth_ownership, false, "GPU/Vulkan",
+REXCVAR_DEFINE_BOOL(vulkan_raw_depth_ownership, true, "GPU/Vulkan",
                     "Use bounded integer scratch for large exact D32 depth ownership copies.")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(
-    vulkan_shader_ownership_large_copies, false, "GPU/Vulkan",
+    vulkan_shader_ownership_large_copies, true, "GPU/Vulkan",
     "Use preflighted transfer shaders for ownership copies with many mapped row strips")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(
-    vulkan_transfer_pitch_specialization, false, "GPU/Vulkan",
+    vulkan_transfer_pitch_specialization, true, "GPU/Vulkan",
     "Ownership transfer shaders take the EDRAM pitches as specialization constants "
     "(one pipeline per pitch combination) instead of from the push constants")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(
-    vulkan_transfer_stencil_from_stencil, false, "GPU/Vulkan",
+    vulkan_transfer_stencil_from_stencil, true, "GPU/Vulkan",
     "Stencil-bit ownership transfers from a depth source test the fetched stencil byte; "
     "false: the original path, which tests an unset value and sets every bit")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);

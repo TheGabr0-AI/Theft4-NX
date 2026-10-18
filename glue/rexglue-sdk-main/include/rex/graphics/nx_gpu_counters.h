@@ -10,6 +10,26 @@
 
 namespace rex::graphics {
 
+// Run 31 (C.2): phases of the command processor's work. The draw phases are
+// consecutive pieces of VulkanCommandProcessor::IssueDraw; kNxCpCopy is
+// IssueCopy (resolves) called from it; kNxCpReplay is the replay of the
+// deferred command buffer into the real one (the vkCmd* calls into NVK) at
+// the end of a submission. Whatever is left of the thread's CPU time is the
+// PM4 parsing, register writes, swaps and the rest of the packet loop.
+enum NxCpPhase : int {
+  kNxCpDrawPrimitives = 0,  // BeginSubmission, primitive and index processing
+  kNxCpDrawShaders,         // ucode analysis, modifications, translation lookup, samplers
+  kNxCpDrawTextures,        // texture cache RequestTextures (uploads, untiling dispatches)
+  kNxCpDrawRenderTargets,   // render target cache Update and pending draw-pass transfers (EDRAM)
+  kNxCpDrawPipeline,        // ConfigurePipeline, bind, layout compatibility
+  kNxCpDrawState,           // viewport, dynamic state, system constants, UpdateBindings
+  kNxCpDrawMemory,          // vertex buffers, memexport, shared memory use, barriers, render pass
+  kNxCpDrawRecord,          // the draw itself into the deferred command buffer, memexport tail
+  kNxCpCopy,
+  kNxCpReplay,
+  kNxCpPhaseCount
+};
+
 struct NxGpuCounters {
   std::atomic<uint64_t> presents{0};          // vkQueuePresentKHR == VK_SUCCESS/SUBOPTIMAL
   std::atomic<uint64_t> present_failures{0};  // any other result
@@ -47,6 +67,10 @@ struct NxGpuCounters {
   std::atomic<bool> host_memory_low{false};
   std::atomic<uint64_t> trims{0}, trim_textures{0}, trim_bytes{0};
   std::atomic<uint64_t> bad_alloc_packets{0};
+  // Run 31 (C.2): wall time of the command processor by NxCpPhase, in ns,
+  // without the blocking fence waits, shader translations and pipeline
+  // creations of its thread that fall inside a phase (counted above).
+  std::atomic<uint64_t> cp_phase_ns[kNxCpPhaseCount]{};
 };
 
 // Kinds of vkAllocateMemory (from VkMemoryDedicatedAllocateInfo and the
@@ -87,6 +111,44 @@ inline void NxGpuAddCall(std::atomic<uint64_t>& count, std::atomic<uint64_t>& to
     total_cp.fetch_add(ns, std::memory_order_relaxed);
   }
 }
+
+// Run 31 (C.2): consecutive laps of one IssueDraw call into cp_phase_ns. Each
+// lap leaves out the fence waits, shader translations and pipeline creations
+// of this thread since the previous lap; the totals are added once, when the
+// timer goes out of scope (early returns included; time after the last lap of
+// an early return is not counted).
+class NxCpLapTimer {
+ public:
+  NxCpLapTimer() : last_ns_(NxGpuNowNs()), last_excluded_ns_(Excluded()) {}
+  ~NxCpLapTimer() {
+    auto& c = nx_gpu_counters();
+    for (int i = 0; i < kNxCpPhaseCount; ++i) {
+      if (acc_ns_[i]) {
+        c.cp_phase_ns[i].fetch_add(acc_ns_[i], std::memory_order_relaxed);
+      }
+    }
+  }
+  void Lap(NxCpPhase phase) {
+    const uint64_t now_ns = NxGpuNowNs();
+    const uint64_t excluded_ns = Excluded();
+    const uint64_t lap_ns = now_ns - last_ns_;
+    const uint64_t lap_excluded_ns = excluded_ns - last_excluded_ns_;
+    acc_ns_[phase] += lap_ns > lap_excluded_ns ? lap_ns - lap_excluded_ns : 0;
+    last_ns_ = now_ns;
+    last_excluded_ns_ = excluded_ns;
+  }
+
+ private:
+  static uint64_t Excluded() {
+    auto& c = nx_gpu_counters();
+    return c.fence_wait_ns.load(std::memory_order_relaxed) +
+           c.shader_ns_cp.load(std::memory_order_relaxed) +
+           c.pipeline_ns_cp.load(std::memory_order_relaxed);
+  }
+  uint64_t last_ns_;
+  uint64_t last_excluded_ns_;
+  uint64_t acc_ns_[kNxCpPhaseCount] = {};
+};
 
 // One line per failure, the first 32 only (REXGPU_ERROR at the call site).
 inline bool NxGpuCountSubmit(int32_t result) {
