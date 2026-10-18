@@ -26,11 +26,12 @@ target_compile_definitions(rexcore PRIVATE REX_NX_RESUME_TRAMPOLINE=1)
 set_target_properties(rexcore rexruntime PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sdk-lib")
 
-add_executable(switch-smoke main.cpp probes.cpp sd_bench.cpp vulkan_probe.cpp nx_elf_stubs.c
-    "${THEFT4_ROOT}/tools/switch-common/nx_exit.cpp")
+add_executable(switch-smoke main.cpp probes.cpp sd_bench.cpp vulkan_probe.cpp gpu_bench.cpp
+    nx_elf_stubs.c "${THEFT4_ROOT}/tools/switch-common/nx_exit.cpp"
+    "${THEFT4_ROOT}/tools/switch-game/nx_clocks.cpp")
 target_compile_features(switch-smoke PRIVATE cxx_std_23)
 target_include_directories(switch-smoke PRIVATE "${THEFT4_ROOT}/glue/rexglue-sdk-main/include"
-    "${THEFT4_ROOT}/tools/switch-common")
+    "${THEFT4_ROOT}/tools/switch-common" "${THEFT4_ROOT}/tools/switch-game")
 
 # Every SDK library in the headless Switch runtime (rexruntime already embeds
 # the rexfilesystem, rexaudio and kernel objects). The archives are grouped so
@@ -56,8 +57,9 @@ target_link_libraries(switch-smoke PRIVATE
 # Its other dependencies (vulkan.pc): expat, zlib, zstd, libnx.
 target_include_directories(switch-smoke PRIVATE "${DEVKITPRO}/portlibs/switch/include")
 target_link_directories(switch-smoke PRIVATE "${DEVKITPRO}/portlibs/switch/lib")
+# Step 8: deko3d (devkitPro's libdeko3d, in libnx's lib folder) beside NVK.
 target_link_libraries(switch-smoke PRIVATE
-    -Wl,--start-group vulkan expat zstd z nx -Wl,--end-group)
+    -Wl,--start-group deko3d vulkan expat zstd z nx -Wl,--end-group)
 target_link_options(switch-smoke PRIVATE "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/switch-smoke.map")
 
 nx_generate_nacp(switch-smoke.nacp

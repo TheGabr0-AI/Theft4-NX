@@ -25,7 +25,9 @@
 // followed by the exploratory probes T1-T11 in probes.cpp (alias primitives,
 // heap size, cost of the guest-memory design A) and step 7, the Vulkan probe
 // (vulkan_probe.cpp, cvar nx_smoke_vulkan): "VULKAN OK" or "VULKAN FAIL at
-// <operation>", apart from the SMOKE verdict. + exits as switch-game does
+// <operation>", apart from the SMOKE verdict; step 8, the GPU benchmark
+// (gpu_bench.cpp, cvar nx_smoke_gpu_bench): the same workload through NVK and
+// deko3d, "GPU BENCH OK" or "GPU BENCH FAIL". + exits as switch-game does
 // (nx_exit.h: exit(0), or mode D with the cvar nx_exit_mode), with five
 // threads working; the steps go to smoke-exit.log.
 //
@@ -72,6 +74,7 @@
 
 #include "nx_exit.h"
 #include "probes.h"
+#include "gpu_bench.h"
 #include "sd_bench.h"
 #include "vulkan_probe.h"
 
@@ -105,6 +108,9 @@ REXCVAR_DEFINE_STRING(nx_exit_mode, "A", "Switch",
 REXCVAR_DEFINE_BOOL(nx_smoke_vulkan, true, "Switch",
                     "Step 7: the Vulkan probe (NVK: features, surface, 5 s of frames, pipeline "
                     "and submit timings), after the memory probes");
+REXCVAR_DEFINE_BOOL(nx_smoke_gpu_bench, true, "Switch",
+                    "Step 8: the GPU benchmark (gpu_bench.cpp): draws, submit and fence, upload, "
+                    "fill rate and render target changes through NVK and deko3d, after step 7");
 REXCVAR_DEFINE_BOOL(nx_smoke_sd_bench, true, "Switch",
                     "Step 6b: SD benchmark (sd_bench.cpp): sequential 1 MiB and random 64 KiB "
                     "reads of nx_smoke_sd_bench_file, 1 and 3 threads, 10 s each; 5 s of 32 KiB "
@@ -1389,6 +1395,11 @@ int main(int argc, char** argv) {
     RunVulkanProbe(CloseConsoleForVulkan, ReopenConsoleAfterVulkan);
   } else {
     SMOKE_INFO("step 7 Vulkan: skipped (cvar nx_smoke_vulkan)");
+  }
+  if (REXCVAR_GET(nx_smoke_gpu_bench)) {
+    RunGpuBench();
+  } else {
+    SMOKE_INFO("step 8 GPU benchmark: skipped (cvar nx_smoke_gpu_bench)");
   }
 
   // + exits as switch-game does, with threads working in the background.
