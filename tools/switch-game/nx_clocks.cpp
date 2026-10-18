@@ -15,6 +15,8 @@
 #include <cstdlib>
 #include <iterator>
 
+#include <sys/stat.h>
+
 #include <switch.h>
 
 namespace theft4::nx_clocks {
@@ -24,7 +26,9 @@ namespace {
 constexpr uint32_t kHandheldConfig = 0x92220008u;  // CPU 1020, GPU 460.8, memory 1331.2
 constexpr uint32_t kWantedGpuHz = 460800000u;
 constexpr uint32_t kStandardCpuHz = 1020000000u;
+constexpr uint32_t kHandheldEmcHz = 1331200000u;
 constexpr uint32_t kMarginHz = 20000000u;
+constexpr uint64_t kSysClkProgramId = 0x00FF0000636C6BFFull;
 constexpr uint64_t kPollStepNs = 150'000'000ull;
 constexpr int kPollSteps = 10;  // 1.5 s
 constexpr uint64_t kCheckNs = 5'000'000'000ull;
@@ -57,6 +61,10 @@ uint32_t g_raised_cpu_hz = 0, g_raised_gpu_hz = 0, g_raised_emc_hz = 0;
 bool g_too_hot = false;
 uint32_t g_raised_again = 0;
 bool g_atexit_registered = false;
+// Signalled once the start-up Apply is done; g_wanted is written before.
+UEvent g_startup_done;
+std::atomic<bool> g_thread_running{false};
+Wanted g_wanted;
 
 void Log(bool error, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 void Log(bool error, const char* fmt, ...) {
@@ -316,6 +324,12 @@ void Check() {
 
 void ClockThread(void*) {
   Apply("start-up");
+  if (g_raised.load()) {
+    g_wanted = {g_raised_cpu_hz, g_raised_gpu_hz, g_raised_emc_hz};
+  } else if (g_requested.load(std::memory_order_relaxed) == kHandheldConfig) {
+    g_wanted = {kStandardCpuHz, kWantedGpuHz, kHandheldEmcHz};
+  }
+  ueventSignal(&g_startup_done);
   for (;;) {
     if (R_SUCCEEDED(waitSingle(waiterForUEvent(&g_mode_changed), kCheckNs))) {
       Apply("dock/handheld change");
@@ -370,7 +384,8 @@ std::string Describe(const Clocks& c) {
   }
   const char* warning = "";
   if (c.gpu_hz && c.gpu_hz < 100000000u) {
-    warning = "; GPU UNDER 100 MHz (CPU boost mode: the GPU drops to 76.8 MHz)";
+    warning = "; GPU UNDER 100 MHz (CPU boost mode, or a clock tool lowering an idle GPU as in "
+              "runs 27-29)";
   } else if (c.cpu_hz > kStandardCpuHz + kMarginHz && !g_raised.load()) {
     warning = "; CPU ABOVE 1020 MHz (boost mode or an external overclock)";
   }
@@ -387,6 +402,34 @@ std::string Describe(const Clocks& c) {
 }
 
 uint32_t Requested() { return g_requested.load(std::memory_order_relaxed); }
+
+bool WaitStartup(uint64_t timeout_ns, Wanted* wanted) {
+  *wanted = {};
+  if (!g_thread_running.load() ||
+      R_FAILED(waitSingle(waiterForUEvent(&g_startup_done), timeout_ns))) {
+    return false;
+  }
+  *wanted = g_wanted;
+  return true;
+}
+
+std::string ExternalClockTool() {
+  struct stat st {};
+  const bool installed =
+      stat("sdmc:/atmosphere/contents/00FF0000636C6BFF/exefs.nsp", &st) == 0;
+  const bool boot2 =
+      stat("sdmc:/atmosphere/contents/00FF0000636C6BFF/flags/boot2.flag", &st) == 0;
+  const char* running = "not checked (pm:dmnt refused)";
+  if (R_SUCCEEDED(pmdmntInitialize())) {
+    u64 pid = 0;
+    running = R_SUCCEEDED(pmdmntGetProcessId(&pid, kSysClkProgramId)) ? "RUNNING" : "not running";
+    pmdmntExit();
+  }
+  char text[160];
+  std::snprintf(text, sizeof(text), "sys-clk/Horizon OC (00FF0000636C6BFF): %s, boot2 flag %s, %s",
+                installed ? "installed" : "not installed", boot2 ? "present" : "absent", running);
+  return text;
+}
 
 void SetTargets(int32_t cpu_mhz, int32_t gpu_mhz, int32_t emc_mhz) {
   g_target_cpu_hz = NearestStep(kCpuSteps, cpu_mhz);
@@ -413,6 +456,7 @@ void Start(bool apply, LogFn log) {
               "is requested", rc);
   }
   ueventCreate(&g_mode_changed, true);
+  ueventCreate(&g_startup_done, false);
   appletHook(&g_hook, OnAppletHook, nullptr);
   if (!g_apm_ready) {
     return;
@@ -421,7 +465,9 @@ void Start(bool apply, LogFn log) {
   if (R_FAILED(threadCreate(&g_thread, ClockThread, nullptr, nullptr, 0x8000, 0x2C, -2)) ||
       R_FAILED(threadStart(&g_thread))) {
     Log(true, "clocks: the clock thread did not start: nothing requested");
+    return;
   }
+  g_thread_running.store(true);
 }
 
 }  // namespace theft4::nx_clocks

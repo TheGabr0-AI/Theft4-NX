@@ -55,4 +55,21 @@ void Start(bool apply, LogFn log);
 // The configuration requested in handheld mode (0 = nothing requested).
 uint32_t Requested();
 
+// Runs 27-29 (D): the clocks this code asked for at start-up, all 0 when it
+// asked nothing: the raised clocks with nx_*_mhz, else the configuration's
+// 1020/460.8/1331.2 when 0x92220008 was requested.
+struct Wanted {
+  uint32_t cpu_hz = 0, gpu_hz = 0, emc_hz = 0;
+};
+
+// Waits at most timeout_ns for the start-up request and its read-back; false
+// on a timeout or when the clock thread never started (wanted then all 0).
+bool WaitStartup(uint64_t timeout_ns, Wanted* wanted);
+
+// Runs 27-29 (A): CPU 918 and GPU 192 MHz, no Nintendo configuration, came
+// from a clock tool. Whether sys-clk's program 00FF0000636C6BFF is installed,
+// started at boot and running (pm:dmnt); Horizon OC is a fork of sys-clk, and
+// that it keeps the id is to be verified.
+std::string ExternalClockTool();
+
 }  // namespace theft4::nx_clocks

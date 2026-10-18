@@ -74,6 +74,7 @@
 
 #include <algorithm>
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <malloc.h>
 #include <sys/iosupport.h>
@@ -305,6 +306,12 @@ REXCVAR_DEFINE_STRING(nx_exit_mode, "D", "Switch",
                       "Exit at + (hold 1 s): D = file I/O gate closed and drained, null audio "
                       "stopped, every thread told to end and joined (2 s each), then exit(0); "
                       "A = exit(0) with the threads alive (runs 15-17) (nx_exit.h)");
+REXCVAR_DEFINE_INT32(nx_startup_summary_s, 10, "Switch",
+                     "Seconds the start-up summary (commit, toml, cvars not at the default, "
+                     "clocks wanted and read, cache files) stays on screen before the game "
+                     "starts; 0 = written to game.log only (runs 27-29: wrong NRO and clocks "
+                     "not visible on the console)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 namespace {
 
@@ -318,6 +325,7 @@ constexpr const char* kFrameDumpDir = "sdmc:/switch/theft4/frames";
 
 bool g_logging_ready = false;
 std::atomic<bool> g_stopped{false};
+std::string g_config_read;  // the toml file(s) read, for the start-up summary
 #if THEFT4_NX_VULKAN
 // nx_gpu = vulkan: the UI context (this thread), the window and the backend.
 // Never destroyed, as the runtime.
@@ -1091,8 +1099,9 @@ void StartLogging() {
 #else
     constexpr const char* kNroKind = "null GPU only";
 #endif
+    g_config_read = loaded.empty() ? "none (all defaults)" : loaded;
     GAME_INFO("build: commit %s, %s NRO; config read: %s", THEFT4_BUILD_COMMIT, kNroKind,
-              loaded.empty() ? "none (all defaults)" : loaded.c_str());
+              g_config_read.c_str());
     const auto log_list = [](const char* title, const std::vector<std::string>& names) {
       std::string line;
       int part = 1;
@@ -3051,6 +3060,125 @@ void ClockLog(bool error, const char* text) {
 
 void ProfileLog(const char* text) { GAME_INFO("%s", text); }
 
+// ── Start-up summary (runs 27-29, D) ───────────────────────────────────────
+
+// Files and bytes under dir, recursively; a missing directory counts 0.
+void CountFiles(const std::string& dir, uint64_t* files, uint64_t* bytes) {
+  DIR* d = opendir(dir.c_str());
+  if (!d) {
+    return;
+  }
+  while (const dirent* e = readdir(d)) {
+    if (!std::strcmp(e->d_name, ".") || !std::strcmp(e->d_name, "..")) {
+      continue;
+    }
+    const std::string path = dir + "/" + e->d_name;
+    struct stat st {};
+    if (stat(path.c_str(), &st) != 0) {
+      continue;
+    }
+    if (S_ISDIR(st.st_mode)) {
+      CountFiles(path, files, bytes);
+    } else {
+      ++*files;
+      *bytes += uint64_t(st.st_size);
+    }
+  }
+  closedir(d);
+}
+
+// Runs 27-29: which NRO ran, and that a clock tool had set CPU 918 / GPU 192
+// MHz, came out of game.log only afterwards. One screen, before the console
+// closes, with what identifies the run, held nx_startup_summary_s seconds
+// (also in game.log). Red lines are the ones that make a run not comparable.
+void StartupSummary() {
+  const int hold_s = REXCVAR_GET(nx_startup_summary_s);
+  constexpr const char* kRed = "\x1b[31;1m";
+  constexpr const char* kYellow = "\x1b[33;1m";
+  constexpr const char* kPlain = "\x1b[0m";
+  if (hold_s > 0) {
+    ConsolePrint("\x1b[2J\x1b[1;1H");  // clear, cursor home
+  }
+  GAME_INFO("=== start-up summary (cvar nx_startup_summary_s) ===");
+  const bool dirty = std::strstr(THEFT4_BUILD_COMMIT, "-dirty") != nullptr;
+  if (dirty) {
+    ConsolePrint(kRed);
+  }
+  GAME_INFO("NRO: commit %s%s", THEFT4_BUILD_COMMIT,
+            dirty ? " (DIRTY: uncommitted changes in the build)" : "");
+  ConsolePrint(kPlain);
+  GAME_INFO("toml read: %s", g_config_read.c_str());
+  {
+    // Report() cuts a line at 768 bytes: the list goes out in pieces.
+    std::string line;
+    int part = 1;
+    for (const std::string& name : rex::cvar::ListModifiedFlags()) {
+      line += " " + name + "=" + rex::cvar::GetFlagByName(name);
+      if (line.size() > 560) {
+        GAME_INFO("cvars not at the default (%d):%s", part++, line.c_str());
+        line.clear();
+      }
+    }
+    if (!line.empty() || part == 1) {
+      GAME_INFO("cvars not at the default (%d):%s", part, line.empty() ? " none" : line.c_str());
+    }
+  }
+  theft4::nx_clocks::Wanted wanted;
+  const bool clocks_done = theft4::nx_clocks::WaitStartup(3'000'000'000ull, &wanted);
+  const theft4::nx_clocks::Clocks now = theft4::nx_clocks::Read();
+  if (!clocks_done) {
+    GAME_INFO("clocks wanted: none (nx_apm_clock = false, or the clock thread not done in 3 s)");
+  } else if (!wanted.cpu_hz) {
+    GAME_INFO("clocks wanted: none (nx_apm_clock = false, or docked: the system's)");
+  } else {
+    GAME_INFO("clocks wanted: CPU %.1f, GPU %.1f, memory %.1f MHz (apm 0x%08X%s)",
+              wanted.cpu_hz / 1e6, wanted.gpu_hz / 1e6, wanted.emc_hz / 1e6,
+              theft4::nx_clocks::Requested(),
+              REXCVAR_GET(nx_cpu_mhz) || REXCVAR_GET(nx_gpu_mhz) || REXCVAR_GET(nx_emc_mhz)
+                  ? " + nx_*_mhz"
+                  : "");
+  }
+  GAME_INFO("clocks read: %s", theft4::nx_clocks::Describe(now).c_str());
+  const auto differs = [](uint32_t a, uint32_t b) { return (a > b ? a - b : b - a) > 20000000u; };
+  if (wanted.cpu_hz && now.ok &&
+      (differs(now.cpu_hz, wanted.cpu_hz) || differs(now.gpu_hz, wanted.gpu_hz) ||
+       differs(now.emc_hz, wanted.emc_hz))) {
+    ConsolePrint(kRed);
+    GAME_ERROR("CLOCKS READ != WANTED: something else sets them (Horizon OC, sys-clk, an "
+               "overlay); disable it or use its default profile, or the run is not comparable");
+    ConsolePrint(kPlain);
+  }
+  GAME_INFO("clock tool: %s", theft4::nx_clocks::ExternalClockTool().c_str());
+  {
+    const std::string root(kRootDir);
+    uint64_t rc_files = 0, rc_bytes = 0, sh_files = 0, sh_bytes = 0;
+    uint64_t c0_files = 0, c0_bytes = 0, c1_files = 0, c1_bytes = 0;
+    CountFiles(root + "/runtime-cache", &rc_files, &rc_bytes);
+    CountFiles(root + "/runtime-cache/shaders", &sh_files, &sh_bytes);
+    CountFiles(root + "/cache", &c0_files, &c0_bytes);
+    CountFiles(root + "/cache1", &c1_files, &c1_bytes);
+    if (rc_files) {
+      ConsolePrint(kYellow);
+    }
+    GAME_INFO("cache files: runtime-cache %" PRIu64 " (%.1f MiB), of which shaders %" PRIu64
+              " (%.1f MiB); cache %" PRIu64 " (%.1f MiB), cache1 %" PRIu64 " (%.1f MiB)%s",
+              rc_files, rc_bytes / 1048576.0, sh_files, sh_bytes / 1048576.0, c0_files,
+              c0_bytes / 1048576.0, c1_files, c1_bytes / 1048576.0,
+              rc_files ? "; runtime-cache NOT EMPTY (the protocol deletes it before a run)" : "");
+    ConsolePrint(kPlain);
+  }
+  if (hold_s <= 0) {
+    return;
+  }
+  GAME_INFO("the game starts in %d s", hold_s);
+  const u64 end = armGetSystemTick() + armNsToTicks(uint64_t(hold_s) * 1'000'000'000ull);
+  while (armGetSystemTick() < end && appletMainLoop()) {
+    padUpdate(&g_pad);
+    LogButtonChange(padGetButtons(&g_pad));
+    svcSleepThread(16'000'000);
+  }
+}
+
 [[noreturn]] void GameMain(int argc, char** argv) {
   rex::cvar::Init(argc, argv);
   // Run 23 (C.3): before the threads of the log and the runtime exist.
@@ -3157,6 +3285,7 @@ void ProfileLog(const char* text) { GAME_INFO("%s", text); }
               trace_ns, tls_ns, REXCVAR_GET(nx_trace_exports) ? "on" : "OFF");
   }
 
+  StartupSummary();
   GAME_INFO("about to construct rex::Runtime (game:, d: = %s)", GameDir().c_str());
   const std::filesystem::path root(kRootDir);
   auto runtime = std::make_unique<rex::Runtime>(

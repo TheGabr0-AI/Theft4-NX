@@ -4140,10 +4140,11 @@ locale `sync-clean` è `a25ce24` più quel lavoro, con queste differenze:
 - **Tolto:** `include/rex/audio/nx_exact_wave_helpers.h`: 16 funzioni del gioco
   in PowerPC tradotto istruzione per istruzione (col disassemblato nei
   commenti), incluso da nessun file tracciato; ora in `.gitignore`.
-- **Percorsi personali:** `/Volumes/Untitled/...` del ramo
-  `REXGLUE_LOCAL_CODEGEN_ONLY` diventa la variabile di cache
-  `REXGLUE_LOCAL_FILE_BACKING_DIRECTORY` (vuota: `shm_open` come prima);
-  `/Volumes/SWITCH SD` del README di `tools/switch-perf` diventa `/path/to/sd`.
+- **Percorsi personali:** il percorso assoluto di un loro disco esterno nel
+  ramo `REXGLUE_LOCAL_CODEGEN_ONLY` diventa la variabile di cache
+  `REXGLUE_LOCAL_FILE_BACKING_DIRECTORY` (vuota: `shm_open` come prima); il
+  punto di montaggio della loro SD nel README di `tools/switch-perf` diventa
+  `/path/to/sd`.
 - **Cartella del gioco:** di nuovo `sdmc:/switch/theft4/game` (loro:
   `sdmc:/LibertyRecomp/game`), con la cvar `nx_game_dir` per cambiarla.
 - **Ogni novità spegnibile, spenta di default:** i default di `sync-clean` sono
@@ -4249,3 +4250,151 @@ funzioni (fotogramma in partita, righe `[GpuSubmissionTime]` e
 dichiarati da DevZer0D4Y (`tools/switch-perf/README.md`: ~2,4 fps in partita;
 C3 da 10,9 a 15,7 swap/s solo a GPU spenta) vengono da un avvio per round,
 su build con modifiche a mano a file generati che non sono nel repository.
+
+## 29. Run 27, 28 e 29: risultati (2026-10-18, `out/console-runs/run27 logs`, `run28 logs`, `run29 logs`, NRO del commit `0b1444a`)
+
+Un avvio per run (non tre), 6–10 minuti in tutto, uscita con + (modo D, pulita)
+in tutti e tre. **Campione unico: nessuna differenza è dimostrata.** I tempi
+"processo" sono dall'avvio della NRO (righe `buttons … at`, `input read at`); il
+battito conta dall'avvio del thread guest, che parte 5,2 s (27), 47,0 s (28) e
+10,0 s (29) dopo il processo (base dei tempi guest nella riga `clock:` prima
+del resume; nel 28 la differenza è "Preparing cached graphics" a CPU 918 MHz).
+
+### A. Protocollo, dai log
+
+| | Run 27 | Run 28 | Run 29 |
+|---|---|---|---|
+| NRO | `0b1444a`, pulita (non `-dirty`): **è quella giusta**, il dubbio sull'NRO vecchio non è confermato | `0b1444a`, pulita | `0b1444a`, pulita |
+| toml letto | `game.toml`, valori = `run27/game.toml` | `game.toml` = `run28/game.toml` | `game.toml` = `run29/game.toml` |
+| cvar non di default | nessuna | le funzioni di DevZer0D4Y accese, `nx_xthread_stack_kib=2048` | come 28 + `nx_cpu_mhz=1785`, `nx_gpu_mhz=768`, `nx_emc_mhz=1600` |
+| Clock chiesti (CPU / GPU / EMC) | apm `0x92220008` (1020 / 460,8 / 1331,2) | uguale | apm `0x92220008`, poi clkrst 1785 / **460,8** (Erista in portatile: il codice taglia 768) / 1600 |
+| Clock letti all'avvio | **NOT applied**: 918 / 76,8 / 1331,2 | **NOT applied**: 510 / 76,8 / 1331,2 | **NOT applied**, poi "read back DIFFERENT": 918 / 76,8 / 1600 |
+| Clock letti nel tempo | 918 / 192 / 1331,2 (52 letture), 918 / **76,8** (10, nelle finestre senza swap) | 918 / 192 / 1331,2 (28), 918 / 76,8 (3) | fino a ~60 s 918 / 192 / 1331,2 e "the system set … raising again" ×5; poi 1785 / **768** / 1600 (28 letture), 1785 / 76,8 (2) |
+| Cache all'avvio | shader storage spento | `runtime-cache/shaders` vuota di fatto (0 byte letti, 0 pipeline nel preload): non cancellata, ma non c'era niente | vuota (cancellata) |
+| Cache alla fine | – | NVK 6,8 MB salvati, 231 pipeline create | NVK 9,4 MB, 310 pipeline |
+| Durata | 635 s | 365 s | 377 s |
+| In partita | da ~375 s, ~255 s | da ~220 s, ~140 s | da ~152 s, ~220 s (di cui ~20 s di menu di pausa da 348 s) |
+| Fine | + (modo D), 87 MiB di margine | + (modo D), 404 MiB | + (modo D), 97 MiB |
+
+**Clock imposti da fuori, in tutti e tre.** CPU 918 MHz e GPU 192 MHz non sono
+passi di nessuna configurazione Nintendo (CPU 1020/1224/1785, GPU
+307,2/384/460,8/768). La GPU a 76,8 MHz compare solo nelle finestre in cui la
+GPU è ferma (compilazione delle pipeline, 0 swap): un governatore che abbassa la
+GPU inattiva, non il "CPU boost mode" che diceva la riga. Nel 29 la GPU letta è
+768 MHz, che il nostro codice su Erista in portatile non chiede (chiede 460,8):
+l'ha messa qualcun altro. Conclusione: **Horizon OC (o sys-clk) con un profilo
+attivo in tutti e tre i run** (il "918/152" visto sulla console: nei log
+918/192). La riga `NOT applied` lo segnalava all'avvio, ma solo nel log.
+
+**Confrontabilità:** 27 e 28 sono confrontabili tra loro (stessa NRO, stessi
+clock esterni 918 / 192 / 1331,2, cache del 28 vuota) con tutte le funzioni di
+DevZer0D4Y insieme come unica differenza voluta, più differenze non volute:
+scena in partita non identica (nel 28 si guida), filmato saltato nel 28 e forse
+non nel 27 (C). 29 contro 28: cambiano i clock (918 / 192 / 1331,2 → 1785 / 768
+/ 1600, non 1785 / 460,8 / 1600 come previsto). **Nessuno dei tre è
+confrontabile con i run 24–25** (clock e build diversi); il run 26 non è mai
+stato fatto, quindi "27 contro 26" non si può dire.
+
+### B. Cosa si può concludere
+
+A regime in partita (finestre di 10 s; 27: battito 380–530 e 580–620 s, 28:
+190–310, 29: 160–340):
+
+| | 27 | 28 | 29 |
+|---|---|---|---|
+| swap/s | 0,25 | 0,62 | 2,60 |
+| ms per fotogramma | ~4040 | ~1625 | ~385 |
+| draw per fotogramma | ~4200 | ~4290 | ~3870 |
+| GPU per fotogramma (`[GpuSubmissionTime]`) | (spento) | ~1000 ms | ~230 ms |
+| attese del command processor sui fence | 9,3 s ogni 10 s | 7,8 s | 6,7 s |
+| CPU guest / host (100 % = un core) | 226 % / 22 % | 224 % / 36 % | 211 % / 47 % |
+| thread più carichi | Main 97 %, id 18 77 %, id 19 48 % | Main 93 %, 18 80 %, 19 43 % | Main 85 %, 18 79 %, GPU Commands 25–50 % |
+| fault/s (per fotogramma) | 1,9 (~8) | 3,4 (~5) | 17,6 (~7) |
+| heap in uso, inizio → fine partita | 2998 → 3023 MiB | 2658 → 2705 | 2681 → 3010 |
+| margine | 111 → 87 MiB | 451 → 404 | 429 → 99 |
+
+- **Il 29 è più veloce per i clock, in modo coerente con un collo di bottiglia
+  sulla GPU.** Il rapporto 460,8 → 768 (×1,67) prevederebbe dal 28 un
+  fotogramma di ~975 ms; ma i clock veri erano 192 → 768 (×4,0), che prevede
+  ~406 ms: misurati ~385 ms. Il tempo GPU per fotogramma scende da ~1000 a ~230
+  ms (×4,3; anche la memoria sale del 20 %). La CPU raddoppia (918 → 1785), ma
+  da sola darebbe al massimo ×1,9: non spiega ×4,2. In partita, con questi
+  clock, il gioco resta limitato dalla GPU (il command processor passa il
+  67–93 % del tempo ad aspettare i fence).
+- **27 contro 28, stessi clock:** in partita 0,25 contro 0,62 swap/s (×2,5) con
+  gli stessi draw per fotogramma; sui loghi (finestre 20–50 s, scena identica)
+  3,9 contro 12,2 swap/s (×3,1). Il 29 nella stessa fase, ancora a 918 / 192
+  (l'alzata non teneva), fa come il 28 (13,5/12,0/12,0/11,3 contro
+  13,4/11,9/11,9/11,4 swap/s; GPU per fotogramma 45,8/44,8/52,6/51,4 contro
+  45,9/45,1/52,8/51,6 ms): due avvii con la stessa configurazione danno gli
+  stessi numeri, quindi la differenza 27/28 non sembra rumore. **Da
+  verificare:** è attribuibile all'insieme delle funzioni di DevZer0D4Y (audio
+  nativo, sync, costanti e descrittori Vulkan, ownership, alpha coverage,
+  shader storage), non a una in particolare.
+- **Memoria:** il 28 parte con 393 MiB in meno del 27 (1749 contro 2142 MiB al
+  primo battito): è la voce "rest" (686 → 284 MiB), cioè gli stack host degli
+  XThread a 2 MiB invece di 16 (`nx_xthread_stack_kib`). Nel 29 un blocco VMA
+  in più da 256 MiB e 24 MiB di buffer host a ~210 s (guida, zona nuova)
+  portano il margine a 99 MiB: alla fine del 27 e del 29 si è sotto i 110 MiB,
+  nella zona dei crash per memoria dei run 24–25. Nessuna crescita continua in
+  partita (+6 MiB/min nel 27).
+- **Audio nativo (28 e 29):** nessun errore, 0 frame scartati; sui loghi 100 %
+  del tempo reale. In partita il mixer del gioco non tiene il passo: 28 ~40 %
+  del tempo reale con 320–440 "ran dry" ogni 10 s (suono a scatti), 29 60–75 %
+  con 55–140; nel menu di pausa del 29 100 %. Il mixer è il thread guest 18
+  (LR `8216xxxx`, vicino all'entrata `82169400`), ~80 % di un core in tutti e
+  tre i run (anche nel 27 con l'audio nullo); i frame audio salgono con la CPU
+  (clock ×1,94, frame ×1,7). Il thread host "Audio Worker" non compare tra i più
+  carichi; "XMA Decoder" 14–16 %.
+- **Fault:** per fotogramma simili (5–8); al secondo salgono col frame rate.
+  31–77 µs l'uno: trascurabili.
+
+**Cosa non si può dire:** quale delle funzioni di DevZer0D4Y dà il ×2,5 (accese
+tutte insieme); se il ×2,5 vale ai clock standard (1020 / 460,8) senza Horizon
+OC; se 27 è uguale al 26 (il 26 non esiste); quanto del 29 viene dalla CPU e
+quanto dalla memoria; la variabilità tra avvii in partita (un avvio, scene
+diverse).
+
+### C. Salto del filmato
+
+- **Mappatura dei tasti** (`nx_input.cpp`): per posizione, come i tasti della
+  360. **A dello Switch → B della 360, B dello Switch → A della 360**, X → Y, Y →
+  X. Le righe `buttons 0x…` sono maschere dello Switch (0x1 = A, 0x2 = B, 0x200
+  = ZR, 0x10000–0x80000 = levetta sinistra), le righe `input read at` maschere
+  della 360 (0x1000 = A, 0x2000 = B, 0x0010 = START, 0x0020 = BACK).
+- **Il gioco legge il pad una volta per fotogramma:** nel filmato del 27 3–4
+  letture ogni 10 s, con un buco di ~25 s senza letture (215–240 s); in partita
+  nel 29 ~26 ogni 10 s (= swap/s).
+- **La pressione di 3 s è arrivata, come B:** A dello Switch tenuto 189,5–194,8 s
+  (27), 153,5–159,2 s (28), 122,3–129,1 s (29); letta come 360 B a 192,896 s
+  (27), 157,967 s (28), 120,839 / 121,881 / 122,815 s (29).
+- **La A della 360 (B dello Switch)** è arrivata: 27 a 240,924 s (insieme a B,
+  `0x3000`, trattenuta); 28 a 161,823 s (con B) e 177,926 s; 29 a 137,401 s (con
+  B) e 137,442 s (da sola). Il filmato finisce: 27 a ~333 s (90 s dopo), 28 a
+  ~195 s (15–30 s dopo, 6–12 fotogrammi a 0,4 fps), 29 a ~138–140 s (1–3 s
+  dopo). Il filmato dura ~235 s nel 27 e 50–70 s nel 28 e nel 29.
+- **Quale tasto salta il filmato sulla 360:** non risulta dal nostro codice né
+  dai documenti del repository; a memoria A, **da verificare**.
+- **Quindi:** il gioco il pad lo chiedeva (raramente, una volta per fotogramma);
+  il tasto tenuto 3 s è arrivato, ma come B. È compatibile con "B non salta, A
+  sì" (nel 29 la fine segue di 1–3 s la prima A), non dimostrato: nel 27 la A
+  arriva a 241 s e il filmato finisce a 333 s (salto lento a 0,1–0,3 fps o fine
+  naturale). Prova del prossimo run: nel filmato premere solo **B dello
+  Switch** (= A della 360) per 2–3 s e annotare il secondo.
+
+### D. Cosa cambia per il prossimo run (da verificare sulla console)
+
+- **Schermata di avvio** (`StartupSummary` in `main.cpp`, cvar
+  `nx_startup_summary_s`, default 10 s, 0 = solo log): prima che la console
+  ceda lo schermo a Vulkan, a schermo pulito e in `game.log`: commit (in rosso
+  se `-dirty`), toml letto, cvar diverse dal default, clock voluti e letti (riga
+  rossa `CLOCKS READ != WANTED` se differiscono di più di 20 MHz), sys-clk /
+  Horizon OC (programma `00FF0000636C6BFF`: installato, flag `boot2`, in
+  esecuzione secondo pm:dmnt; che Horizon OC usi lo stesso id è da verificare),
+  file e MiB in `runtime-cache`, `runtime-cache/shaders`, `cache` e `cache1` (in
+  giallo se `runtime-cache` non è vuota). I clock voluti vengono da
+  `nx_clocks::WaitStartup`, dopo il primo apply (al massimo 3 s di attesa).
+- La nota "CPU boost mode" della riga dei clock sotto 100 MHz ora nomina anche
+  il governatore di un tool esterno.
+- Protocollo ridotto: `docs/switch-port/run-protocol.md` (un avvio per
+  configurazione, 5 minuti in partita, tre controlli prima dell'avvio).
