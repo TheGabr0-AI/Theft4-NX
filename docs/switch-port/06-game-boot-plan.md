@@ -4398,3 +4398,233 @@ diverse).
   il governatore di un tool esterno.
 - Protocollo ridotto: `docs/switch-port/run-protocol.md` (un avvio per
   configurazione, 5 minuti in partita, tre controlli prima dell'avvio).
+
+## 30. Run 30: risultati; dove va il tempo; build del run 31 (2026-10-18, `out/console-runs/run30 logs`, NRO `7c94eee`)
+
+Un avvio, 280 s in tutto, uscita con + (modo D, pulita: `exit(0)` a +3,4 s,
+7 thread su 30 chiusi entro 2 s, nessun fault non gestito). Nessuna nota
+dell'utente: tutto viene dai log. Tempi "processo" = dall'avvio della NRO
+(righe `buttons … at`); il battito parte ~27 s dopo (10 s di schermata di
+avvio più l'avvio del runtime), quindi battito ≈ processo − 27 s.
+**Campione unico: nessuna differenza è dimostrata.**
+
+### A. Il run 30
+
+**Dalla schermata di avvio** (righe `=== start-up summary`):
+
+| Voce | Valore | Esito |
+|---|---|---|
+| NRO | `7c94eee`, non `-dirty` | giusta (= `run30-build/COMMIT`) |
+| toml | `game.toml` = `run30-build/game.toml` (cioè quello del run 28) | giusto |
+| cvar non di default | tutte le funzioni di DevZer0D4Y accese, `nx_xthread_stack_kib=2048` | come il run 28 |
+| clock voluti | CPU 1020 / GPU 460,8 / memoria 1331,2 MHz (apm `0x92220008`) | |
+| clock letti | 1020 / 460,8 / 1331,2, SoC 37,4 °C; **nessuna riga `CLOCKS READ != WANTED`** | uguali |
+| clock nel tempo | 25 letture su 25 a 1020 / 460,8 / 1331,2 (SoC 39 → 44 °C) | stabili |
+| Horizon OC / sys-clk | `installed, boot2 flag present, RUNNING` | acceso, ma **non ha cambiato i clock** (profilo di default, si direbbe) |
+| cache | `runtime-cache` **3 file, 10,7 MiB** (shader), `cache` 16 file (618,8 MiB), `cache1` 36 (217,0 MiB); riga gialla `runtime-cache NOT EMPTY` | **cache non cancellata**: partenza calda (320 pipeline ricreate dallo storage nei primi 10 s, 0,1 ms l'una; 353 shader tradotti, 8,4 ms l'uno) |
+
+**Con quali run è confrontabile:** con nessuno dei run 27–29 a parità di
+clock. Il 30 è il primo con le funzioni di DevZer0D4Y ai clock standard
+1020 / 460,8 / 1331,2; il 27 e il 28 giravano a 918 / 192 / 1331,2, il 29 a
+1785 / 768 / 1600. Stessa logica della NRO del 27–29 (`0b1444a` → `7c94eee`
+aggiunge solo la schermata), stessa configurazione del 28, ma cache calda
+(il 28 partiva vuoto). Per i clock è confrontabile solo con il gruppo 2 del
+run 24 (460,8 MHz), che però è un'altra build (`c1b2858`, senza nessuna
+novità).
+
+**Cronologia (tempi processo):** loghi fino a ~95 s (23–37 swap/s), caricamento,
+filmato ~117–167 s (~1 swap/s, 1.000–1.400 draw per fotogramma), schermata di
+caricamento ~177 s (13 swap/s, 294 draw), **in partita da ~190 s a 276 s
+(~85 s, non 5 minuti)**, + a 275,8 s. In partita levetta sinistra e ZR tenuto
+a lungo da 198,8 s (in macchina, probabilmente). Filmato: B dello Switch (= A
+della 360) premuto a 136,4 s, letto come `0x1000` a 136,52 s; altre A/B a
+157–164 s; il filmato finisce fra ~160 e ~175 s, 25–40 s dopo la prima A:
+niente di nuovo sul salto (§29 C resta aperto).
+
+**In partita a regime** (finestre del battito 170–250 s, 9 finestre da 10 s):
+
+| | Run 30 (1020 / 460,8 / 1331,2) |
+|---|---|
+| swap/s | 1,4–1,6 |
+| ms per fotogramma | 625–714 (tipico ~640) |
+| draw per fotogramma | 4.100–4.200 (4.784, 5.189, 6.237 nelle ultime tre) |
+| GPU per fotogramma (`[GpuSubmissionTime]`) | 390–398 ms (443 nell'ultima) |
+| attesa bloccante del command processor | ~440 ms per fotogramma (fino a 200 s dentro `vkQueuePresentKHR`, 450 ms per present; poi nelle fence del command processor, 439 ms per fotogramma: lo stesso tempo, spostato) |
+| CPU di GPU Commands | 2,5–4,1 s ogni 10 s = 37–62 µs per draw (38 tipico) |
+| CPU guest / host (100 % = un core) | 213–226 % / 43–62 % |
+| thread più carichi | Main XThread (id 6) 81–87 %, id 18 (mixer audio) 77–80 %, id 19 28–34 %, GPU Commands (id 4) 24–41 %, XMA Decoder (id 2) 16–19 % |
+| fault/s (per fotogramma) | 11–17 (~8), 45 µs l'uno |
+| heap in uso | 2704 → 2764 MiB; margine 405 → 345 MiB |
+| audio | **37–43 % del tempo reale**, 268–392 "ran dry" ogni 10 s (a scatti); sui loghi 100 % |
+| pipeline nuove | 0–5 ogni 10 s, 210–354 ms l'una sul thread GPU Commands (creazione sincrona) |
+
+**Confronto con i run 27–29 (non a parità di clock, solo come modello):** il
+tempo GPU per fotogramma moltiplicato per il clock della GPU resta quasi
+costante: 28: 1.000 ms × 192 MHz = 192.000; 30: 398 × 460,8 = 183.000; 29: 233 ×
+768 = 179.000 (anche sui loghi: 28 45,9 ms × 192 = 8.800; 30 18,3 × 460,8 =
+8.400). Il fotogramma intero sta in un rapporto quasi fisso col tempo GPU
+(28: 1.625 / 1.000 = 1,63; 30: 640 / 395 = 1,62; 29: 385 / 233 = 1,65).
+Coerente con un gioco limitato dal clock della GPU in tutti e tre i casi; il
+×2,5 fra 27 e 28 resta attribuito all'insieme delle novità (§29 B).
+**Da verificare** con un secondo avvio uguale.
+
+**Fine:** + e uscita pulita; nessun crash; margine minimo 345 MiB (molto più
+degli 87–99 MiB del 27 e del 29, grazie agli stack da 2 MiB).
+
+### C. Dove va il tempo (build `7c94eee`, run 30, clock noti 1020 / 460,8 / 1331,2)
+
+#### C.1 Tempo GPU per categoria
+
+Timestamp Vulkan di DevZer0D4Y (`vulkan_operation_timestamps`): ogni finestra
+ne campiona 4 fotogrammi; sommati sulle finestre 170–250 s (36 fotogrammi
+campionati) e divisi per fotogramma. La somma delle categorie (394 ms) è uguale
+al tempo GPU del fotogramma (398 ms): la copertura è completa.
+
+| Categoria (`kind`) | ms per fotogramma | % | comandi per fotogramma |
+|---|---|---|---|
+| `ownership_depth` | 72,4 | 18,4 | 35,5 |
+| `ownership_stencil` | 69,9 | 17,7 | 57,5 |
+| `ownership_stencil_copy` | 27,3 | 6,9 | 16,6 |
+| `ownership_color` | 23,2 | 5,9 | 28,2 |
+| `ownership_render` | 1,2 | 0,3 | 39,5 |
+| **trasferimenti di ownership EDRAM, totale** | **194,0** | **49,2** | |
+| `edram_dump` (compute della cache dei render target) | 24,2 | 6,1 | 7,9 |
+| `resolve_direct` | 21,1 | 5,4 | 34,1 |
+| `edram_clear` | 7,9 | 2,0 | 8,4 |
+| `resolve_copy` | 7,1 | 1,8 | 7,9 |
+| **resolve e compute EDRAM, totale** | **60,3** | **15,3** | |
+| `guest_render` (i draw del gioco, post-processing compreso) | 73,5 | 18,6 | 4.725 |
+| `transfer` (copie di buffer e immagini) | 44,8 | 11,4 | 423 |
+| `texture_load` | 19,8 | 5,0 | 91,6 |
+| `barrier` | 1,2 | 0,3 | 903 |
+| `present` | 0,7 | 0,2 | 1 |
+
+- **Due terzi del tempo GPU (64,5 %) sono l'emulazione dell'EDRAM**, non i draw:
+  i trasferimenti di ownership (un render target riletto con un altro formato
+  o un'altra vista: depth ↔ stencil ↔ colore) da soli sono metà del
+  fotogramma. I draw del gioco sono il 18,6 %.
+- **Post-processing:** con questi timestamp non è separabile: le sue passate
+  sono `guest_render` (draw del gioco a schermo intero). Si separa con
+  `nx_frame_structure_capture` (cvar esistente, spenta) o con un contatore per
+  render target (da fare).
+- Le categorie scalano col clock: run 28 (192 MHz) `ownership_stencil` 196 ms,
+  `ownership_depth` 182, `guest_render` 173; run 29 (768) 44,7 / 41,6 / 43,1.
+  Le percentuali restano le stesse (±1 punto).
+- `transfer` comprende le copie dei buffer di costanti verso la memoria solo
+  GPU (`vulkan_device_uniform_buffers`: ~156 copie, ~100 MB ogni 10 s, cioè
+  ~6,5 MB per fotogramma) e le copie delle immagini.
+
+#### C.2 CPU del command processor per draw
+
+Oggi c'è solo il totale: 38 µs di CPU del thread GPU Commands per draw (2,5 s
+ogni 10 s per ~66.000 draw), cioè ~157 ms per fotogramma. La divisione non è
+nei log. Dai dati che ci sono:
+
+- `vkQueueSubmit` 0,11–0,12 ms per chiamata, ~7 chiamate al secondo: < 0,1 %;
+- pipeline nuove in partita: 0–5 ogni 10 s ma 210–354 ms l'una, sul thread
+  stesso (creazione sincrona): nella finestra di 200 s 1,77 s su 4,14 s;
+- il resto (~2,5 s ogni 10 s) è lettura PM4, ricerca di shader e pipeline,
+  stato, descrittori e la registrazione nel command buffer differito; le
+  chiamate Vulkan vere (a NVK) avvengono tutte insieme alla fine della
+  submission, nel replay di quel buffer.
+
+**Il fotogramma è seriale, non parallelo:** ~440 ms di attesa bloccante della
+GPU + ~157 ms di CPU del command processor ≈ 600–640 ms = il fotogramma
+misurato. Vale anche per il 28 (1.350 + ~260 ≈ 1.625) e il 29 (260 + ~110 ≈
+385). Il command processor aspetta la fine del lavoro GPU prima di preparare il
+successivo, e la GPU aspetta lui: CPU e GPU non si sovrappongono. L'attesa
+(440 ms) è più lunga del tempo GPU misurato (395 ms): ~45 ms per fotogramma di
+latenza o di lavoro fuori dai timestamp. **Da verificare** dove nasce
+l'attesa (resolve riletti dalla CPU, `nx_gpu_guest_progress_wait`, numero di
+command buffer in volo): è la leva più grande, e non dipende dall'API.
+
+**Misura nella build del run 31** (nessun avvio dedicato: la riga esce in ogni
+battito di qualunque avvio): `command processor phases (ms in the window, us
+per draw; …)` divide il tempo di `IssueDraw` in primitive (`BeginSubmission`,
+elaborazione degli indici), shader (analisi, modifiche, traduzione, sampler),
+texture, render target (cache EDRAM e trasferimenti in coda), pipeline, stato
+e descrittori, memoria e barriere, registrazione; più `IssueCopy` (resolve) e
+il **replay** del command buffer differito (le chiamate `vkCmd*` a NVK, cioè
+il costo del driver); "rest" è la CPU del thread meno le fasi (PM4, registri,
+swap). Driver = replay + `vkQueueSubmit` + creazione delle pipeline;
+emulazione = il resto. Dalle fasi sono tolte le attese sulle fence, le
+traduzioni e le creazioni di pipeline dello stesso thread (contate a parte).
+Costo della misura: 9 letture del contatore di sistema e un'aggiunta per draw
+(stima < 1 µs su 38, da verificare con la riga stessa).
+
+#### C.3 Il thread audio del gioco (guest id 18)
+
+- **CPU:** 77–80 % di un core in partita in tutti i run 27–30 (anche nel 27,
+  con l'audio nullo), 1–8 % sui loghi. Produce il 37–43 % del tempo reale in
+  partita (run 30): per il tempo reale servirebbe ~2–2,5 volte la sua velocità
+  di oggi, cioè più di un core intero a 1020 MHz. Nel 29 (CPU 1785) arrivava
+  al 60–75 %.
+- **Export:** 3,79 M chiamate a ~65 s di battito, 35,95 M a ~185 s: **~270.000
+  export al secondo** da questo solo thread (spin lock, `KeRaiseIrqlToDpcLevel`,
+  `KfLowerIrql`). Il tracciamento costa 138,5 ns per chiamata (riga `export
+  trace`): ~37 ms/s, il 4–5 % del thread; il resto del costo per export
+  (dispatch, IRQL per thread, spin lock di C3/C5) non è misurato.
+- **Dove (due istantanee, non un profilo):** catena guest `82169400`
+  (entrata del thread, quella della priorità audio) → `82169C58` → `8216A288`
+  → `82173688` → `8216BFE8` → `821743C0` → `8216D7E0`, con il pc in
+  `sub_8216D7E0` e l'ultima export `KfLowerIrql` (LR `82178F44`); l'altra
+  istantanea è in `sub_8217A380`, fra `KeRaiseIrqlToDpcLevel`, `KfLowerIrql` e
+  `KeAcquireSpinLockAtRaisedIrql` (LR `8216D8AC`). Il run 21 (profilo a
+  campioni, log perso) diceva "diviso fra attese e NEON".
+- **Per sapere quali funzioni:** `nx_profile = true` (cvar esistente, una riga
+  in più nel toml del prossimo avvio che si farà comunque) dà il profilo per
+  funzione del thread 18 (`where.py --profile`). Due ipotesi da verificare con
+  quel profilo: (a) le ~270.000 export/s di IRQL e spin lock, che sulla 360
+  costano pochi cicli e qui passano dal dispatcher delle export; (b) il mixer
+  vero (DSP del gioco tradotto, float a 32 bit con il cambio del modo di
+  `FPSCR` a ogni funzione: `disableFlushMode` compare nell'istantanea).
+  Nessuna implementazione in questo passo.
+
+#### C.4 Budget CPU sui 4 core
+
+Il processo ha la core mask `0xF` (forwarder). Thread guest: core ideale dalla
+mappa CPU 360 → core (0,1 → 0; 2,3 → 1; 4,5 → 2), maschera morbida 0–2; il
+core 3 non va mai ai guest (04 §3). Thread host (pthread: GPU Commands, XMA,
+Audio Worker, log, clock): maschera del processo, quindi 0–3; nessuno è
+fissato al core 3 (`nx_host_worker_core_mask` esiste ma non è usata). Il core
+3 lo usa anche il sistema.
+
+| Gruppo (in partita, run 30, media 170–250 s) | % di un core | Core possibili |
+|---|---|---|
+| Main XThread (id 6) | ~84 | 0–2 |
+| mixer audio (id 18) | ~79 | 0–2 |
+| id 19 | ~31 | 0–2 |
+| altri guest (21, 22, 23, 7, 14, …) | ~26 | 0–2 |
+| **guest totale** | **~220 su 300** | 0–2 |
+| GPU Commands (id 4) | ~28 (24–41) | 0–3 |
+| XMA Decoder (id 2) | ~17 | 0–3 |
+| altri host + UI e log | ~4 | 0–3 |
+| **host totale** | **~48** | 0–3 |
+| **totale** | **~270 su 400** | |
+
+Non c'è un contatore per core: si sa quanto lavora ogni thread, non dove.
+Lettura: i core 0–2 sono al ~75 % in media, il core 3 al più al ~50 % (host)
+più il sistema. Il limite non è la CPU totale: due thread singoli (Main e il
+mixer) usano quasi un core ciascuno, e il fotogramma è seriale fra command
+processor e GPU (C.2). Spostare GPU Commands e XMA sul core 3
+(`nx_host_worker_core_mask`) libererebbe ~45 % dei core guest: **da
+verificare**, una variabile, con la riga `cpu`.
+
+### D. Build del run 31 (sync-clean, dopo `7c94eee`)
+
+- **Default = configurazione del run 28** (decisione dell'utente; la
+  bisezione delle novità non si fa): audio nativo (`nx_audio`,
+  `nx_audio_guest_priority`), sync di DevZer0D4Y (`nx_sync_fast_lookup`,
+  `nx_sync_notify_one`, `nx_sync_irq_lock_free`, `nx_sync_lock_free_release`,
+  `nx_sync_multi_wait`), `nx_direct_resolve`, `nx_shader_storage`,
+  `nx_gpu_guest_progress_wait`, `nx_xthread_stack_kib = 2048` e tutte le
+  `vulkan_*` della tabella §28 A ora a `true`; clock standard (apm
+  `0x92220008`, `nx_cpu_mhz`/`nx_gpu_mhz`/`nx_emc_mhz` = 0, invariati);
+  diagnostica come nel 28 (log debug, trace delle export, catture: invariati).
+  Le cvar restano: un toml può spegnerle una a una. Un `game.toml` senza
+  righe ora dà il run 28.
+- **Contatori C.2** (`nx_gpu_counters.h`, `NxCpPhase`/`NxCpLapTimer`;
+  `IssueDraw` e il replay in `vulkan/command_processor.cpp`; la riga
+  `command processor phases` nel battito): sempre accesi.
+- **Smoke, passo 8** (`gpu_bench.cpp`, cvar `nx_smoke_gpu_bench`, accesa): la
+  prova deko3d contro NVK di `13-deko3d-spike.md` (D.2).

@@ -28,3 +28,15 @@ entrati in partita, cosa si è premuto.
 nessuna differenza è dimostrata.* Un numero diverso tra due run è un indizio da
 ripetere, non un risultato; si confrontano solo run con la stessa NRO, la
 stessa cache iniziale e gli stessi clock letti.
+
+**Dal run 31** (06 §30 D): i default di `sync-clean` sono la configurazione
+del run 28, quindi `game.toml` può restare senza righe; ogni cvar si spegne
+ancora una a una dal toml. Run 30: Horizon OC risultava `RUNNING` ma i clock
+letti erano quelli voluti per tutto l'avvio: è il caso "profilo di default",
+che vale. La cache invece non era cancellata (controllo 2): annotarlo se
+succede di nuovo.
+
+**Smoke:** `switch-smoke.nro` della stessa cartella del run fa anche il
+passo 8 (deko3d contro NVK, `13-deko3d-spike.md`, ~1–2 minuti, schermo fermo
+sull'ultima immagine della sonda Vulkan); il risultato sono le righe `gpu
+bench:` di `smoke.log`, da copiare nella cartella del run.
