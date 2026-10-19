@@ -96,7 +96,8 @@ if(THEFT4_NATIVE_HOOKS)
     message(FATAL_ERROR "THEFT4_NATIVE_HOOKS and THEFT4_D3D_CENSUS wrap the same functions")
   endif()
   target_sources(theft4-eu-base PRIVATE native_hooks.cpp)
-  foreach(address 829D1708 829D1818 829CCEA8 829CC610 829CCAC0 829CAAB0 829CAE18 829CB7C8 829D5338)
+  foreach(address 829D1708 829D1818 829CCEA8 829CC610 829CCAC0 829CAAB0 829CAE18 829CB7C8 829D5338
+          829CFE80)
     target_link_options(theft4-eu-base PRIVATE
       "LINKER:-wrap:sub_${address}" "LINKER:-wrap:__imp__sub_${address}")
   endforeach()

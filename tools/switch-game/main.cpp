@@ -250,6 +250,9 @@ REXCVAR_DECLARE(bool, native_renderer_oracle_capture);
 REXCVAR_DECLARE(int32_t, native_observe_frames);
 REXCVAR_DECLARE(std::string, native_observe_csv);
 REXCVAR_DECLARE(bool, native_render_targets);
+REXCVAR_DECLARE(bool, gpu_rptr_writeback_per_packet);
+REXCVAR_DECLARE(int32_t, native_transfer_mask);
+int32_t g_native_chosen_mask = -1;  // native_transfer_mask from the toml, for the A/B
 // C2: synchronisation fast paths (rex/thread/nx_sync_tuning.h). All false:
 // the synchronisation of run 26.
 REXCVAR_DEFINE_BOOL(nx_sync_multi_wait, true, "Switch",
@@ -276,6 +279,12 @@ REXCVAR_DEFINE_BOOL(nx_ab_transfer_modes, false, "Switch",
 REXCVAR_DEFINE_BOOL(nx_ab_ceiling, false, "Switch",
                     "A/B: GPU work on; phases alternate normal and every ownership transfer "
                     "skipped (EDRAM ceiling), normal first")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Run 34 (D): with nx_gpu = native, the phases alternate the transfer mask
+// of cvar native_transfer_mask (even phases) and mask 0 (odd), with the same
+// [ab] ceiling lines and table ("normal" = the chosen mask, "CEILING" = 0).
+REXCVAR_DEFINE_BOOL(nx_ab_native_mask, false, "Switch",
+                    "A/B with native render targets: phases alternate native_transfer_mask and 0")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(nx_ownership_transfer_skip, 0, "Switch",
                      "EDRAM ownership transfers skipped: 0 none, 1 depth<->color, 2 all")
@@ -1817,6 +1826,12 @@ void ReportGpuMappingHistory(const NvError& error) {
          " successful maps; %u payload/range overlaps (up to 16 shown)", sequence, matches);
 }
 
+// Run 34 (C): the game's Direct3D poll of a value the GPU side writes
+// (829CFE80, 06 section 11 b, ~80.000 calls per frame on the PC): calls and
+// time, through -Wl,--wrap (CMakeLists.txt). Only calls from another
+// translation unit pass here.
+std::atomic<uint64_t> g_d3d_wait_calls{0}, g_d3d_wait_ticks{0};
+
 // VkResults that mean memory or the device: a crash-log entry (D.2).
 const char* VkFailureName(int32_t result) {
   switch (result) {
@@ -1828,6 +1843,21 @@ const char* VkFailureName(int32_t result) {
 }
 
 }  // namespace
+
+extern "C" void __real_sub_829CFE80(PPCContext& ctx, uint8_t* base);
+extern "C" void __real___imp__sub_829CFE80(PPCContext& ctx, uint8_t* base);
+extern "C" void __wrap_sub_829CFE80(PPCContext& ctx, uint8_t* base) {
+  const u64 start = armGetSystemTick();
+  __real_sub_829CFE80(ctx, base);
+  g_d3d_wait_ticks.fetch_add(armGetSystemTick() - start, std::memory_order_relaxed);
+  g_d3d_wait_calls.fetch_add(1, std::memory_order_relaxed);
+}
+extern "C" void __wrap___imp__sub_829CFE80(PPCContext& ctx, uint8_t* base) {
+  const u64 start = armGetSystemTick();
+  __real___imp__sub_829CFE80(ctx, base);
+  g_d3d_wait_ticks.fetch_add(armGetSystemTick() - start, std::memory_order_relaxed);
+  g_d3d_wait_calls.fetch_add(1, std::memory_order_relaxed);
+}
 
 #if THEFT4_NX_VULKAN
 // nvdrv calls of NVK (see NvCalls): count, time inside, nvmap bytes.
@@ -2234,6 +2264,8 @@ void LogVulkan(double window_s) {
   if (REXCVAR_GET(native_render_targets)) {
     static uint64_t last_gpu_ns = 0, last_gpu_frames = 0, last_native_frames = 0;
     static uint64_t last_not_made = 0, last_direct = 0, last_edram = 0;
+    static uint64_t last_idle = 0, last_wait_reg = 0, last_d3d_calls = 0, last_d3d_ticks = 0;
+    static uint64_t last_refresh = 0;
     const uint64_t gpu_ns = c.gpu_elapsed_ns.load(std::memory_order_relaxed);
     const uint64_t gpu_frames = c.gpu_frames.load(std::memory_order_relaxed);
     const uint64_t native_frames = c.native_frames.load(std::memory_order_relaxed);
@@ -2253,6 +2285,27 @@ void LogVulkan(double window_s) {
               d_gpu_frames, double(g_cp_window_ns) / 1e6 * per,
               native_frames - last_native_frames, double(not_made - last_not_made) * per,
               double(direct - last_direct) * per, double(edram - last_edram) * per);
+    // Run 34 (C): where the serial part goes.
+    const uint64_t idle = c.cp_idle_ns.load(std::memory_order_relaxed);
+    const uint64_t wait_reg = c.cp_wait_reg_ns.load(std::memory_order_relaxed);
+    const uint64_t refresh = c.cp_refresh_ns.load(std::memory_order_relaxed);
+    const uint64_t d3d_calls = g_d3d_wait_calls.load(std::memory_order_relaxed);
+    const uint64_t d3d_ticks = g_d3d_wait_ticks.load(std::memory_order_relaxed);
+    GAME_INFO("native waits per frame: command processor idle (empty ring) %.1f ms, in "
+              "WAIT_REG_MEM %.1f ms, in RefreshGuestOutput %.1f ms; game in its GPU poll "
+              "829CFE80 %.1f ms (%.0f calls); "
+              "present %.1f ms; read pointer written back per packet: %s",
+              double(idle - last_idle) / 1e6 * per, double(wait_reg - last_wait_reg) / 1e6 * per,
+              double(refresh - last_refresh) / 1e6 * per,
+              double(armTicksToNs(d3d_ticks - last_d3d_ticks)) / 1e6 * per,
+              double(d3d_calls - last_d3d_calls) * per,
+              frames ? double(present_ns - g_vk_beat.present_ns) / 1e6 / double(frames) : 0.0,
+              REXCVAR_GET(gpu_rptr_writeback_per_packet) ? "yes" : "no");
+    last_idle = idle;
+    last_refresh = refresh;
+    last_wait_reg = wait_reg;
+    last_d3d_calls = d3d_calls;
+    last_d3d_ticks = d3d_ticks;
     last_gpu_ns = gpu_ns;
     last_gpu_frames = gpu_frames;
     last_native_frames = native_frames;
@@ -2386,6 +2439,10 @@ struct AbSchedule {
   // Run 32 (nx_ab_ceiling): totals per mode, 0 = normal, 1 = ceiling.
   uint64_t mode_swaps[2] = {}, mode_windows[2] = {}, last_fence_wait_ns = 0;
   double mode_s[2] = {}, mode_fence_ms[2] = {};
+  // Run 34 (D): GPU, command processor and transfers per mode.
+  double mode_gpu_ms[2] = {}, mode_cp_ms[2] = {};
+  uint64_t mode_gpu_frames[2] = {}, mode_made[2] = {};
+  uint64_t ab_last_gpu_ns = 0, ab_last_gpu_frames = 0, ab_last_made = 0, ab_last_not_made = 0;
   double elapsed_s = 0;
   std::FILE* csv = nullptr;
   bool csv_failed = false;
@@ -2424,6 +2481,16 @@ struct AbSchedule {
 
   static void ApplyPhase(int phase) {
     namespace ab = rex::graphics::nx_ab;
+    if (REXCVAR_GET(nx_ab_native_mask)) {
+      // Run 34 (D): even = the chosen mask, odd = mask 0 (no transfer).
+      if (g_native_chosen_mask < 0) g_native_chosen_mask = REXCVAR_GET(native_transfer_mask);
+      const int mask = (phase % 2) == 1 ? 0 : g_native_chosen_mask;
+      ab::SkipGpuWork().store(false, std::memory_order_relaxed);
+      REXCVAR_SET(native_transfer_mask, mask);
+      GAME_INFO("[ab] phase %d: native transfer mask %d (%s)", phase, mask,
+                (phase % 2) == 1 ? "no transfer" : "chosen");
+      return;
+    }
     if (REXCVAR_GET(nx_ab_ceiling)) {
       // Run 32: even = normal (as configured), odd = every ownership transfer skipped.
       const bool ceiling = (phase % 2) == 1;
@@ -2470,11 +2537,21 @@ struct AbSchedule {
       ms[m] = mode_swaps[m] ? mode_s[m] * 1000.0 / double(mode_swaps[m]) : 0.0;
       wait[m] = mode_swaps[m] ? mode_fence_ms[m] / double(mode_swaps[m]) : 0.0;
     }
-    GAME_INFO("[ab] ceiling table%s: normal %" PRIu64 " windows %.2f swap/s %.1f ms per frame "
-              "(GPU wait %.1f ms); CEILING %" PRIu64 " windows %.2f swap/s %.1f ms per frame "
-              "(GPU wait %.1f ms); ceiling/normal swap rate x%.2f",
-              final_table ? " (final)" : " so far", mode_windows[0], rate[0], ms[0], wait[0],
-              mode_windows[1], rate[1], ms[1], wait[1], rate[0] > 0 ? rate[1] / rate[0] : 0.0);
+    (void)wait;
+    double gpu[2], cp[2], made[2];
+    for (int m = 0; m < 2; ++m) {
+      gpu[m] = mode_gpu_frames[m] ? mode_gpu_ms[m] / double(mode_gpu_frames[m]) : 0.0;
+      cp[m] = mode_swaps[m] ? mode_cp_ms[m] / double(mode_swaps[m]) : 0.0;
+      made[m] = mode_swaps[m] ? double(mode_made[m]) / double(mode_swaps[m]) : 0.0;
+    }
+    const bool native_ab = REXCVAR_GET(nx_ab_native_mask);
+    GAME_INFO("[ab] ceiling table%s: %s %" PRIu64 " windows %.2f swap/s %.1f ms per frame, GPU "
+              "%.1f ms, CPU %.1f ms, transfers %.1f; %s %" PRIu64 " windows %.2f swap/s %.1f ms "
+              "per frame, GPU %.1f ms, CPU %.1f ms, transfers %.1f; second/first swap rate x%.2f",
+              final_table ? " (final)" : " so far", native_ab ? "chosen mask" : "normal",
+              mode_windows[0], rate[0], ms[0], gpu[0], cp[0], made[0],
+              native_ab ? "MASK 0" : "CEILING", mode_windows[1], rate[1], ms[1], gpu[1], cp[1],
+              made[1], rate[0] > 0 ? rate[1] / rate[0] : 0.0);
   }
 
   // C5: the A/B toggles only the lock-free release path; the earlier sync
@@ -2517,7 +2594,7 @@ struct AbSchedule {
         rex::graphics::nx_gpu_counters().fence_wait_ns.load(std::memory_order_relaxed);
     const double d_fence_ms = double(fence_wait_ns - last_fence_wait_ns) / 1e6;
     last_fence_wait_ns = fence_wait_ns;
-    if (REXCVAR_GET(nx_ab_ceiling)) {
+    if (REXCVAR_GET(nx_ab_ceiling) || REXCVAR_GET(nx_ab_native_mask)) {
       // The window that just ended ran entirely in the mode of `phase` (toggles
       // happen only at the end of a window, below).
       const bool counted = started && !finished;
@@ -2528,14 +2605,38 @@ struct AbSchedule {
         mode_fence_ms[mode] += d_fence_ms;
         ++mode_windows[mode];
       }
-      GAME_INFO("[ab] ceiling window %.0f s: %s, %.2f swap/s, %.1f ms per frame, GPU wait of "
-                "the command processor %.1f ms per frame, %.0f draws per frame",
+      // Run 34 (D): GPU time per frame (timestamps), command processor CPU
+      // and native transfers per frame, for both kinds of A/B.
+      auto& gc = rex::graphics::nx_gpu_counters();
+      const uint64_t gpu_ns = gc.gpu_elapsed_ns.load(std::memory_order_relaxed);
+      const uint64_t gpu_frames = gc.gpu_frames.load(std::memory_order_relaxed);
+      const uint64_t made = gc.native_transfers_made.load(std::memory_order_relaxed);
+      const uint64_t not_made = gc.native_transfers_not_made.load(std::memory_order_relaxed);
+      const double per_swap = d_swaps ? 1.0 / double(d_swaps) : 0.0;
+      GAME_INFO("[ab] ceiling window %.0f s: %s, %.2f swap/s, %.1f ms per frame, GPU %.1f ms per "
+                "frame, command processor CPU %.1f ms per frame, transfers made %.1f / not made "
+                "%.1f per frame, %.0f draws per frame",
                 elapsed_s + window_s,
                 !counted ? (finished ? "after the schedule" : "before the schedule")
-                         : (mode ? "CEILING" : "normal"),
+                         : (mode ? (REXCVAR_GET(nx_ab_native_mask) ? "MASK 0" : "CEILING")
+                                 : (REXCVAR_GET(nx_ab_native_mask) ? "chosen mask" : "normal")),
                 window_s > 0 ? double(d_swaps) / window_s : 0.0,
                 d_swaps ? window_s * 1000.0 / double(d_swaps) : 0.0,
-                d_swaps ? d_fence_ms / double(d_swaps) : 0.0, per_frame);
+                gpu_frames > ab_last_gpu_frames
+                    ? double(gpu_ns - ab_last_gpu_ns) / 1e6 / double(gpu_frames - ab_last_gpu_frames)
+                    : 0.0,
+                double(g_cp_window_ns) / 1e6 * per_swap, double(made - ab_last_made) * per_swap,
+                double(not_made - ab_last_not_made) * per_swap, per_frame);
+      if (counted) {
+        mode_gpu_ms[mode] += double(gpu_ns - ab_last_gpu_ns) / 1e6;
+        mode_gpu_frames[mode] += gpu_frames - ab_last_gpu_frames;
+        mode_cp_ms[mode] += double(g_cp_window_ns) / 1e6;
+        mode_made[mode] += made - ab_last_made;
+      }
+      ab_last_gpu_ns = gpu_ns;
+      ab_last_gpu_frames = gpu_frames;
+      ab_last_made = made;
+      ab_last_not_made = not_made;
       if (counted) LogCeilingTable(finished);
     }
     GAME_INFO("[ab] window %.0f s: GPU work %s, lock-free release %s, %" PRIu64
@@ -3431,11 +3532,16 @@ void StartupSummary() {
   if (want_native) {
     // N3: native render targets in ReXGlue's Vulkan backend (N2 on the PC).
     REXCVAR_SET(native_render_targets, true);
+    // Run 34 (C): the read pointer written back after every primary ring
+    // packet (to verify on the console: on the PC the command processor is
+    // the bottleneck and nothing changes).
+    REXCVAR_SET(gpu_rptr_writeback_per_packet, true);
     REXCVAR_SET(native_observe_csv, std::string(kRootDir) + "/native-observe.csv");
     GAME_INFO("graphics: nx_gpu = native: native render targets (no EDRAM emulation, no "
               "ownership transfers, resolves straight from the render target); heartbeat line "
-              "'native:'; PM4 reader observing %d frames (cvar native_observe_frames)",
-              int(REXCVAR_GET(native_observe_frames)));
+              "'native:'; transfer mask %d (cvar native_transfer_mask); read pointer written back "
+              "per packet; PM4 reader observing %d frames (cvar native_observe_frames)",
+              int(REXCVAR_GET(native_transfer_mask)), int(REXCVAR_GET(native_observe_frames)));
   }
   const bool want_vulkan = REXCVAR_GET(nx_gpu) == "vulkan" || want_native;
 #if THEFT4_NX_VULKAN

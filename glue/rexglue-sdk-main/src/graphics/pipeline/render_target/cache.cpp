@@ -686,6 +686,27 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
   // consistency, even if they fail in the implementation (just ignore that and
   // draw with whatever contents currently are in the render target in this
   // case).
+  {
+    // N2: the draw causing the next transfers (native_render_targets.h).
+    native::NativeDrawContext draw_context;
+    draw_context.depth_control = normalized_depth_control.value;
+    draw_context.color_mask = normalized_color_mask;
+    for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
+      auto blend = regs.Get<reg::RB_BLENDCONTROL>(reg::RB_BLENDCONTROL::rt_register_indices[i]);
+      const bool replace = blend.color_srcblend == xenos::BlendFactor::kOne &&
+                           blend.color_destblend == xenos::BlendFactor::kZero &&
+                           blend.color_comb_fcn == xenos::BlendOp::kAdd &&
+                           blend.alpha_srcblend == xenos::BlendFactor::kOne &&
+                           blend.alpha_destblend == xenos::BlendFactor::kZero &&
+                           blend.alpha_comb_fcn == xenos::BlendOp::kAdd;
+      draw_context.blend_mask |= uint32_t(!replace) << i;
+    }
+    draw_context.stencil_ref_mask = regs[XE_GPU_REG_RB_STENCILREFMASK];
+    draw_context.primitive_type = uint32_t(regs.Get<reg::VGT_DRAW_INITIATOR>().prim_type);
+    draw_context.vertex_shader_hash = vertex_shader.ucode_data_hash();
+    draw_context.surface_info = regs[XE_GPU_REG_RB_SURFACE_INFO];
+    native::SetDrawContext(draw_context);
+  }
 
   for (uint32_t i = 0; i < edram_bases_sorted_count; ++i) {
     const std::pair<uint32_t, uint32_t>& rt_base_index = edram_bases_sorted[i];
@@ -697,6 +718,14 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
   if (interlock_barrier_only) {
     // No copying transfers or render target bindings - only needed the barrier.
     return true;
+  }
+  {
+    // N2: whether the draw reads the destinations of transfers not made.
+    uint32_t bound_keys[1 + xenos::kMaxColorRenderTargets] = {};
+    for (uint32_t i = 0; i < 1 + xenos::kMaxColorRenderTargets; ++i) {
+      if (depth_and_color_rts_used_bits & (uint32_t(1) << i)) bound_keys[i] = rt_keys[i].key;
+    }
+    native::OnDrawBound(bound_keys);
   }
 
   // If everything succeeded, update the used render targets.
@@ -1113,6 +1142,12 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
   }
 
   clear_rectangle_out = clear_rectangle;
+  {
+    // N2: transfers caused by a resolve clear.
+    native::NativeDrawContext clear_context;
+    clear_context.clear = true;
+    native::SetDrawContext(clear_context);
+  }
   depth_render_target_out = depth_render_target;
   depth_transfers_out.clear();
   if (depth_render_target) {
@@ -1338,48 +1373,28 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
         // be different than the destination.
         // C4: optionally drop the copy (the range is still claimed below).
         const int skip_mode = nx_ab::OwnershipTransferSkip().load(std::memory_order_relaxed);
-        // N2: with native render targets nothing is ever transferred.
-        const bool native_targets = native::NativeRenderTargets().load(std::memory_order_relaxed);
-        const bool skip_transfer =
+        uint32_t transfer_end_tiles = std::min(it->second.end_tiles, extent_end);
+        // A transfer only where a resolve clear does not cover the range.
+        const bool transfer_wanted =
             !transfer_source.IsEmpty() && transfer_source != dest &&
-            (native_targets || skip_mode >= 2 ||
-             (skip_mode == 1 && transfer_source.is_depth != dest.is_depth));
-        if (skip_transfer) {
-          nx_ab::OwnershipTransfersSkipped().fetch_add(1, std::memory_order_relaxed);
-          if (native_targets) {
-            const int kind = transfer_source.is_depth
-                                 ? (dest.is_depth ? native::kDepthToDepth : native::kDepthToColor)
-                                 : (dest.is_depth ? native::kColorToDepth : native::kColorToColor);
-            native::NativeCounters().transfers_skipped[kind].fetch_add(
-                1, std::memory_order_relaxed);
-            nx_gpu_counters().native_transfers_not_made.fetch_add(1, std::memory_order_relaxed);
-            // Where the game reads one render target's contents through
-            // another: each distinct (source, destination) once, first 64.
-            static std::vector<std::pair<uint32_t, uint32_t>> native_logged_pairs;
-            const std::pair<uint32_t, uint32_t> pair(transfer_source.key, dest.key);
-            if (native_logged_pairs.size() < 64 &&
-                std::find(native_logged_pairs.begin(), native_logged_pairs.end(), pair) ==
-                    native_logged_pairs.end()) {
-              native_logged_pairs.push_back(pair);
-              REXGPU_INFO(
-                  "[NativeRT] transfer not made #{}: {} format {} base {} pitch {} msaa {} -> {} "
-                  "format {} base {} pitch {} msaa {} (tiles {}..{})",
-                  native_logged_pairs.size(), transfer_source.is_depth ? "depth" : "colour",
-                  uint32_t(transfer_source.resource_format), uint32_t(transfer_source.base_tiles),
-                  uint32_t(transfer_source.pitch_tiles_at_32bpp),
-                  uint32_t(transfer_source.msaa_samples), dest.is_depth ? "depth" : "colour",
-                  uint32_t(dest.resource_format), uint32_t(dest.base_tiles),
-                  uint32_t(dest.pitch_tiles_at_32bpp), uint32_t(dest.msaa_samples), it->first,
-                  std::min(it->second.end_tiles, extent_end));
-            }
+            (!resolve_clear_cutout ||
+             Transfer::GetRangeRectangles(it->first, transfer_end_tiles, dest.base_tiles,
+                                          dest_pitch_tiles, dest.msaa_samples, dest_is_64bpp,
+                                          nullptr, resolve_clear_cutout));
+        // N2: native render targets make only the kinds of native_transfer_mask
+        // (native_render_targets.h); the A/B skip of C4 as before.
+        bool skip_transfer = false;
+        if (transfer_wanted) {
+          skip_transfer =
+              native::DecideTransfer(transfer_source.key, transfer_source.is_depth, dest.key,
+                                     dest.is_depth, it->first, transfer_end_tiles) ||
+              skip_mode >= 2 || (skip_mode == 1 && transfer_source.is_depth != dest.is_depth);
+          if (skip_transfer) {
+            nx_ab::OwnershipTransfersSkipped().fetch_add(1, std::memory_order_relaxed);
           }
         }
-        if (!skip_transfer && !transfer_source.IsEmpty() && transfer_source != dest) {
-          uint32_t transfer_end_tiles = std::min(it->second.end_tiles, extent_end);
-          if (!resolve_clear_cutout ||
-              Transfer::GetRangeRectangles(it->first, transfer_end_tiles, dest.base_tiles,
-                                           dest_pitch_tiles, dest.msaa_samples, dest_is_64bpp,
-                                           nullptr, resolve_clear_cutout)) {
+        if (transfer_wanted && !skip_transfer) {
+          {
             RenderTargetKey transfer_host_depth_source =
                 host_depth_encoding_different
                     ? it->second.GetHostDepthRenderTarget(dest.GetDepthFormat())

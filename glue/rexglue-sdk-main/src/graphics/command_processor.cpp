@@ -58,6 +58,12 @@ REXCVAR_DEFINE_BOOL(clear_memory_page_state, true, "GPU",
                     "Disable for minor CPU overhead reduction, but may break memory coherency.")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+// Run 34 (C): the read pointer the game sees (VdEnableRingBufferRPtrWriteBack)
+// was written only after the whole segment [read, write) had been executed,
+// i.e. after the frame; the game's Direct3D waits on it to reuse ring space.
+REXCVAR_DEFINE_BOOL(gpu_rptr_writeback_per_packet, false, "GPU",
+                    "Write the ring read pointer back to the game after every primary ring "
+                    "packet, not only at the end of the segment (to verify)");
 REXCVAR_DEFINE_BOOL(occlusion_query_enable, true, "GPU", "Enable host occlusion query handling")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
@@ -342,6 +348,7 @@ void CommandProcessor::WorkerThreadMain() {
       // We've run out of commands to execute.
       // We spin here waiting for new ones, as the overhead of waiting on our
       // event is too high.
+      const uint64_t idle_start_ns = NxGpuNowNs();
       PrepareForWait();
       uint32_t loop_count = 0;
       do {
@@ -358,6 +365,7 @@ void CommandProcessor::WorkerThreadMain() {
       } while (worker_running_ && pending_fns_.empty() &&
                (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index));
       ReturnFromWait();
+      NxGpuAddTime(nx_gpu_counters().cp_idle_ns, idle_start_ns);
       if (!worker_running_ || !pending_fns_.empty()) {
         continue;
       }
@@ -911,12 +919,22 @@ uint32_t CommandProcessor::ExecutePrimaryBuffer(uint32_t read_index, uint32_t wr
   memory::RingBuffer reader(memory_->TranslatePhysical(primary_buffer_ptr_), primary_buffer_size_);
   reader.set_read_offset(read_index * sizeof(uint32_t));
   reader.set_write_offset(write_index * sizeof(uint32_t));
+  const bool rptr_per_packet =
+      REXCVAR_GET(gpu_rptr_writeback_per_packet) && read_ptr_writeback_ptr_ != 0;
   do {
     if (!ExecutePacket(&reader)) {
       // This probably should be fatal - but we're going to continue anyways.
       REXGPU_ERROR("**** PRIMARY RINGBUFFER: Failed to execute packet.");
       assert_always();
       break;
+    }
+    if (rptr_per_packet) {
+      // Run 34 (C): the game may reuse the ring words read so far now.
+      memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(read_ptr_writeback_ptr_),
+                                       uint32_t(reader.read_offset() / sizeof(uint32_t)));
+#if REX_PLATFORM_NX
+      nx_guest_gpu_progress::GlobalGate().Signal();
+#endif
     }
   } while (reader.read_count());
 
@@ -1397,6 +1415,8 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
   bool is_memory = (wait_info & 0x10) != 0;
 
   bool matched = false;
+  const uint64_t wait_start_ns = NxGpuNowNs();
+  bool waited = false;
   do {
     uint32_t value = 0;
     if (is_memory) {
@@ -1438,6 +1458,7 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
         break;
     }
     if (!matched) {
+      waited = true;
       // Wait.
       if (wait >= 0x100) {
         PrepareForWait();
@@ -1459,6 +1480,10 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
       }
     }
   } while (!matched);
+  if (waited) {
+    NxGpuAddTime(nx_gpu_counters().cp_wait_reg_ns, wait_start_ns);
+    nx_gpu_counters().cp_wait_reg_packets.fetch_add(1, std::memory_order_relaxed);
+  }
 
   return true;
 }

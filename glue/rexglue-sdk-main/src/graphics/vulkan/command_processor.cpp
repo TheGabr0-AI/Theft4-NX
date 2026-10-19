@@ -2756,6 +2756,9 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontb
   uint32_t display_width = std::max(uint32_t(1), uint32_t(video_mode.display_width));
   uint32_t display_height = std::max(uint32_t(1), uint32_t(video_mode.display_height));
 
+  // Run 34 (C): the time the command processor spends here, where it may
+  // wait for the presenter to give back a guest output image.
+  const uint64_t nx_refresh_start_ns = rex::graphics::NxGpuNowNs();
   bool guest_output_refreshed = presenter->RefreshGuestOutput(
       guest_output_width, guest_output_height, display_width, display_height,
       [this, guest_output_width, guest_output_height, frontbuffer_format, swap_texture_view,
@@ -3291,6 +3294,8 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontb
         EndSubmission(true);
         return true;
       });
+  rex::graphics::NxGpuAddTime(rex::graphics::nx_gpu_counters().cp_refresh_ns,
+                              nx_refresh_start_ns);
 
   uint8_t frame_flow_outcome =
       guest_output_refreshed ? kFrameFlowOutcomePublished : kFrameFlowOutcomeRefreshFailed;

@@ -39,10 +39,11 @@ def main():
     out = sys.argv[2] if len(sys.argv) > 2 else src
     os.makedirs(out, exist_ok=True)
     pairs = {}
-    for p in glob.glob(os.path.join(src, 'n2-pair*-frame*-*.ppm')):
-        m = re.search(r'n2-pair(\d+)-frame(\d+)-(emulated|native)\.ppm$', p)
+    for p in glob.glob(os.path.join(src, 'n2-*pair*-frame*-*.ppm')):
+        m = re.search(r'(n2-[\w-]*?pair)(\d+)-frame(\d+)-(emulated|native|test)\.ppm$', p)
         if m:
-            pairs.setdefault(int(m.group(1)), {})[m.group(3)] = (int(m.group(2)), p)
+            mode = 'native' if m.group(4) == 'test' else m.group(4)
+            pairs.setdefault((m.group(1), int(m.group(2))), {})[mode] = (int(m.group(3)), p)
     for pair in sorted(pairs):
         if 'emulated' not in pairs[pair] or 'native' not in pairs[pair]:
             continue
@@ -72,10 +73,10 @@ def main():
                 row[(hw + x) * 3:(hw + x) * 3 + 3] = n
                 row[(2 * hw + x) * 3:(2 * hw + x) * 3 + 3] = bytes(d)
             rows.append(row)
-        name = os.path.join(out, f'n2-pair{pair:02d}-frames{fe:05d}-{fn:05d}.png')
+        name = os.path.join(out, f'{pair[0]}{pair[1]:02d}-frames{fe:05d}-{fn:05d}.png')
         write_png(name, hw * 3, hh, rows)
         mean_e = sum(de[::3 * 7]) / max(1, len(de[::3 * 7]))
-        print(f'pair {pair:2d}: frames {fe} (emulated) / {fn} (native): {100.0 * differ / total:5.1f}% '
+        print(f'{pair[0]}{pair[1]:2d}: frames {fe} (emulated) / {fn} (native): {100.0 * differ / total:5.1f}% '
               f'of pixels differ by more than 24; emulated mean red {mean_e:.0f} -> {name}')
 
 

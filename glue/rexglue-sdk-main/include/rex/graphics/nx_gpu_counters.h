@@ -74,8 +74,14 @@ struct NxGpuCounters {
   // N3: GPU time of the completed submissions (timestamps, ns) and the frames
   // they close; the native render target counters (src/graphics/native).
   std::atomic<uint64_t> gpu_elapsed_ns{0}, gpu_frames{0};
-  std::atomic<uint64_t> native_frames{0}, native_transfers_not_made{0};
+  std::atomic<uint64_t> native_frames{0}, native_transfers_not_made{0}, native_transfers_made{0};
   std::atomic<uint64_t> native_resolves_direct{0}, native_resolves_edram{0};
+  // Run 34 (C): the command processor's thread waiting with the ring empty
+  // (for the game), and inside WAIT_REG_MEM (for a value of memory or a
+  // register), in ns.
+  std::atomic<uint64_t> cp_idle_ns{0}, cp_wait_reg_ns{0}, cp_wait_reg_packets{0};
+  // and inside the presenter's RefreshGuestOutput at the swap.
+  std::atomic<uint64_t> cp_refresh_ns{0};
 };
 
 // Kinds of vkAllocateMemory (from VkMemoryDedicatedAllocateInfo and the

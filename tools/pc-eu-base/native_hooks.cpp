@@ -8,6 +8,7 @@
 // two functions of the same generated file is direct and not counted.
 
 #include <atomic>
+#include <chrono>
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
@@ -36,6 +37,9 @@ enum Hook : int {
 };
 
 std::atomic<uint64_t> g_calls[kHookCount];
+// Run 34 (C): the game's poll of a value the GPU side writes (829CFE80).
+std::atomic<uint64_t> g_wait_calls{0}, g_wait_ns{0};
+uint64_t g_last_wait_calls = 0, g_last_wait_ns = 0;
 std::mutex g_mutex;
 std::FILE* g_csv = nullptr;
 uint64_t g_frames = 0, g_last[kHookCount] = {};
@@ -54,7 +58,7 @@ void EndFrame() {
     }
     std::fputs("frame,hook_draw_indexed,hook_draw_indexed2,hook_draw_not_indexed,hook_draws,"
                "hook_resolves,hook_set_render_target,hook_set_depth_stencil,"
-               "hook_pixel_shaders,hook_vertex_shaders\n",
+               "hook_pixel_shaders,hook_vertex_shaders,hook_gpu_poll_calls,hook_gpu_poll_ms\n",
                g_csv);
   }
   uint64_t d[kHookCount];
@@ -63,12 +67,17 @@ void EndFrame() {
     d[i] = now - g_last[i];
     g_last[i] = now;
   }
+  const uint64_t wait_calls = g_wait_calls.load(std::memory_order_relaxed);
+  const uint64_t wait_ns = g_wait_ns.load(std::memory_order_relaxed);
   std::fprintf(g_csv,
                "%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64
-               ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
+               ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%.3f\n",
                g_frames, d[kDrawIndexed], d[kDrawIndexed2], d[kDrawNotIndexed],
                d[kDrawIndexed] + d[kDrawIndexed2] + d[kDrawNotIndexed], d[kResolve],
-               d[kRenderTarget], d[kDepthStencil], d[kPixelShader], d[kVertexShader]);
+               d[kRenderTarget], d[kDepthStencil], d[kPixelShader], d[kVertexShader],
+               wait_calls - g_last_wait_calls, double(wait_ns - g_last_wait_ns) / 1e6);
+  g_last_wait_calls = wait_calls;
+  g_last_wait_ns = wait_ns;
   if (++g_frames >= uint64_t(wanted)) {
     std::fclose(g_csv);
     g_csv = nullptr;
@@ -101,3 +110,27 @@ THEFT4_NATIVE_HOOK(829CAAB0, kRenderTarget, (void)0)
 THEFT4_NATIVE_HOOK(829CAE18, kDepthStencil, (void)0)
 THEFT4_NATIVE_HOOK(829CB7C8, kResolve, (void)0)
 THEFT4_NATIVE_HOOK(829D5338, kSwap, EndFrame())
+
+#define THEFT4_TIMED_HOOK(addr)                                                        \
+  extern "C" void __real___imp__sub_##addr(PPCContext& ctx, uint8_t* base);           \
+  extern "C" void __real_sub_##addr(PPCContext& ctx, uint8_t* base);                  \
+  extern "C" void __wrap___imp__sub_##addr(PPCContext& ctx, uint8_t* base) {          \
+    const auto start = std::chrono::steady_clock::now();                              \
+    __real___imp__sub_##addr(ctx, base);                                              \
+    g_wait_ns.fetch_add(uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>( \
+                                     std::chrono::steady_clock::now() - start)         \
+                                     .count()),                                        \
+                        std::memory_order_relaxed);                                    \
+    g_wait_calls.fetch_add(1, std::memory_order_relaxed);                              \
+  }                                                                                    \
+  extern "C" void __wrap_sub_##addr(PPCContext& ctx, uint8_t* base) {                 \
+    const auto start = std::chrono::steady_clock::now();                              \
+    __real_sub_##addr(ctx, base);                                                     \
+    g_wait_ns.fetch_add(uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>( \
+                                     std::chrono::steady_clock::now() - start)         \
+                                     .count()),                                        \
+                        std::memory_order_relaxed);                                    \
+    g_wait_calls.fetch_add(1, std::memory_order_relaxed);                              \
+  }
+
+THEFT4_TIMED_HOOK(829CFE80)

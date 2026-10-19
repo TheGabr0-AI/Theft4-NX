@@ -166,6 +166,7 @@ if(THEFT4_SWITCH_GAME_VULKAN)
     # waits and queries, kickoffs, nvmaps), as sa2-nx's switch_perf does.
     # Run 3: and its GPU mappings, to turn the GPU's L2 on (cvar nx_gpu_l2).
     target_link_options(switch-game PRIVATE
+        "-Wl,--wrap=sub_829CFE80,--wrap=__imp__sub_829CFE80"
         "-Wl,--wrap=nvFenceWait,--wrap=nvGpuChannelKickoff,--wrap=nvMapCreate,--wrap=nvMapClose,--wrap=nvioctlNvhostAsGpu_MapBufferEx,--wrap=nvGpuChannelGetErrorNotification")
 endif()
 # Every way out of the process goes through main.cpp's __wrap_* first, which
