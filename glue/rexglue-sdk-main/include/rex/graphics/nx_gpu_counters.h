@@ -71,6 +71,11 @@ struct NxGpuCounters {
   // without the blocking fence waits, shader translations and pipeline
   // creations of its thread that fall inside a phase (counted above).
   std::atomic<uint64_t> cp_phase_ns[kNxCpPhaseCount]{};
+  // N3: GPU time of the completed submissions (timestamps, ns) and the frames
+  // they close; the native render target counters (src/graphics/native).
+  std::atomic<uint64_t> gpu_elapsed_ns{0}, gpu_frames{0};
+  std::atomic<uint64_t> native_frames{0}, native_transfers_not_made{0};
+  std::atomic<uint64_t> native_resolves_direct{0}, native_resolves_edram{0};
 };
 
 // Kinds of vkAllocateMemory (from VkMemoryDedicatedAllocateInfo and the

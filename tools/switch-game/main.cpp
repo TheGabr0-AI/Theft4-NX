@@ -144,8 +144,9 @@ REXCVAR_DEFINE_STRING(nx_gpu, "vulkan", "Switch",
                       "GPU: null = the null GPU (nx_null_gpu = false: none); vulkan = ReXGlue's "
                       "Vulkan backend on NVK, presenting on the default NWindow with the console "
                       "closed (only in a build with THEFT4_SWITCH_GAME_VULKAN; 06 section 24); "
-                      "native = the native renderer (src/graphics/native): until it draws (N3), "
-                      "ReXGlue's Vulkan backend draws and the native PM4 reader observes");
+                      "native = ReXGlue's Vulkan backend with native render targets (no EDRAM "
+                      "emulation, no ownership transfers, resolves straight from the render "
+                      "target: src/graphics/native, cvar native_render_targets)");
 REXCVAR_DEFINE_BOOL(nx_log_durable, false, "Switch",
                     "true: every log line is written to game.log at once (open, write, fsync, "
                     "close on the thread that logs: slow on the SD, for crash hunting); false: a "
@@ -248,6 +249,7 @@ REXCVAR_DEFINE_BOOL(nx_frame_structure_capture, false, "Switch",
 REXCVAR_DECLARE(bool, native_renderer_oracle_capture);
 REXCVAR_DECLARE(int32_t, native_observe_frames);
 REXCVAR_DECLARE(std::string, native_observe_csv);
+REXCVAR_DECLARE(bool, native_render_targets);
 // C2: synchronisation fast paths (rex/thread/nx_sync_tuning.h). All false:
 // the synchronisation of run 26.
 REXCVAR_DEFINE_BOOL(nx_sync_multi_wait, true, "Switch",
@@ -2228,6 +2230,36 @@ void LogVulkan(double window_s) {
       FlushLog();
     }
   }
+  // N3: one line with what the native render targets give per frame.
+  if (REXCVAR_GET(native_render_targets)) {
+    static uint64_t last_gpu_ns = 0, last_gpu_frames = 0, last_native_frames = 0;
+    static uint64_t last_not_made = 0, last_direct = 0, last_edram = 0;
+    const uint64_t gpu_ns = c.gpu_elapsed_ns.load(std::memory_order_relaxed);
+    const uint64_t gpu_frames = c.gpu_frames.load(std::memory_order_relaxed);
+    const uint64_t native_frames = c.native_frames.load(std::memory_order_relaxed);
+    const uint64_t not_made = c.native_transfers_not_made.load(std::memory_order_relaxed);
+    const uint64_t direct = c.native_resolves_direct.load(std::memory_order_relaxed);
+    const uint64_t edram = c.native_resolves_edram.load(std::memory_order_relaxed);
+    const uint64_t frames = presents - g_vk_beat.presents;
+    const uint64_t d_gpu_frames = gpu_frames - last_gpu_frames;
+    const double per = frames ? 1.0 / double(frames) : 0.0;
+    GAME_INFO("native: %.2f FPS, %.1f ms per frame; GPU %.1f ms per frame (timestamps, %" PRIu64
+              " frames); command processor CPU %.1f ms per frame; %" PRIu64
+              " native frames in the window; per frame: %.1f transfers not made, resolves %.1f "
+              "straight from the render target, %.1f through the EDRAM buffer",
+              window_s > 0 ? double(frames) / window_s : 0.0,
+              frames ? window_s * 1000.0 / double(frames) : 0.0,
+              d_gpu_frames ? double(gpu_ns - last_gpu_ns) / 1e6 / double(d_gpu_frames) : 0.0,
+              d_gpu_frames, double(g_cp_window_ns) / 1e6 * per,
+              native_frames - last_native_frames, double(not_made - last_not_made) * per,
+              double(direct - last_direct) * per, double(edram - last_edram) * per);
+    last_gpu_ns = gpu_ns;
+    last_gpu_frames = gpu_frames;
+    last_native_frames = native_frames;
+    last_not_made = not_made;
+    last_direct = direct;
+    last_edram = edram;
+  }
   g_vk_beat.submit_failures = submit_failures;
   g_vk_beat.present_failures = present_failures;
   g_vk_beat.presents = presents;
@@ -3397,15 +3429,13 @@ void StartupSummary() {
   // the console gives up first.
   const bool want_native = REXCVAR_GET(nx_gpu) == "native";
   if (want_native) {
-    // N1 on the console: the native reader observes, the emulated backend draws.
-    if (REXCVAR_GET(native_observe_frames) <= 0) {
-      REXCVAR_SET(native_observe_frames, 1000);
-    }
+    // N3: native render targets in ReXGlue's Vulkan backend (N2 on the PC).
+    REXCVAR_SET(native_render_targets, true);
     REXCVAR_SET(native_observe_csv, std::string(kRootDir) + "/native-observe.csv");
-    GAME_INFO("graphics: nx_gpu = native: the native renderer does not draw yet (N3); its PM4 "
-              "reader observes %d frames (cvar native_observe_frames, CSV %s) beside "
-              "ReXGlue's Vulkan backend",
-              int(REXCVAR_GET(native_observe_frames)), REXCVAR_GET(native_observe_csv).c_str());
+    GAME_INFO("graphics: nx_gpu = native: native render targets (no EDRAM emulation, no "
+              "ownership transfers, resolves straight from the render target); heartbeat line "
+              "'native:'; PM4 reader observing %d frames (cvar native_observe_frames)",
+              int(REXCVAR_GET(native_observe_frames)));
   }
   const bool want_vulkan = REXCVAR_GET(nx_gpu) == "vulkan" || want_native;
 #if THEFT4_NX_VULKAN

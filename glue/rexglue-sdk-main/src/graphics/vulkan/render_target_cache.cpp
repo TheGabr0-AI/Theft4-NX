@@ -1,5 +1,8 @@
 #include <rex/graphics/nx_frame_budget.h>
 #include <rex/graphics/nx_ab.h>
+#include <rex/graphics/nx_gpu_counters.h>
+
+#include "../native/native_render_targets.h"
 /**
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
@@ -1666,7 +1669,9 @@ bool VulkanRenderTargetCache::Resolve(const memory::Memory& memory,
         uint32_t dump_pitch;
         resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows,
                                           dump_pitch);
-        if (REXCVAR_GET(direct_host_resolve)) {
+        const bool native_targets =
+            native::NativeRenderTargets().load(std::memory_order_relaxed);
+        if (REXCVAR_GET(direct_host_resolve) || native_targets) {
           direct_resolved = TryDirectHostResolveCopy(
               resolve_info, copy_shader_constants, copy_shader, dump_base,
               dump_row_length_used, dump_rows, dump_pitch, shared_memory,
@@ -1676,6 +1681,15 @@ bool VulkanRenderTargetCache::Resolve(const memory::Memory& memory,
           } else {
             ++direct_resolve_fallback_count_;
           }
+        }
+        if (native_targets) {
+          // N2: straight from the render target, or (not possible) through the EDRAM buffer.
+          (direct_resolved ? native::NativeCounters().resolves_direct
+                           : native::NativeCounters().resolves_through_edram)
+              .fetch_add(1, std::memory_order_relaxed);
+          (direct_resolved ? nx_gpu_counters().native_resolves_direct
+                           : nx_gpu_counters().native_resolves_edram)
+              .fetch_add(1, std::memory_order_relaxed);
         }
         if (!direct_resolved) {
           // Dump the current contents of the render targets owning the affected
@@ -7923,7 +7937,9 @@ bool VulkanRenderTargetCache::TryDirectHostResolveCopy(
     const char* value = std::getenv("THEFT4_DIRECT_RESOLVE");
     return value && value[0] == '1' && value[1] == '\0';
   }();
-  if (!direct_resolve_enabled) {
+  // N2: native render targets always resolve straight from the render target.
+  if (!direct_resolve_enabled &&
+      !native::NativeRenderTargets().load(std::memory_order_relaxed)) {
     return false;
   }
   ++direct_resolve_attempt_count_;

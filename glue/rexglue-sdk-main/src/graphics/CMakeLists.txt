@@ -55,6 +55,9 @@ set(REXGPU_XENOS_VULKAN_SOURCES
     vulkan/shader.cpp
     vulkan/shared_memory.cpp
     vulkan/texture_cache.cpp
+
+    # Native renderer N2: render targets without EDRAM emulation
+    native/native_render_targets.cpp
 )
 
 # D3D12 backend

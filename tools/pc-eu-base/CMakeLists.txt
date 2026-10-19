@@ -51,6 +51,21 @@ add_compile_definitions(REX_TRACE_EXPORTS=1)
 
 add_subdirectory("${THEFT4_SDK_DIR}" rexglue-sdk)
 
+# Native renderer N2: the pinned XeniOS direct resolve shaders, as in
+# switch-game (tools/switch-game/CMakeLists.txt): native render targets resolve
+# straight from the render target with them.
+set(THEFT4_DIRECT_RESOLVE_INCLUDE
+    "${THEFT4_ROOT}/tools/switch-game/thirdparty/xenios-direct-resolve/include")
+if(EXISTS "${THEFT4_DIRECT_RESOLVE_INCLUDE}/xenia/gpu/shaders/bytecode/vulkan_spirv/resolve_host_color_32bpp_1xmsaa_cs.h")
+  set_source_files_properties(
+      "${THEFT4_SDK_DIR}/src/graphics/vulkan/render_target_cache.cpp"
+      TARGET_DIRECTORY rexgpu-xenos PROPERTIES
+      COMPILE_DEFINITIONS THEFT4_XENIOS_DIRECT_RESOLVE_SHADERS=1
+      INCLUDE_DIRECTORIES "${THEFT4_DIRECT_RESOLVE_INCLUDE}")
+else()
+  message(WARNING "No direct resolve shaders: native render targets will resolve through the EDRAM buffer")
+endif()
+
 include("${THEFT4_GENERATED_DIR}/sources.cmake")
 
 add_executable(theft4-eu-base WIN32

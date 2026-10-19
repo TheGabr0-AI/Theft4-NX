@@ -33,6 +33,7 @@
 #include <rex/cvar.h>
 #include <rex/graphics/nx_gpu_counters.h>
 
+#include "../native/native_render_targets.h"
 #include "../native/pm4_observer.h"
 #include <rex/dbg.h>
 #include <rex/logging.h>
@@ -3427,6 +3428,9 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontb
   // End the frame even if did not present for any reason (the image refresher
   // was not called), to prevent leaking per-frame resources.
   EndSubmission(true);
+
+  // N2: counters, side-by-side captures and the next frame's render target mode.
+  native::OnNativeSwap(presenter);
 }
 
 bool VulkanCommandProcessor::PushBufferMemoryBarrier(
@@ -5891,6 +5895,10 @@ void VulkanCommandProcessor::CollectSubmissionTimestamps(const CommandBuffer& co
         std::max(submission_timestamp_max_elapsed_ns_, elapsed_ns);
     ++submission_timestamp_completed_count_;
     submission_timestamp_completed_frames_ += command_buffer.timestamp_closes_frame;
+    rex::graphics::nx_gpu_counters().gpu_elapsed_ns.fetch_add(uint64_t(elapsed_ns),
+                                                              std::memory_order_relaxed);
+    rex::graphics::nx_gpu_counters().gpu_frames.fetch_add(command_buffer.timestamp_closes_frame,
+                                                          std::memory_order_relaxed);
   } else {
     ++submission_timestamp_unavailable_count_;
   }

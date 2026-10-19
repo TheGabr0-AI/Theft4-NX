@@ -25,6 +25,9 @@
 #include <rex/graphics/registers.h>
 #include <rex/graphics/util/draw.h>
 #include <rex/graphics/nx_ab.h>
+#include <rex/graphics/nx_gpu_counters.h>
+
+#include "../../native/native_render_targets.h"
 #include <rex/graphics/xenos.h>
 #include <rex/logging.h>
 #include <rex/math.h>
@@ -1335,11 +1338,41 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
         // be different than the destination.
         // C4: optionally drop the copy (the range is still claimed below).
         const int skip_mode = nx_ab::OwnershipTransferSkip().load(std::memory_order_relaxed);
+        // N2: with native render targets nothing is ever transferred.
+        const bool native_targets = native::NativeRenderTargets().load(std::memory_order_relaxed);
         const bool skip_transfer =
             !transfer_source.IsEmpty() && transfer_source != dest &&
-            (skip_mode >= 2 || (skip_mode == 1 && transfer_source.is_depth != dest.is_depth));
+            (native_targets || skip_mode >= 2 ||
+             (skip_mode == 1 && transfer_source.is_depth != dest.is_depth));
         if (skip_transfer) {
           nx_ab::OwnershipTransfersSkipped().fetch_add(1, std::memory_order_relaxed);
+          if (native_targets) {
+            const int kind = transfer_source.is_depth
+                                 ? (dest.is_depth ? native::kDepthToDepth : native::kDepthToColor)
+                                 : (dest.is_depth ? native::kColorToDepth : native::kColorToColor);
+            native::NativeCounters().transfers_skipped[kind].fetch_add(
+                1, std::memory_order_relaxed);
+            nx_gpu_counters().native_transfers_not_made.fetch_add(1, std::memory_order_relaxed);
+            // Where the game reads one render target's contents through
+            // another: each distinct (source, destination) once, first 64.
+            static std::vector<std::pair<uint32_t, uint32_t>> native_logged_pairs;
+            const std::pair<uint32_t, uint32_t> pair(transfer_source.key, dest.key);
+            if (native_logged_pairs.size() < 64 &&
+                std::find(native_logged_pairs.begin(), native_logged_pairs.end(), pair) ==
+                    native_logged_pairs.end()) {
+              native_logged_pairs.push_back(pair);
+              REXGPU_INFO(
+                  "[NativeRT] transfer not made #{}: {} format {} base {} pitch {} msaa {} -> {} "
+                  "format {} base {} pitch {} msaa {} (tiles {}..{})",
+                  native_logged_pairs.size(), transfer_source.is_depth ? "depth" : "colour",
+                  uint32_t(transfer_source.resource_format), uint32_t(transfer_source.base_tiles),
+                  uint32_t(transfer_source.pitch_tiles_at_32bpp),
+                  uint32_t(transfer_source.msaa_samples), dest.is_depth ? "depth" : "colour",
+                  uint32_t(dest.resource_format), uint32_t(dest.base_tiles),
+                  uint32_t(dest.pitch_tiles_at_32bpp), uint32_t(dest.msaa_samples), it->first,
+                  std::min(it->second.end_tiles, extent_end));
+            }
+          }
         }
         if (!skip_transfer && !transfer_source.IsEmpty() && transfer_source != dest) {
           uint32_t transfer_end_tiles = std::min(it->second.end_tiles, extent_end);
