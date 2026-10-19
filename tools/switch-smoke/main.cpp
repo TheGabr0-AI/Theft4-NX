@@ -108,7 +108,7 @@ REXCVAR_DEFINE_STRING(nx_exit_mode, "A", "Switch",
 REXCVAR_DEFINE_BOOL(nx_smoke_vulkan, true, "Switch",
                     "Step 7: the Vulkan probe (NVK: features, surface, 5 s of frames, pipeline "
                     "and submit timings), after the memory probes");
-REXCVAR_DEFINE_BOOL(nx_smoke_gpu_bench, true, "Switch",
+REXCVAR_DEFINE_BOOL(nx_smoke_gpu_bench, false, "Switch",
                     "Step 8: the GPU benchmark (gpu_bench.cpp): draws, submit and fence, upload, "
                     "fill rate and render target changes through NVK and deko3d, after step 7");
 REXCVAR_DEFINE_BOOL(nx_smoke_sd_bench, true, "Switch",

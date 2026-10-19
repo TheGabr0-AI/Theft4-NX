@@ -263,6 +263,14 @@ REXCVAR_DEFINE_BOOL(nx_sync_irq_lock_free, true, "Switch",
 REXCVAR_DEFINE_BOOL(nx_ab_transfer_modes, false, "Switch",
                     "A/B: GPU work on; phases cycle the ownership transfer skip 0, 1, 2")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Run 32: the EDRAM ceiling in one boot. With nx_ab_skip_cycles > 0, the
+// phases alternate "normal" (as configured) and "ceiling" (every ownership
+// transfer skipped, the image may be wrong); the [ab] lines give swap/s and
+// ms per frame per window and a running table normal against ceiling.
+REXCVAR_DEFINE_BOOL(nx_ab_ceiling, false, "Switch",
+                    "A/B: GPU work on; phases alternate normal and every ownership transfer "
+                    "skipped (EDRAM ceiling), normal first")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(nx_ownership_transfer_skip, 0, "Switch",
                      "EDRAM ownership transfers skipped: 0 none, 1 depth<->color, 2 all")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -2339,6 +2347,9 @@ struct AbSchedule {
   bool started = false, finished = false, frame_structure_armed = false;
   int phase = 0;  // even = GPU work off, odd = on
   int windows_in_phase = 0;
+  // Run 32 (nx_ab_ceiling): totals per mode, 0 = normal, 1 = ceiling.
+  uint64_t mode_swaps[2] = {}, mode_windows[2] = {}, last_fence_wait_ns = 0;
+  double mode_s[2] = {}, mode_fence_ms[2] = {};
   double elapsed_s = 0;
   std::FILE* csv = nullptr;
   bool csv_failed = false;
@@ -2377,6 +2388,17 @@ struct AbSchedule {
 
   static void ApplyPhase(int phase) {
     namespace ab = rex::graphics::nx_ab;
+    if (REXCVAR_GET(nx_ab_ceiling)) {
+      // Run 32: even = normal (as configured), odd = every ownership transfer skipped.
+      const bool ceiling = (phase % 2) == 1;
+      ab::SkipGpuWork().store(false, std::memory_order_relaxed);
+      ab::OwnershipTransferSkip().store(ceiling ? 2 : int(REXCVAR_GET(nx_ownership_transfer_skip)),
+                                        std::memory_order_relaxed);
+      GAME_INFO("[ab] phase %d: %s (ownership transfer skip %d)", phase,
+                ceiling ? "CEILING" : "normal",
+                ab::OwnershipTransferSkip().load(std::memory_order_relaxed));
+      return;
+    }
     if (REXCVAR_GET(nx_ab_stencil_modes)) {
       // C6: GPU work on; the phases cycle the stencil transfer mode 0, 1, 2.
       const int mode = phase % 3;
@@ -2402,6 +2424,21 @@ struct AbSchedule {
     SetSyncFastPaths(sync_on);
     GAME_INFO("[ab] phase %d: GPU work %s, lock-free release %s", phase, gpu_off ? "OFF" : "on",
               sync_on ? "on" : "OFF");
+  }
+
+  // Run 32: normal against ceiling, from the windows so far (or all of them).
+  void LogCeilingTable(bool final_table) const {
+    double rate[2], ms[2], wait[2];
+    for (int m = 0; m < 2; ++m) {
+      rate[m] = mode_s[m] > 0 ? double(mode_swaps[m]) / mode_s[m] : 0.0;
+      ms[m] = mode_swaps[m] ? mode_s[m] * 1000.0 / double(mode_swaps[m]) : 0.0;
+      wait[m] = mode_swaps[m] ? mode_fence_ms[m] / double(mode_swaps[m]) : 0.0;
+    }
+    GAME_INFO("[ab] ceiling table%s: normal %" PRIu64 " windows %.2f swap/s %.1f ms per frame "
+              "(GPU wait %.1f ms); CEILING %" PRIu64 " windows %.2f swap/s %.1f ms per frame "
+              "(GPU wait %.1f ms); ceiling/normal swap rate x%.2f",
+              final_table ? " (final)" : " so far", mode_windows[0], rate[0], ms[0], wait[0],
+              mode_windows[1], rate[1], ms[1], wait[1], rate[0] > 0 ? rate[1] / rate[0] : 0.0);
   }
 
   // C5: the A/B toggles only the lock-free release path; the earlier sync
@@ -2440,6 +2477,31 @@ struct AbSchedule {
     const bool sync_fast =
         rex::thread::nx_sync::LockFreeRelease().load(std::memory_order_relaxed);
     const double per_frame = d_swaps ? double(d_draws) / double(d_swaps) : 0.0;
+    const uint64_t fence_wait_ns =
+        rex::graphics::nx_gpu_counters().fence_wait_ns.load(std::memory_order_relaxed);
+    const double d_fence_ms = double(fence_wait_ns - last_fence_wait_ns) / 1e6;
+    last_fence_wait_ns = fence_wait_ns;
+    if (REXCVAR_GET(nx_ab_ceiling)) {
+      // The window that just ended ran entirely in the mode of `phase` (toggles
+      // happen only at the end of a window, below).
+      const bool counted = started && !finished;
+      const int mode = phase % 2;
+      if (counted) {
+        mode_swaps[mode] += d_swaps;
+        mode_s[mode] += window_s;
+        mode_fence_ms[mode] += d_fence_ms;
+        ++mode_windows[mode];
+      }
+      GAME_INFO("[ab] ceiling window %.0f s: %s, %.2f swap/s, %.1f ms per frame, GPU wait of "
+                "the command processor %.1f ms per frame, %.0f draws per frame",
+                elapsed_s + window_s,
+                !counted ? (finished ? "after the schedule" : "before the schedule")
+                         : (mode ? "CEILING" : "normal"),
+                window_s > 0 ? double(d_swaps) / window_s : 0.0,
+                d_swaps ? window_s * 1000.0 / double(d_swaps) : 0.0,
+                d_swaps ? d_fence_ms / double(d_swaps) : 0.0, per_frame);
+      if (counted) LogCeilingTable(finished);
+    }
     GAME_INFO("[ab] window %.0f s: GPU work %s, lock-free release %s, %" PRIu64
               " guest swaps (%.2f/s), %" PRIu64
               " guest draws (%.0f per frame), %" PRIu64 " skipped, GPU Commands CPU %.0f ms; "
@@ -2489,6 +2551,7 @@ struct AbSchedule {
     windows_in_phase = 0;
     if (++phase >= PhaseCount(cycles)) {
       finished = true;
+      if (REXCVAR_GET(nx_ab_ceiling)) LogCeilingTable(true);
       ab::SkipGpuWork().store(false, std::memory_order_relaxed);
       SetSyncFastPaths(true);
       ab::OwnershipTransferSkip().store(REXCVAR_GET(nx_ownership_transfer_skip),
