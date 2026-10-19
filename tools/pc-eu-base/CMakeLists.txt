@@ -72,6 +72,20 @@ if(THEFT4_D3D_CENSUS)
   # clang++ expands the file itself: its lines are "-Xlinker -wrap:<symbol>".
   target_link_options(theft4-eu-base PRIVATE "@${THEFT4_D3D_CENSUS_DIR}/d3d_census_wrap.rsp")
 endif()
+# Native renderer N1: the game's Direct3D calls at the nine European
+# addresses of 06 section 11 b, per frame (native_hooks.cpp, cvar
+# pc_native_hooks_frames). The census wraps the same symbols: one or the other.
+option(THEFT4_NATIVE_HOOKS "Count the game's draw, resolve, swap, render target and shader calls per frame" ON)
+if(THEFT4_NATIVE_HOOKS)
+  if(THEFT4_D3D_CENSUS)
+    message(FATAL_ERROR "THEFT4_NATIVE_HOOKS and THEFT4_D3D_CENSUS wrap the same functions")
+  endif()
+  target_sources(theft4-eu-base PRIVATE native_hooks.cpp)
+  foreach(address 829D1708 829D1818 829CCEA8 829CC610 829CCAC0 829CAAB0 829CAE18 829CB7C8 829D5338)
+    target_link_options(theft4-eu-base PRIVATE
+      "LINKER:-wrap:sub_${address}" "LINKER:-wrap:__imp__sub_${address}")
+  endforeach()
+endif()
 # rexui brings imgui and SDL3, which rex_app.cpp and the SDL main need.
 target_link_libraries(theft4-eu-base PRIVATE rex::runtime rexui)
 rexglue_configure_target(theft4-eu-base GPU_PLUGINS xenos)

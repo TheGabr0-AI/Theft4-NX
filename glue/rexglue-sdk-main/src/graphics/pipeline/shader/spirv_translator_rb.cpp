@@ -1445,7 +1445,7 @@ spv::Id SpirvShaderTranslator::LoadMsaaSamplesFromFlags() {
     if (fsi_msaa_specialization_ == spv::NoResult) {
       fsi_msaa_specialization_ = builder_->makeUintConstant(0, true);
       builder_->addDecoration(fsi_msaa_specialization_, spv::DecorationSpecId,
-                              kFsiMsaaSpecializationId);
+                              int(kFsiMsaaSpecializationId));
     }
     return fsi_msaa_specialization_;
   }

@@ -28,6 +28,9 @@ set(REXGPU_XENOS_SOURCES
     pipeline/shader/interpreter.cpp
     pipeline/shader/translator.cpp
     pipeline/shader/translator_disasm.cpp
+
+    # Native renderer (docs/switch-port/06 section 11 c): N1 PM4 reader
+    native/pm4_observer.cpp
 )
 
 # SPIR-V shader translation

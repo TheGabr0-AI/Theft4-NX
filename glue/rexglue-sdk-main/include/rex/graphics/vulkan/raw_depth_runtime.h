@@ -304,7 +304,7 @@ bool VulkanRenderTargetCache::TryRawDepthOwnershipTransfers(VulkanRenderTarget& 
   command_processor_.SubmitBarriers(true);
   for (auto& plan : plans) for (uint32_t aspect = 0; aspect < 2; ++aspect) {
     VkImageCopy copy{};
-    copy.srcSubresource = {aspect ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+    copy.srcSubresource = {VkImageAspectFlags(aspect ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT), 0, 0, 1};
     copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     copy.srcOffset = {int32_t(plan.source_bounds.x), int32_t(plan.source_bounds.y), 0};
     copy.extent = {plan.source_bounds.width(), plan.source_bounds.height(), 1};
@@ -358,7 +358,7 @@ bool VulkanRenderTargetCache::TryRawDepthOwnershipTransfers(VulkanRenderTarget& 
     std::vector<VkImageCopy> copies;
     for (const auto& plan : plans) for (const auto& r : plan.rectangles) {
       VkImageCopy copy{}; copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-      copy.dstSubresource = {aspect ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+      copy.dstSubresource = {VkImageAspectFlags(aspect ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT), 0, 0, 1};
       copy.srcOffset = {int32_t(r.x - dst_bounds.x), int32_t(r.y - dst_bounds.y), 0};
       copy.dstOffset = {int32_t(r.x), int32_t(r.y), 0}; copy.extent = {r.width, r.height, 1}; copies.push_back(copy);
     }

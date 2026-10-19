@@ -143,7 +143,9 @@ REXCVAR_DEFINE_BOOL(nx_input, true, "Switch",
 REXCVAR_DEFINE_STRING(nx_gpu, "vulkan", "Switch",
                       "GPU: null = the null GPU (nx_null_gpu = false: none); vulkan = ReXGlue's "
                       "Vulkan backend on NVK, presenting on the default NWindow with the console "
-                      "closed (only in a build with THEFT4_SWITCH_GAME_VULKAN; 06 section 24)");
+                      "closed (only in a build with THEFT4_SWITCH_GAME_VULKAN; 06 section 24); "
+                      "native = the native renderer (src/graphics/native): until it draws (N3), "
+                      "ReXGlue's Vulkan backend draws and the native PM4 reader observes");
 REXCVAR_DEFINE_BOOL(nx_log_durable, false, "Switch",
                     "true: every log line is written to game.log at once (open, write, fsync, "
                     "close on the thread that logs: slow on the SD, for crash hunting); false: a "
@@ -244,6 +246,8 @@ REXCVAR_DEFINE_BOOL(nx_frame_structure_capture, false, "Switch",
                     "[NativeOracleState] lines, no XTR) when gameplay is first detected")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DECLARE(bool, native_renderer_oracle_capture);
+REXCVAR_DECLARE(int32_t, native_observe_frames);
+REXCVAR_DECLARE(std::string, native_observe_csv);
 // C2: synchronisation fast paths (rex/thread/nx_sync_tuning.h). All false:
 // the synchronisation of run 26.
 REXCVAR_DEFINE_BOOL(nx_sync_multi_wait, true, "Switch",
@@ -3391,7 +3395,19 @@ void StartupSummary() {
   // ReXGlue's Vulkan backend, created here as the null GPU is; the UI thread
   // is this loop (PumpFromUIThread), the window the default NWindow, which
   // the console gives up first.
-  const bool want_vulkan = REXCVAR_GET(nx_gpu) == "vulkan";
+  const bool want_native = REXCVAR_GET(nx_gpu) == "native";
+  if (want_native) {
+    // N1 on the console: the native reader observes, the emulated backend draws.
+    if (REXCVAR_GET(native_observe_frames) <= 0) {
+      REXCVAR_SET(native_observe_frames, 1000);
+    }
+    REXCVAR_SET(native_observe_csv, std::string(kRootDir) + "/native-observe.csv");
+    GAME_INFO("graphics: nx_gpu = native: the native renderer does not draw yet (N3); its PM4 "
+              "reader observes %d frames (cvar native_observe_frames, CSV %s) beside "
+              "ReXGlue's Vulkan backend",
+              int(REXCVAR_GET(native_observe_frames)), REXCVAR_GET(native_observe_csv).c_str());
+  }
+  const bool want_vulkan = REXCVAR_GET(nx_gpu) == "vulkan" || want_native;
 #if THEFT4_NX_VULKAN
   if (want_vulkan) {
     {

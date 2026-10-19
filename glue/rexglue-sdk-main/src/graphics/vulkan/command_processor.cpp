@@ -32,6 +32,8 @@
 #include <rex/assert.h>
 #include <rex/cvar.h>
 #include <rex/graphics/nx_gpu_counters.h>
+
+#include "../native/pm4_observer.h"
 #include <rex/dbg.h>
 #include <rex/logging.h>
 #include <rex/math.h>
@@ -4285,6 +4287,10 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
   };
 
   xenos::EdramMode edram_mode = regs.Get<reg::RB_MODECONTROL>().edram_mode;
+  native::Pm4Observer* const native_observer = native::Pm4Observer::Get();
+  if (native_observer) {
+    native_observer->EmulatedDraw(edram_mode == xenos::EdramMode::kCopy);
+  }
   if (edram_mode == xenos::EdramMode::kCopy) {
     // Special copy handling.
     ++frame_flow_copy_calls_;
@@ -4583,6 +4589,17 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
     return draw_fail("render_target_update");
   }
   nx_lap.Lap(rex::graphics::kNxCpDrawRenderTargets);
+  if (native_observer) {
+    // N1: the host framebuffer this draw goes to, against the previous draw's.
+    static const void* native_observer_last_framebuffer = nullptr;
+    const void* framebuffer = render_target_cache_->last_update_framebuffer();
+    if (framebuffer != native_observer_last_framebuffer) {
+      if (native_observer_last_framebuffer) {
+        native_observer->EmulatedRenderTargetChange();
+      }
+      native_observer_last_framebuffer = framebuffer;
+    }
+  }
 
   // Create the pipeline (for this, need the render pass from the render target
   // cache), translating the shaders - doing this now to obtain the used

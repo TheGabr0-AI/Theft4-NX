@@ -35,6 +35,8 @@
 #include <rex/graphics/nx_ab.h>
 #include <rex/graphics/xenos.h>
 #include <rex/logging.h>
+
+#include "native/pm4_observer.h"
 #include <rex/math.h>
 #include <rex/memory.h>
 #include <rex/memory/ring_buffer.h>
@@ -898,6 +900,13 @@ uint32_t CommandProcessor::ExecutePrimaryBuffer(uint32_t read_index, uint32_t wr
 
   trace_writer_.WritePrimaryBufferStart(start_ptr, write_index - read_index);
 
+  // N1: the native PM4 reader decodes the same words first, on its own (it
+  // only reads; cvar native_observe_frames).
+  if (native::Pm4Observer* observer = native::Pm4Observer::Get()) {
+    observer->ObservePrimary(memory_, primary_buffer_ptr_, primary_buffer_size_, read_index,
+                             write_index);
+  }
+
   // Execute commands!
   memory::RingBuffer reader(memory_->TranslatePhysical(primary_buffer_ptr_), primary_buffer_size_);
   reader.set_read_offset(read_index * sizeof(uint32_t));
@@ -1343,6 +1352,9 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
 
   nx_ab::BumpSingleWriter(nx_ab::GuestSwaps());
   IssueSwap(frontbuffer_ptr, frontbuffer_width, frontbuffer_height);
+  if (native::Pm4Observer* observer = native::Pm4Observer::Get()) {
+    observer->EmulatedSwap();
+  }
 
   ++counter_;
   return true;

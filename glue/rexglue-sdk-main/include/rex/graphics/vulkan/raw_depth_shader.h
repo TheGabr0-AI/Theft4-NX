@@ -61,7 +61,7 @@ inline std::vector<unsigned int> GenerateFragment(uint32_t destination_pitch,
   auto* main = b.makeEntryPoint("main");
   auto* entry = b.addEntryPoint(spv::ExecutionModelFragment, main, "main");
   b.addExecutionMode(main, spv::ExecutionModeOriginUpperLeft);
-  for (auto interface : interfaces) entry->addIdOperand(interface);
+  for (auto interface_id : interfaces) entry->addIdOperand(interface_id);
   auto load_push = [&](uint32_t member) {
     return b.createLoad(b.createAccessChain(spv::StorageClassPushConstant,
         push, {b.makeIntConstant(member)}), spv::NoPrecision);
