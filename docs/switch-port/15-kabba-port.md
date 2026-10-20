@@ -227,33 +227,86 @@ draw che lo usano saltano: niente blocco, al più un pezzo mancante.
 | `gta4_profile_native_detailed_cpu/gpu` | solo renderer | sì |
 | `switch_*` (priorità, core 3) | SDK; `switch_core3_thread_entry` è un indirizzo di gioco | no |
 
-## 3. PC (stato al 2026-10-20, lavoro interrotto)
+## 3. PC: `gta4_native` sulla base europea
 
 Build: `tools/pc-eu-base` con `-DTHEFT4_GTA4_NATIVE=ON
 -DTHEFT4_GTA4_NATIVE_PRIVATE_ROOT=<cartella locale con shader/shader_cache.cpp e
-font_atlases>` (più `GTA4_NATIVE_DXC_ROOT` = DXC 1.9: il DXC 1.8 incluso va in
-crash sugli shader Bink; `GTA4_NATIVE_SPIRV_VAL`). Gli hook sono copie tradotte
-(`tools/gta4_native_eu_translate.py` → `out/gta4-native-eu/src`), le chiamate
-verso gli indirizzi agganciati restano deboli (`direct_calls.py`, 94,0 %
-dirette). Correzione al nostro `gta4_native`: `native_worker_batch.h` incluso
-sempre (prima solo con `THEFT4_LAB_BUILD`, non compilava).
+font_atlases>`, più `GTA4_NATIVE_DXC_ROOT` (DXC 1.9: il DXC 1.8 incluso va in
+crash sugli shader Bink anche su Windows) e `GTA4_NATIVE_SPIRV_VAL`. Gli hook
+sono copie tradotte (`tools/gta4_native_eu_translate.py` →
+`out/gta4-native-eu/src`, nessun file originale toccato); le chiamate verso
+gli indirizzi agganciati tornano deboli (`direct_calls.py`: 94,0 % dirette
+invece di 94,2 %). Le cvar di `gta4_app.cpp` (l'app macOS di LibertyRecomp)
+sono estratte in un file generato. Correzione al nostro `gta4_native`:
+`native_worker_batch.h` incluso sempre (prima solo con `THEFT4_LAB_BUILD`, il
+plugin non compilava). Avvio: `--gpu_plugin=gta4-native`.
 
-Esito (`out/pc-runs/kabba-native-3`, `-4`, `--gpu_plugin=gta4-native`):
-**il filmato iniziale esce riconoscibile e corretto** (Niko al molo, titoli,
-luci), nessun crash in 270 s; 24 shader mancanti segnalati, nessun effetto
-visibile nelle catture. Le catture vanno fatte con `PrintWindow`
-(`PW_RENDERFULLCONTENT`): `CopyFromScreen` restituisce un'immagine vecchia.
+**Esito: il filmato iniziale esce riconoscibile e corretto** (Niko al molo,
+corridoio della nave, primi piani, titoli sovraimpressi; luci, pelle e
+materiali giusti; catture in `out/pc-runs/kabba-native-3/shots/`), nessun crash
+in 4 run da 270 s. I 24 shader mancanti sono segnalati una volta, nessun
+effetto visibile. I font registrati con gli indirizzi trovati a mano
+(`registered font1/font3 owner texture`).
 
-Da fare: la finestra resta 1920×1080 nonostante `--window_width/height`
-(causa da trovare), quindi FPS a 640×360 non ancora misurati; immagini
-affiancate con l'emulato da rifare con `PrintWindow`; confronto a pari
-impostazioni (`gta4_force_highest_lod=false`, `gta4_draw_distance_scale=1.0`).
+FPS (Swap al secondo dalla colonna `t_ms` di `native-hooks.csv`; PC con GPU
+integrata Intel, impostazioni del gioco originali: `gta4_force_highest_lod =
+false`, `gta4_draw_distance_scale = 1.0`; il gioco disegna a 1280×720 in tutti
+e tre i casi, i 640×360 interni si ottengono come nel port di kabba con FSR1
+"performance"):
 
-## 4. Switch: non iniziato
+| Tratto (filmato iniziale) | Emulato (xenos) 1280×720 | `gta4_native` 1280×720 | `gta4_native` 640×360 + FSR1 |
+|---|---|---|---|
+| 60–150 s, ~800–1.400 draw per fotogramma | 11,5–13,5 | 12,9–16,0 | **16,3–24,0** |
+| 150–270 s, ~2.500–3.500 draw | 11,2–12,5 | 8,0–10,6 | 8,8–11,9 |
+| media 60–270 s | 12,3 | 11,5 | 14,6 |
 
-Ostacolo noto: la nostra NVK (`libvulkan.a` dei portlibs) contiene ancora il
-`panic!("Cannot flip unop")` di NAK che, secondo kabba536, fa fallire migliaia
-di pipeline degli shader di GTA IV: serve ricostruire mesa-switch con la loro
-correzione (`<refs>/CBO1-NX/mesa-switch-main` ha un percorso MSYS2). Metà delle
-impostazioni chieste (cascate, intervalli di ombre e riflessi, motion blur,
-sotto-allocazione) esiste solo nel `gta4_native` più recente di LRA.
+Run: `out/pc-runs/kabba-xenos-720`, `kabba-native-640`, `kabba-native-fsr`.
+Lettura: con poche chiamate il renderer nativo è più veloce; con molte è al
+livello dell'emulato o sotto. Coerente con quanto kabba scrive del renderer
+di partenza: col segnale di fine fotogramma a 0 il titolo aspetta che il
+registratore abbia inviato il fotogramma, produttore e registratore lavorano
+in serie (~11 FPS in città per loro prima di `gta4_native_frame_complete_signal
+= 2`), e quella cvar il nostro `gta4_native` non ce l'ha. Sul PC il
+fotogramma non dipende dalla GPU: è il percorso CPU produttore → registratore.
+
+Non riuscito: immagini affiancate allo stesso istante. Dopo il run
+`kabba-native-3` ogni cattura durante il gioco (finestra con `PrintWindow`,
+schermo con `CopyFromScreen`) esce nera, mentre fuori dal gioco la cattura
+dello schermo funziona; la finestra è sempre a schermo intero 1920×1080 anche
+con `--fullscreen=false`/`--no-fullscreen` e `--window_width/height` (causa da
+trovare: il codice di `window_sdl.cpp` e `rex_app.cpp` rispetta le cvar). Per
+confronto con l'emulato sullo stesso filmato restano le catture del renderer
+di N2 (`out/pc-runs/n2/`).
+
+## 4. Switch: NRO non costruita (decisione, con i numeri)
+
+Il punto 3 funziona per la correttezza, ma una build Switch adesso sarebbe un
+avvio sprecato per tre motivi, due verificati e uno da verificare:
+
+1. **NVK**: il nostro `libvulkan.a` contiene ancora `panic!("Cannot flip
+   unop")` in NAK (verificato con `strings`). Secondo kabba536 gli shader di
+   GTA IV lo colpiscono migliaia di volte: pipeline fallite, schermo nero con
+   l'audio. Serve ricostruire mesa-switch con la correzione di una riga
+   (`FloatCmpOp::IsNum | IsNan => self`) e, consigliate, le altre due
+   (latenze 200, `peephole_select` 8). `<refs>/CBO1-NX/mesa-switch-main` ha un
+   percorso di build MSYS2.
+2. **Impostazioni richieste**: delle sei chieste, nel nostro `gta4_native`
+   esistono solo FSR1 performance, antialiasing spento e il limite texture
+   (448 MB). Una cascata d'ombra, riflessi a intervalli, motion blur spento e
+   sotto-allocazione esistono solo nel `gta4_native` di LRA (89 file diversi
+   dal nostro, 66 che noi non abbiamo).
+3. **Rendimento**: sul PC il nostro `gta4_native` non batte l'emulato nella
+   parte pesante (8–12 contro 11–12 FPS); i guadagni che kabba dichiara per
+   la città vengono da cambiamenti del renderer di LRA e dal suo patch
+   (segnale di fine fotogramma, code, priorità, resolve come draw), non dal
+   renderer che abbiamo. Su Switch il plugin va anche collegato staticamente
+   (oggi è una DLL) e compilato con GCC: da fare.
+   L'altro problema NVK che kabba segnala (offset UBO dinamici a 64 contro i
+   256 richiesti, device lost) **probabilmente non ci riguarda**: il nostro
+   `gta4_native` non usa descrittori UBO dinamici (da verificare su console).
+
+Prossimo passo proposto: portare il `gta4_native` di LRA `7c97c58` (sorgente
+GPL, non codice del gioco) al posto del nostro, ripetere il censimento e la
+traduzione sugli hook di quella versione (lo strumento è pronto), misurare sul
+PC, ricostruire NVK con la correzione NAK, poi l'unica build Switch.
+Nel frattempo si può riprendere N3 del renderer PM4.
