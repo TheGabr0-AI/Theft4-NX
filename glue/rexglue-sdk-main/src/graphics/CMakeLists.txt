@@ -223,14 +223,18 @@ rexgpu_configure_plugin(rexgpu-xenos gpu-xenos)
 # this repository; tools/pc-eu-base turns it off and uses xenos only.
 option(REXGLUE_BUILD_GTA4_NATIVE "Build the gta4-native GPU plugin (Vulkan)" ON)
 if(REXGLUE_USE_VULKAN AND REXGLUE_BUILD_GTA4_NATIVE)
+    # The shader cache (shader/shader_cache.cpp) and the font atlases come from
+    # the game's files and stay out of this repository: a build can point this
+    # at a local copy (tools/pc-eu-base, THEFT4_GTA4_NATIVE_PRIVATE_ROOT).
     set(GTA4_NATIVE_SHADER_CACHE_ROOT
-        "${LIBERTY_RECOMP_WORKSPACE_ROOT}/LibertyRecompLib")
+        "${LIBERTY_RECOMP_WORKSPACE_ROOT}/LibertyRecompLib" CACHE PATH
+        "Folder with shader/shader_cache.cpp and font_atlases for gta4-native")
     set(GTA4_NATIVE_SMOLV_ROOT
         "${LIBERTY_RECOMP_WORKSPACE_ROOT}/tools/XenosRecomp/thirdparty/smol-v/source")
     set(GTA4_NATIVE_ZSTD_ROOT
         "${LIBERTY_RECOMP_WORKSPACE_ROOT}/tools/XenosRecomp/thirdparty/zstd")
     set(GTA4_NATIVE_SHADER_OVERRIDE_ROOT
-        "${GTA4_NATIVE_SHADER_CACHE_ROOT}/shader_overrides")
+        "${LIBERTY_RECOMP_WORKSPACE_ROOT}/LibertyRecompLib/shader_overrides")
     set(GTA4_NATIVE_SHADER_OVERRIDE_MANIFEST
         "${GTA4_NATIVE_SHADER_OVERRIDE_ROOT}/manifest.json")
     set(GTA4_NATIVE_SHADER_OVERRIDE_COMPILER
@@ -261,8 +265,11 @@ if(REXGLUE_USE_VULKAN AND REXGLUE_BUILD_GTA4_NATIVE)
     else()
         set(GTA4_NATIVE_DXC_ARCH x64)
     endif()
+    # The bundled DXC 1.8 crashes on the Bink pixel shaders on Windows too: a
+    # build can point this at a newer release (same bin/<arch>/ layout).
     set(GTA4_NATIVE_DXC_ROOT
-        "${LIBERTY_RECOMP_WORKSPACE_ROOT}/tools/XenosRecomp/thirdparty/dxc-bin")
+        "${LIBERTY_RECOMP_WORKSPACE_ROOT}/tools/XenosRecomp/thirdparty/dxc-bin" CACHE PATH
+        "DXC folder for the gta4-native shader overrides (bin/<arch>/dxc.exe)")
     set(GTA4_NATIVE_DXC_LIBRARY_PATH "" CACHE PATH
         "Directory containing a DXC shared library compatible with gta4-native shader overrides")
     set(GTA4_NATIVE_SHADER_COMMON
@@ -372,7 +379,7 @@ if(REXGLUE_USE_VULKAN AND REXGLUE_BUILD_GTA4_NATIVE)
         "${GTA4_NATIVE_SMOLV_ROOT}"
     )
     target_compile_definitions(rexgpu-gta4-native PRIVATE
-        GTA4_NATIVE_FONT_ASSET_ROOT="${LIBERTY_RECOMP_WORKSPACE_ROOT}/LibertyRecompLib/font_atlases"
+        GTA4_NATIVE_FONT_ASSET_ROOT="${GTA4_NATIVE_SHADER_CACHE_ROOT}/font_atlases"
     )
     target_link_libraries(rexgpu-gta4-native PRIVATE
         libzstd_static

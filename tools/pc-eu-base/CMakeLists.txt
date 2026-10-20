@@ -43,8 +43,29 @@ set(REXGLUE_USE_D3D12 OFF CACHE BOOL "" FORCE)
 set(REXGLUE_ENABLE_FIDELITYFX OFF CACHE BOOL "" FORCE)
 set(REXGLUE_BUILD_TESTS OFF CACHE BOOL "")
 set(REXGLUE_ENABLE_TRACY OFF CACHE BOOL "" FORCE)
-# gta4-native needs the private shader cache; xenos is the plugin used here.
-set(REXGLUE_BUILD_GTA4_NATIVE OFF CACHE BOOL "" FORCE)
+# gta4-native needs the private shader cache; xenos is the plugin used here,
+# unless THEFT4_GTA4_NATIVE (15-kabba-port.md, step 3) builds the native
+# renderer too, with the hooks moved to the European addresses
+# (tools/gta4_native_eu_translate.py) and THEFT4_GTA4_NATIVE_PRIVATE_ROOT
+# pointing at a local folder with shader/shader_cache.cpp and font_atlases
+# (made from the game's files: never in this repository). Run with
+# --gpu_plugin=gta4-native.
+option(THEFT4_GTA4_NATIVE "Build gta4-native and its hooks for the European base" OFF)
+if(THEFT4_GTA4_NATIVE)
+  set(THEFT4_GTA4_NATIVE_PRIVATE_ROOT "" CACHE PATH
+      "Local folder with shader/shader_cache.cpp and font_atlases (game-derived)")
+  if(NOT EXISTS "${THEFT4_GTA4_NATIVE_PRIVATE_ROOT}/shader/shader_cache.cpp")
+    message(FATAL_ERROR "THEFT4_GTA4_NATIVE: set THEFT4_GTA4_NATIVE_PRIVATE_ROOT")
+  endif()
+  set(THEFT4_GTA4_NATIVE_EU_SRC "${THEFT4_ROOT}/out/gta4-native-eu/src")
+  if(NOT EXISTS "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_native_hooks.cpp")
+    message(FATAL_ERROR "Run python tools/gta4_native_eu_translate.py first")
+  endif()
+  set(REXGLUE_BUILD_GTA4_NATIVE ON CACHE BOOL "" FORCE)
+  set(GTA4_NATIVE_SHADER_CACHE_ROOT "${THEFT4_GTA4_NATIVE_PRIVATE_ROOT}" CACHE PATH "" FORCE)
+else()
+  set(REXGLUE_BUILD_GTA4_NATIVE OFF CACHE BOOL "" FORCE)
+endif()
 
 # The export trace switch-game has on Switch (rex/hook.h), for comparison.
 add_compile_definitions(REX_TRACE_EXPORTS=1)
@@ -96,6 +117,8 @@ if(THEFT4_NATIVE_HOOKS)
     message(FATAL_ERROR "THEFT4_NATIVE_HOOKS and THEFT4_D3D_CENSUS wrap the same functions")
   endif()
   target_sources(theft4-eu-base PRIVATE native_hooks.cpp)
+  # pc_shader_hash_log hashes the shader containers as gta4_native does.
+  target_link_libraries(theft4-eu-base PRIVATE xxHash::xxhash)
   foreach(address 829D1708 829D1818 829CCEA8 829CC610 829CCAC0 829CAAB0 829CAE18 829CB7C8 829D5338
           829CFE80)
     target_link_options(theft4-eu-base PRIVATE
@@ -104,4 +127,19 @@ if(THEFT4_NATIVE_HOOKS)
 endif()
 # rexui brings imgui and SDL3, which rex_app.cpp and the SDL main need.
 target_link_libraries(theft4-eu-base PRIVATE rex::runtime rexui)
-rexglue_configure_target(theft4-eu-base GPU_PLUGINS xenos)
+if(THEFT4_GTA4_NATIVE)
+  target_sources(theft4-eu-base PRIVATE
+    "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_native_hooks.cpp"
+    "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_aspect_hooks.cpp"
+    "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_font_selection_trace.cpp"
+    "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_presentation_options.cpp"
+    "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4eu_app_cvars.cpp"
+    "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4eu_unresolved_stubs.cpp")
+  target_include_directories(theft4-eu-base PRIVATE
+    "${THEFT4_GTA4_NATIVE_EU_SRC}" "${THEFT4_SDK_DIR}/src"
+    "${THEFT4_SDK_DIR}/thirdparty/inja/third_party/include")
+  target_link_libraries(theft4-eu-base PRIVATE xxHash::xxhash)
+  rexglue_configure_target(theft4-eu-base GPU_PLUGINS xenos gta4-native)
+else()
+  rexglue_configure_target(theft4-eu-base GPU_PLUGINS xenos)
+endif()

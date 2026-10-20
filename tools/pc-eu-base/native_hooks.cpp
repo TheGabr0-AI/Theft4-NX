@@ -13,6 +13,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
+#include <unordered_set>
+
+#include <xxhash.h>
 
 #include <rex/cvar.h>
 #include <rex/ppc/context.h>
@@ -42,6 +45,8 @@ std::atomic<uint64_t> g_wait_calls{0}, g_wait_ns{0};
 uint64_t g_last_wait_calls = 0, g_last_wait_ns = 0;
 std::mutex g_mutex;
 std::FILE* g_csv = nullptr;
+// Time of each Swap since start (t_ms): frames per second for either renderer.
+const auto g_start = std::chrono::steady_clock::now();
 uint64_t g_frames = 0, g_last[kHookCount] = {};
 bool g_done = false;
 
@@ -58,7 +63,7 @@ void EndFrame() {
     }
     std::fputs("frame,hook_draw_indexed,hook_draw_indexed2,hook_draw_not_indexed,hook_draws,"
                "hook_resolves,hook_set_render_target,hook_set_depth_stencil,"
-               "hook_pixel_shaders,hook_vertex_shaders,hook_gpu_poll_calls,hook_gpu_poll_ms\n",
+               "hook_pixel_shaders,hook_vertex_shaders,hook_gpu_poll_calls,hook_gpu_poll_ms,t_ms\n",
                g_csv);
   }
   uint64_t d[kHookCount];
@@ -71,11 +76,12 @@ void EndFrame() {
   const uint64_t wait_ns = g_wait_ns.load(std::memory_order_relaxed);
   std::fprintf(g_csv,
                "%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64
-               ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%.3f\n",
+               ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%.3f,%.1f\n",
                g_frames, d[kDrawIndexed], d[kDrawIndexed2], d[kDrawNotIndexed],
                d[kDrawIndexed] + d[kDrawIndexed2] + d[kDrawNotIndexed], d[kResolve],
                d[kRenderTarget], d[kDepthStencil], d[kPixelShader], d[kVertexShader],
-               wait_calls - g_last_wait_calls, double(wait_ns - g_last_wait_ns) / 1e6);
+               wait_calls - g_last_wait_calls, double(wait_ns - g_last_wait_ns) / 1e6,
+               std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - g_start).count());
   g_last_wait_calls = wait_calls;
   g_last_wait_ns = wait_ns;
   if (++g_frames >= uint64_t(wanted)) {
@@ -86,6 +92,20 @@ void EndFrame() {
 }
 
 }  // namespace
+
+#define THEFT4_NATIVE_HOOK_BEFORE(addr, index, before)                                  \
+  extern "C" void __real___imp__sub_##addr(PPCContext& ctx, uint8_t* base);            \
+  extern "C" void __real_sub_##addr(PPCContext& ctx, uint8_t* base);                   \
+  extern "C" void __wrap___imp__sub_##addr(PPCContext& ctx, uint8_t* base) {           \
+    g_calls[index].fetch_add(1, std::memory_order_relaxed);                            \
+    before;                                                                            \
+    __real___imp__sub_##addr(ctx, base);                                               \
+  }                                                                                    \
+  extern "C" void __wrap_sub_##addr(PPCContext& ctx, uint8_t* base) {                  \
+    g_calls[index].fetch_add(1, std::memory_order_relaxed);                            \
+    before;                                                                            \
+    __real_sub_##addr(ctx, base);                                                      \
+  }
 
 #define THEFT4_NATIVE_HOOK(addr, index, after)                                          \
   extern "C" void __real___imp__sub_##addr(PPCContext& ctx, uint8_t* base);            \
@@ -101,8 +121,42 @@ void EndFrame() {
     after;                                                                             \
   }
 
-THEFT4_NATIVE_HOOK(829D1708, kPixelShader, (void)0)
-THEFT4_NATIVE_HOOK(829D1818, kVertexShader, (void)0)
+// gta4_native on the European base (15-kabba-port.md): the native renderer
+// finds each shader in its cache by XXH3 of the guest container (virtual +
+// physical size at +4/+8), hashed before the creation call as
+// RegisterNativeShader does. Each new hash is written once to
+// shader-hashes.csv, to compare with the keys of a cache built from v8.
+REXCVAR_DEFINE_BOOL(pc_shader_hash_log, false, "pc-eu-base",
+                    "Write the XXH3 of every shader container created to shader-hashes.csv");
+
+namespace {
+
+void LogShaderHash(PPCContext& ctx, uint8_t* base, const char* stage) {
+  if (!REXCVAR_GET(pc_shader_hash_log)) return;
+  const uint32_t container = ctx.r3.u32;
+  if (!container) return;
+  const uint32_t virtual_size = __builtin_bswap32(*reinterpret_cast<uint32_t*>(base + container + 4));
+  const uint32_t physical_size = __builtin_bswap32(*reinterpret_cast<uint32_t*>(base + container + 8));
+  if (virtual_size > UINT32_MAX - physical_size || !(virtual_size + physical_size)) return;
+  const uint64_t hash = XXH3_64bits(base + container, virtual_size + physical_size);
+  static std::mutex mutex;
+  static std::unordered_set<uint64_t> seen;
+  static std::FILE* csv = nullptr;
+  std::lock_guard<std::mutex> lock(mutex);
+  if (!seen.insert(hash).second) return;
+  if (!csv) {
+    csv = std::fopen("shader-hashes.csv", "w");
+    if (!csv) return;
+    std::fputs("hash,stage,size\n", csv);
+  }
+  std::fprintf(csv, "%016" PRIX64 ",%s,%u\n", hash, stage, virtual_size + physical_size);
+  std::fflush(csv);
+}
+
+}  // namespace
+
+THEFT4_NATIVE_HOOK_BEFORE(829D1708, kPixelShader, LogShaderHash(ctx, base, "ps"))
+THEFT4_NATIVE_HOOK_BEFORE(829D1818, kVertexShader, LogShaderHash(ctx, base, "vs"))
 THEFT4_NATIVE_HOOK(829CCEA8, kDrawIndexed, (void)0)
 THEFT4_NATIVE_HOOK(829CC610, kDrawIndexed2, (void)0)
 THEFT4_NATIVE_HOOK(829CCAC0, kDrawNotIndexed, (void)0)
