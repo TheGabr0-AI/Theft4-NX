@@ -11,7 +11,7 @@
 namespace rex::graphics::gta4_native {
 
 inline constexpr uint32_t kTitleId = 0x545407F2;
-inline constexpr uint32_t kTitleCommandAbi = 31;
+inline constexpr uint32_t kTitleCommandAbi = 33;
 inline constexpr uint32_t kGuestDeviceSize = 0x5780;
 inline constexpr uint32_t kTextureStageCount = 26;
 inline constexpr uint32_t kRenderTargetCount = 4;
@@ -47,6 +47,8 @@ enum class CommandType : uint32_t {
   kUpdateEnvironmentalData,
   kDepthSurfaceHandoff,
   kRegisterVirtualResource,
+  kTemporalUpdate,
+  kQueryTemporalUpscaler,
 };
 
 enum class ReflectionFamily : uint32_t {
@@ -90,7 +92,7 @@ struct UpdateEnvironmentalDataCommand {
                        CommandType::kUpdateEnvironmentalData};
   uint32_t device = 0;
   uint32_t reserved = 0;
-  EnvironmentalDataV1 data{};
+  EnvironmentalDataV2 data{};
 };
 
 struct DeviceCommand {
@@ -429,10 +431,13 @@ struct QueryDeviceCapabilitiesCommand {
                        CommandType::kQueryDeviceCapabilities};
 };
 
+// A zero bitset preserves the behavior of older plugins using the reserved word.
+inline constexpr uint32_t kCapabilityPerceptualPresentationBeforeHdr = 1u << 0;
 struct DeviceCapabilitiesResult {
   uint32_t max_image_dimension_2d{};
-  uint32_t reserved{};
+  uint32_t capabilities{};
 };
+static_assert(sizeof(DeviceCapabilitiesResult) == 2 * sizeof(uint32_t));
 
 struct ClearCommand {
   CommandHeader header{sizeof(ClearCommand), CommandType::kClear};
@@ -455,6 +460,7 @@ struct RenderPhaseMarkerCommand {
   RenderPhaseEvent event{};
   uint32_t object{};
   uint32_t caller{};
+  uint32_t half_scene_texture{};  // Composite postfx half-resolution raw scene.
 };
 
 struct PresentCommand {
@@ -491,7 +497,7 @@ struct PresentCommand {
 
 static_assert(std::is_trivially_copyable<CommandHeader>::value);
 static_assert(std::is_trivially_copyable<UpdateEnvironmentalDataCommand>::value);
-static_assert(sizeof(UpdateEnvironmentalDataCommand) == 416);
+static_assert(sizeof(UpdateEnvironmentalDataCommand) == 544);
 static_assert(std::is_trivially_copyable<DeviceCommand>::value);
 static_assert(std::is_trivially_copyable<RegisterShaderCommand>::value);
 static_assert(std::is_trivially_copyable<VertexElement>::value);

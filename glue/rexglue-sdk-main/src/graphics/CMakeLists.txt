@@ -233,8 +233,11 @@ if(REXGLUE_USE_VULKAN AND REXGLUE_BUILD_GTA4_NATIVE)
         "${LIBERTY_RECOMP_WORKSPACE_ROOT}/tools/XenosRecomp/thirdparty/smol-v/source")
     set(GTA4_NATIVE_ZSTD_ROOT
         "${LIBERTY_RECOMP_WORKSPACE_ROOT}/tools/XenosRecomp/thirdparty/zstd")
+    # LRA's override set includes translated game shaders (forward_fog, sky,
+    # depth_of_field composites): a build points this at a local copy.
     set(GTA4_NATIVE_SHADER_OVERRIDE_ROOT
-        "${LIBERTY_RECOMP_WORKSPACE_ROOT}/LibertyRecompLib/shader_overrides")
+        "${LIBERTY_RECOMP_WORKSPACE_ROOT}/LibertyRecompLib/shader_overrides" CACHE PATH
+        "Folder with manifest.json and the hash-specific shader overrides for gta4-native")
     set(GTA4_NATIVE_SHADER_OVERRIDE_MANIFEST
         "${GTA4_NATIVE_SHADER_OVERRIDE_ROOT}/manifest.json")
     set(GTA4_NATIVE_SHADER_OVERRIDE_COMPILER
@@ -350,7 +353,7 @@ if(REXGLUE_USE_VULKAN AND REXGLUE_BUILD_GTA4_NATIVE)
 
     add_library(rexgpu-gta4-native SHARED
         gta4_native/graphics_system.cpp
-        gta4_native/modern_shader_options.cpp
+        gta4_native/core/font_atlas.cpp
         gta4_native/shader_override_policy.h
         gta4_native/native_buffer_arena.cpp
         gta4_native/native_descriptor_backend.cpp
@@ -363,6 +366,15 @@ if(REXGLUE_USE_VULKAN AND REXGLUE_BUILD_GTA4_NATIVE)
         gta4_native/smaa_pipeline.cpp
         gta4_native/split_postfx_pass.cpp
         gta4_native/sun_shafts_pass.cpp
+        gta4_native/temporal/fsr_vulkan.cpp
+        gta4_native/temporal/shader_archive.cpp
+        gta4_native/temporal/vulkan_scene.cpp
+        gta4_native/temporal/vulkan_frame_generation.cpp
+        # LRA's rexglue_enable_dlss without the NVIDIA SDK: the capability entry
+        # points answer "unavailable" (REX_HAS_DLSS_NGX undefined).
+        gta4_native/temporal/dlss_bootstrap.cpp
+        gta4_native/temporal/dlss_upscaler.cpp
+        gta4_native/temporal/dlss_frame_generation.cpp
         gta4_native/plugin_main.cpp
         "${GTA4_NATIVE_SHADER_CACHE_ROOT}/shader/shader_cache.cpp"
         "${GTA4_NATIVE_SHADER_OVERRIDE_CPP}"

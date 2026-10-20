@@ -10,7 +10,7 @@ namespace rex::graphics::gta4_native {
 // Tracks commands actually emitted into one command buffer. This owns no GPU
 // resources. Reset at recording boundaries and after any external draw path.
 // Floating-point state is passed as bits, preserving signed zero and NaN values.
-template <size_t DescriptorSetCount, size_t VertexBindingCount = 16>
+template <size_t DescriptorSetCount>
 class NativeDrawStateCache {
  public:
   void Reset() { *this = {}; }
@@ -30,17 +30,6 @@ class NativeDrawStateCache {
     return true;
   }
 
-  // Resource uploads/validation must happen before these checks. An unchanged
-  // binding says nothing about whether the resource's contents have changed.
-  // Buffer state survives pipeline switches, but never Reset/command boundaries.
-  bool UpdateVertexBuffer(size_t binding, uint64_t buffer, uint64_t offset) {
-    if (binding >= vertex_buffers_.size()) return true;
-    return vertex_buffers_[binding].Update({buffer, offset});
-  }
-  bool UpdateIndexBuffer(uint64_t buffer, uint64_t offset, uint32_t type) {
-    return index_buffer_.Update({buffer, offset, type});
-  }
-
   bool UpdateDescriptors(uint64_t layout,
                          const std::array<uint64_t, DescriptorSetCount>& sets) {
     return descriptors_.Update({layout, sets});
@@ -56,6 +45,13 @@ class NativeDrawStateCache {
   }
   bool UpdatePushConstants(uint64_t layout, const std::array<uint64_t, 3>& addresses) {
     return push_constants_.Update({layout, addresses});
+  }
+  // Vertex buffer bindings are command-buffer state that survives pipeline
+  // and render-pass changes; the command buffer is part of the value.
+  bool UpdateVertexBuffer(uint64_t command_buffer, uint32_t binding, uint64_t buffer,
+                          uint64_t offset) {
+    if (binding >= vertex_buffers_.size()) return true;
+    return vertex_buffers_[binding].Update({command_buffer, buffer, offset});
   }
 
  private:
@@ -78,8 +74,6 @@ class NativeDrawStateCache {
   };
 
   Tracked<uint64_t> pipeline_;
-  std::array<Tracked<std::array<uint64_t, 2>>, VertexBindingCount> vertex_buffers_;
-  Tracked<std::array<uint64_t, 3>> index_buffer_;
   Tracked<LayoutValues<DescriptorSetCount>> descriptors_;
   Tracked<std::array<uint32_t, 6>> viewport_;
   Tracked<std::array<int64_t, 4>> scissor_;
@@ -87,6 +81,7 @@ class NativeDrawStateCache {
   Tracked<std::array<uint32_t, 6>> stencil_;
   Tracked<std::array<uint32_t, 4>> blend_constants_;
   Tracked<LayoutValues<3>> push_constants_;
+  std::array<Tracked<std::array<uint64_t, 3>>, 32> vertex_buffers_;
 };
 
 }  // namespace rex::graphics::gta4_native

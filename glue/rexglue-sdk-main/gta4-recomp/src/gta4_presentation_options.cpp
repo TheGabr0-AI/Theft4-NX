@@ -5,11 +5,14 @@
 #include <string_view>
 
 #include <rex/cvar.h>
+#include <rex/platform.h>
 
 REXCVAR_DEFINE_BOOL(
     gta4_skip_intro, false, "GTA IV/Frontend",
     "Skip legal and logo presentation at next launch; retain startup initialization")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_BOOL(gta4_motion_blur, !REX_PLATFORM_ANDROID, "GTA IV/Graphics/Post-Processing",
+                    "Enable the title motion-blur composite; preserve depth of field and other effects");
 REXCVAR_DEFINE_BOOL(gta4_disable_tlad_film_grain, false, "GTA IV/Frontend",
                     "Use TLAD's grain-free composite passes; no effect in other episodes");
 REXCVAR_DEFINE_BOOL(gta4_trace_presentation_options, false, "GTA IV/Diagnostics",
@@ -20,6 +23,7 @@ namespace gta4::presentation {
 namespace {
 std::atomic<bool> skip_intro{false};
 std::atomic<bool> disable_grain{false};
+std::atomic<bool> motion_blur{true};
 std::atomic<bool> trace{false};
 std::once_flag callbacks;
 bool ParseBool(std::string_view value) noexcept {
@@ -31,6 +35,10 @@ void InitializeOptions() {
   // Registry callbacks run under its mutex: they only publish the value, and
   // must never call back into GetFlagByName or a guest function.
   std::call_once(callbacks, [] {
+    rex::cvar::RegisterChangeCallback("gta4_motion_blur",
+        [](std::string_view, std::string_view value) {
+          motion_blur.store(ParseBool(value), std::memory_order_relaxed);
+        });
     rex::cvar::RegisterChangeCallback(
         "gta4_disable_tlad_film_grain", [](std::string_view, std::string_view value) {
           disable_grain.store(ParseBool(value), std::memory_order_relaxed);
@@ -40,6 +48,8 @@ void InitializeOptions() {
                                         trace.store(ParseBool(value), std::memory_order_relaxed);
                                       });
   });
+  motion_blur.store(ParseBool(rex::cvar::GetFlagByName("gta4_motion_blur")),
+                    std::memory_order_relaxed);
   skip_intro.store(ParseBool(rex::cvar::GetFlagByName("gta4_skip_intro")),
                    std::memory_order_relaxed);
   disable_grain.store(ParseBool(rex::cvar::GetFlagByName("gta4_disable_tlad_film_grain")),
@@ -50,6 +60,9 @@ void InitializeOptions() {
 
 bool SkipIntroAtLaunch() noexcept {
   return skip_intro.load(std::memory_order_relaxed);
+}
+bool MotionBlurEnabled() noexcept {
+  return motion_blur.load(std::memory_order_relaxed);
 }
 bool DisableTladFilmGrain() noexcept {
   return disable_grain.load(std::memory_order_relaxed);

@@ -1,9 +1,10 @@
 #version 450
-
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 layout(set = 0, binding = 0) uniform sampler2D scene_image;
 layout(set = 0, binding = 1) uniform sampler2D pass_image;
 layout(set = 0, binding = 2) uniform sampler2D depth_image;
-
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer CloudMask { float value[]; };
 layout(push_constant) uniform SunShaftConstants {
   ivec2 source_extent;
   ivec2 destination_extent;
@@ -12,88 +13,65 @@ layout(push_constant) uniform SunShaftConstants {
   float density;
   float decay;
   vec4 sun_screen;
-  vec4 sun_color_and_sky_start;
-  vec4 sky_end_and_reserved;
+  vec4 view_sun_projection;
+  vec4 depth_projection;
+  uint64_t cloud_mask_address;
+  uint cloud_width;
+  uint cloud_height;
 } constants;
-
 layout(location = 0) out vec4 output_color;
 
-float luminance(vec3 color) {
-  return dot(max(color, vec3(0.0)), vec3(0.2125, 0.7154, 0.0721));
+float cloud_texel(ivec2 p) {
+  p = clamp(p, ivec2(0), ivec2(constants.cloud_width, constants.cloud_height) - 1);
+  return CloudMask(constants.cloud_mask_address).value[p.y * int(constants.cloud_width) + p.x];
 }
-
+float cloud_transmittance(vec2 uv) {
+  if (constants.cloud_mask_address == 0ul || constants.cloud_width == 0u || constants.cloud_height == 0u) return 0.0;
+  vec2 p = uv * vec2(constants.cloud_width, constants.cloud_height) - 0.5;
+  ivec2 lo = ivec2(floor(p));
+  vec2 f = fract(p);
+  return mix(mix(cloud_texel(lo), cloud_texel(lo + ivec2(1, 0)), f.x),
+             mix(cloud_texel(lo + ivec2(0, 1)), cloud_texel(lo + ivec2(1, 1)), f.x), f.y);
+}
 float sky_mask(float encoded_depth) {
-  return smoothstep(constants.sun_color_and_sky_start.w,
-                    constants.sky_end_and_reserved.x, encoded_depth);
+  if (constants.depth_projection.w == 0.0) return encoded_depth == 0.0 ? 1.0 : 0.0;
+  // Convert Xbox reciprocal depth to the PC logarithmic interval used by FusionFix.
+  float near_clip = constants.depth_projection.y, far_clip = constants.depth_projection.z;
+  float z = near_clip * far_clip / (encoded_depth * (far_clip - near_clip) + near_clip);
+  float log_depth = log2(max(z / near_clip, 1.0)) / log2(far_clip / near_clip);
+  return clamp(log_depth * 10.0 - 9.0, 0.0, 1.0);
 }
-
-float edge_fade(vec2 uv) {
+vec4 prepass(vec2 uv) {
+  vec3 scene = textureLod(scene_image, uv, 0.0).rgb;
+  float sky = sky_mask(textureLod(depth_image, uv, 0.0).r);
+  vec3 view_direction = normalize(vec3((uv.x * 2.0 - 1.0) / constants.view_sun_projection.w,
+      (1.0 - uv.y * 2.0) / constants.depth_projection.x, -1.0));
+  float sun = dot(view_direction, normalize(constants.view_sun_projection.xyz)) >= 0.996 ? 1.0 : 0.0;
   vec2 aspect = vec2(float(constants.source_extent.x) / float(constants.source_extent.y), 1.0);
   vec2 rectangle = min(uv, vec2(1.0) - uv) * aspect;
-  return clamp(32.0 * min(rectangle.x, rectangle.y), 0.0, 1.0);
+  float edge = clamp(32.0 * min(rectangle.x, rectangle.y), 0.0, 1.0);
+  return vec4(scene * sky * sun * edge * constants.sun_screen.z *
+              cloud_transmittance(uv) * constants.sun_screen.w, 1.0);
 }
-
-vec4 prepass(vec2 uv) {
-  vec3 scene = max(textureLod(scene_image, uv, 0.0).rgb, vec3(0.0));
-  float depth = textureLod(depth_image, uv, 0.0).r;
-  float sky = sky_mask(depth);
-  vec2 aspect = vec2(float(constants.source_extent.x) / float(constants.source_extent.y), 1.0);
-  float distance_to_sun = length((uv - constants.sun_screen.xy) * aspect);
-  float sun_region = 1.0 - smoothstep(0.015, 0.085, distance_to_sun);
-
-  // Xbox has no proven cloud-transmittance MRT at the composite draw. The rendered
-  // sky radiance is therefore the deliberate occlusion-contrast substitute: dark
-  // cloud pixels attenuate the source while stage-1 depth rejects solid geometry.
-  // A dedicated transmittance texture can replace this factor without changing the
-  // radial or composite passes.
-  float radiance_transmittance = smoothstep(0.002, 0.35, luminance(scene));
-  float mask = sky * sun_region * edge_fade(uv) * constants.sun_screen.w;
-  vec3 sun_tint = max(constants.sun_color_and_sky_start.rgb, vec3(0.0));
-  float tint_peak = max(max(sun_tint.r, sun_tint.g), max(sun_tint.b, 1.0e-5));
-  sun_tint /= tint_peak;
-  return vec4(scene * sun_tint * radiance_transmittance * mask * constants.sun_screen.z, sky);
-}
-
 vec4 radial_scatter(vec2 uv) {
-  vec2 delta_uv = (uv - constants.sun_screen.xy) *
-                  (constants.density / float(max(constants.sample_count, 1u)));
-  vec4 accumulated = textureLod(pass_image, uv, 0.0);
-  float weight_sum = 1.0;
+  vec2 delta = (uv - constants.sun_screen.xy) * (constants.density / float(constants.sample_count));
+  vec3 color = textureLod(pass_image, uv, 0.0).rgb;
   float illumination_decay = 1.0;
-  for (uint index = 0u; index < constants.sample_count; ++index) {
-    uv -= delta_uv;
+  for (uint i = 0u; i < constants.sample_count; ++i) {
+    uv -= delta;
+    color += textureLod(pass_image, uv, 0.0).rgb * illumination_decay;
     illumination_decay *= constants.decay;
-    accumulated += textureLod(pass_image, uv, 0.0) * illumination_decay;
-    weight_sum += illumination_decay;
   }
-  return accumulated / max(weight_sum, 1.0e-5);
+  // FusionFix intentionally leaves the two 24-sample sums unnormalized.
+  return vec4(color, 1.0);
 }
-
-vec4 bilateral_upsample(vec2 uv) {
-  vec4 scene = textureLod(scene_image, uv, 0.0);
-  float center_sky = sky_mask(textureLod(depth_image, uv, 0.0).r);
-  vec2 texel = 1.0 / vec2(constants.source_extent);
-  vec2 offsets[4] = vec2[](vec2(-0.5, -0.5), vec2(0.5, -0.5),
-                           vec2(-0.5, 0.5), vec2(0.5, 0.5));
-  vec3 shafts = vec3(0.0);
-  float weight_sum = 0.0;
-  for (uint index = 0u; index < 4u; ++index) {
-    vec4 sample_value = textureLod(pass_image, uv + offsets[index] * texel, 0.0);
-    float bilateral_weight = 1.0 / (1.0 + 8.0 * abs(sample_value.a - center_sky));
-    shafts += sample_value.rgb * bilateral_weight;
-    weight_sum += bilateral_weight;
-  }
-  shafts /= max(weight_sum, 1.0e-5);
-  return vec4(scene.rgb + shafts, scene.a);
-}
-
 void main() {
+  // Native pixel centers replace D3D9's full/half-resolution half-texel adjustment.
   vec2 uv = gl_FragCoord.xy / vec2(constants.destination_extent);
-  if (constants.pass_index == 0u) {
-    output_color = prepass(uv);
-  } else if (constants.pass_index < 3u) {
-    output_color = radial_scatter(uv);
-  } else {
-    output_color = bilateral_upsample(uv);
+  if (constants.pass_index == 0u) output_color = prepass(uv);
+  else if (constants.pass_index < 3u) output_color = radial_scatter(uv);
+  else {
+    vec4 scene = textureLod(scene_image, uv, 0.0);
+    output_color = vec4(scene.rgb + textureLod(pass_image, uv, 0.0).rgb, scene.a);
   }
 }

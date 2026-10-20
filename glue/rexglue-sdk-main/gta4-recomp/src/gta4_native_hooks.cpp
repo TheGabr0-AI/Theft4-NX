@@ -25,14 +25,10 @@
 #include <xxhash.h>
 
 #include <rex/cvar.h>
-#ifdef THEFT4_LAB_BUILD
-#include <rex/chrono/clock.h>
-#include <rex/graphics/gta4_native/pacing_profile.h>
-#include <rex/thread.h>
-#endif
 #include <rex/diagnostics/policy.h>
 #include <rex/graphics/gta4_native/anti_aliasing_policy.h>
 #include <rex/graphics/gta4_native/supersampling_policy.h>
+#include <rex/graphics/gta4_native/upscaling_policy.h>
 #include <rex/graphics/video_mode_util.h>
 #include <rex/graphics/gta4_native/light_trace_context.h>
 #include "rex/graphics/gta4_native/phone_trace.h"
@@ -41,6 +37,10 @@
 #include <rex/graphics/gta4_native/shadow_distance_util.h>
 #include <rex/graphics/gta4_native/surface_view.h>
 #include <rex/graphics/gta4_native/title_commands.h>
+#include <rex/graphics/gta4_native/temporal_commands.h>
+#include "../../src/graphics/gta4_metal/temporal/projection.h"
+#include "../../src/graphics/gta4_metal/temporal/history.h"
+#include <rex/graphics/gta4_native/fusion_timecycle.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
 #include <rex/ui/flags.h>
@@ -53,10 +53,14 @@
 #include "gta4_help_trace.h"
 #include "gta4_font_selection_trace.h"
 #include "gta4_draw_distance_policy.h"
-#include "gta4_frame_limiter.h"
 
 REXCVAR_DECLARE(uint32_t, gta4_shadow_map_base_size);
+REXCVAR_DEFINE_UINT32(gta4_shadow_cascade_count, 0, "GTA IV/Graphics/Shadows",
+                      "Directional shadow cascades (0 keeps the stock 5)")
+    .range(0, 5)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DECLARE(double, gta4_shadow_distance_scale);
+REXCVAR_DECLARE(double, gta4_shadow_distance_guard_factor);
 REXCVAR_DECLARE(std::string, gta4_reflection_resolution);
 REXCVAR_DECLARE(std::string, gta4_reflection_resolution_cap);
 REXCVAR_DECLARE(std::string, gta4_mirror_reflection_resolution);
@@ -66,9 +70,16 @@ REXCVAR_DECLARE(std::string, gta4_reflection_aa);
 REXCVAR_DECLARE(std::string, gta4_reflection_capture_distance);
 REXCVAR_DECLARE(std::string, gta4_native_upscaler);
 REXCVAR_DECLARE(std::string, gta4_fsr1_quality);
+REXCVAR_DEFINE_UINT32(gta4_output_height_cap, 0, "GTA IV/Graphics/Upscaling",
+                      "Cap the game's output height (e.g. 720); the presenter scales that image "
+                      "to the display. 0 keeps the display resolution")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DECLARE(std::string, gta4_aspect_ratio);
 REXCVAR_DECLARE(bool, gta4_force_highest_lod);
 REXCVAR_DECLARE(double, gta4_draw_distance_scale);
+REXCVAR_DECLARE(double, gta4_draw_distance_dynamic_factor);
+REXCVAR_DECLARE(bool, gta4_dynamic_draw_distance);
+REXCVAR_DECLARE(bool, gta4_modern_shaders);
 REXCVAR_DECLARE(uint32_t, gta4_drawable_reference_limit);
 REXCVAR_DEFINE_BOOL(gta4_native_pixel_snap_fonts, true, "GTA IV/Graphics/Text",
                     "Snap GTA IV font quads to native framebuffer pixels");
@@ -219,6 +230,8 @@ constexpr uint32_t kPointShadowCacheBaseMultiplier = 8;
 constexpr uint32_t kShadowQualityTable = 0x82C595C0;
 constexpr uint32_t kShadowQualityContextStride = 0x100;
 constexpr uint32_t kShadowQualityRangeOffset = 0x14;
+// Directional cascade count (stock 5) in each shadow quality context.
+constexpr uint32_t kShadowQualityCascadeOffset = 0x08;
 // Native rendering consumes the resource descriptors, not their Xbox GPU
 // backing allocation. Keep the guest allocation at the API-valid minimum and
 // patch only the descriptor extents after the trusted D3D constructor returns.
@@ -275,11 +288,29 @@ struct PendingDrawPrimitiveUp {
 struct CapturedSunPayload {
   std::array<float, 4> direction{};
   std::array<float, 4> color{};
+  std::array<float, 4> azimuth_color_height{};
+  std::array<float, 4> azimuth_east_strength{};
+  std::array<float, 4> sky_color_exposure{};
+  bool sky_valid = false;
   bool direction_valid = false;
   bool color_valid = false;
 };
 
 thread_local CapturedSunPayload g_captured_sun_payload;
+
+// Extended values follow the same per-view modifier calls and publication slots
+// as the retail 528-byte timecycle records. Never extend guest allocations.
+struct FusionCycleCapture {
+  uint32_t destination = 0;
+  FusionTimecycle values{};
+  bool valid = false;
+  std::unordered_map<uint32_t, FusionTimecycle> temporary_modifiers;
+};
+thread_local FusionCycleCapture* g_fusion_cycle_capture = nullptr;
+struct PublishedFusionCycle { FusionTimecycle values{}; bool valid = false; };
+std::mutex g_fusion_cycle_mutex;
+std::array<PublishedFusionCycle, 2> g_fusion_cycles{};
+
 
 thread_local PendingDrawPrimitiveUp g_pending_draw_primitive_up;
 thread_local uint32_t g_native_deferred_target_width = 0;
@@ -349,126 +380,7 @@ const char* TvPresentOriginName(uint32_t origin) {
   }
 }
 
-std::mutex g_native_frame_limiter_mutex;
-gta4::frame_limiter::State g_native_frame_limiter_state;
-uint64_t g_native_frame_limiter_present_count = 0;
 
-#ifdef THEFT4_LAB_BUILD
-// iOS may resume a short sleep several milliseconds after its requested
-// deadline. Keep the established fixed limiter phase, but leave a bounded
-// final interval for an active wait so an otherwise-ready frame does not miss
-// the next display opportunity solely because of scheduler wake latency.
-// This is deliberately Lab-only: it costs at most 2 ms of one core per capped
-// frame and must earn its place with the device pacing capture.
-constexpr auto kLabPacingActiveWaitMargin = std::chrono::milliseconds(2);
-
-void WaitForLabPacingDeadline(std::chrono::steady_clock::time_point deadline) {
-  using Clock = std::chrono::steady_clock;
-  const auto now = Clock::now();
-  if (now >= deadline) {
-    return;
-  }
-  const auto remaining = deadline - now;
-  if (remaining > kLabPacingActiveWaitMargin) {
-    std::this_thread::sleep_until(deadline - kLabPacingActiveWaitMargin);
-  }
-  while (Clock::now() < deadline) {
-  }
-}
-#endif
-
-#ifdef THEFT4_LAB_BUILD
-void PaceNativePresent(uint32_t submitted_frame, pacing::Sample* observation = nullptr) {
-#else
-void PaceNativePresent(uint32_t submitted_frame) {
-#endif
-  using Clock = std::chrono::steady_clock;
-  using Nanoseconds = std::chrono::nanoseconds;
-
-#ifdef THEFT4_LAB_BUILD
-  if (observation) observation->limiter_begin = rex::chrono::Clock::QueryHostTickCount();
-#endif
-  const uint32_t requested_limit = rex::cvar::Query<uint32_t>("gta4_frame_limit");
-#ifdef THEFT4_LAB_BUILD
-  if (observation) observation->mutex_begin = rex::chrono::Clock::QueryHostTickCount();
-#endif
-  std::unique_lock lock(g_native_frame_limiter_mutex);
-#ifdef THEFT4_LAB_BUILD
-  if (observation) {
-    observation->mutex_acquired = rex::chrono::Clock::QueryHostTickCount();
-    observation->prior_deadline_ns = g_native_frame_limiter_state.next_deadline_ns;
-  }
-#endif
-  const int64_t now_ns =
-      std::chrono::duration_cast<Nanoseconds>(Clock::now().time_since_epoch()).count();
-  const auto decision =
-      gta4::frame_limiter::Plan(g_native_frame_limiter_state, requested_limit, now_ns);
-  g_native_frame_limiter_state = decision.next_state;
-  ++g_native_frame_limiter_present_count;
-#ifdef THEFT4_LAB_BUILD
-  if (observation) {
-    observation->requested_fps = requested_limit;
-    observation->applied_fps = decision.next_state.frames_per_second;
-    observation->decision_ns = now_ns;
-    observation->wait_until_ns = decision.wait_until_ns;
-    observation->next_deadline_ns = decision.next_state.next_deadline_ns;
-    observation->wait_requested = decision.should_wait(now_ns);
-    observation->late_reset = decision.late_reset;
-    observation->mode_changed = decision.mode_changed;
-  }
-#endif
-
-  if (decision.mode_changed) {
-    REXLOG_INFO(
-        "GTA4FrameLimiter point=mode-change frame={} requested-fps={} applied-fps={} "
-        "next-deadline-ns={}",
-        submitted_frame, requested_limit, g_native_frame_limiter_state.frames_per_second,
-        g_native_frame_limiter_state.next_deadline_ns);
-  }
-
-  if (decision.should_wait(now_ns)) {
-#ifdef THEFT4_LAB_BUILD
-    if (observation) {
-      observation->sleep_begin = rex::chrono::Clock::QueryHostTickCount();
-      observation->sleep_begin_ns =
-          std::chrono::duration_cast<Nanoseconds>(Clock::now().time_since_epoch()).count();
-    }
-#endif
-#ifdef THEFT4_LAB_BUILD
-    WaitForLabPacingDeadline(Clock::time_point(Nanoseconds(decision.wait_until_ns)));
-#else
-    std::this_thread::sleep_until(Clock::time_point(Nanoseconds(decision.wait_until_ns)));
-#endif
-  }
-#ifdef THEFT4_LAB_BUILD
-  if (observation) {
-    observation->wake_ns =
-        std::chrono::duration_cast<Nanoseconds>(Clock::now().time_since_epoch()).count();
-    observation->wake = rex::chrono::Clock::QueryHostTickCount();
-  }
-#endif
-
-  if (rex::diagnostics::IsEnabled(rex::diagnostics::Category::kGuestHooks) &&
-      (g_native_frame_limiter_present_count <= 8 ||
-       !(g_native_frame_limiter_present_count % 120))) {
-    const int64_t completed_ns =
-        std::chrono::duration_cast<Nanoseconds>(Clock::now().time_since_epoch()).count();
-    REXLOG_INFO(
-        "GTA4FrameLimiter point=present frame={} sequence={} fps={} wait-requested={} "
-        "late-reset={} call-begin-ns={} call-end-ns={} wait-until-ns={} next-deadline-ns={}",
-        submitted_frame, g_native_frame_limiter_present_count,
-        g_native_frame_limiter_state.frames_per_second, decision.should_wait(now_ns),
-        decision.late_reset, now_ns, completed_ns, decision.wait_until_ns,
-        g_native_frame_limiter_state.next_deadline_ns);
-  }
-#ifdef THEFT4_LAB_BUILD
-  if (observation) {
-    lock.unlock();
-    observation->limiter_end = rex::chrono::Clock::QueryHostTickCount();
-    pacing::capture.Record(*observation);
-  }
-#endif
-}
 
 struct VectorFontOwnerBinding {
   uint32_t owner_slot;
@@ -663,6 +575,38 @@ class ScopedReplayDrawState {
       return;
     }
 
+    // Replay publishes the temporary constants to the renderer. Restoring the
+    // CPU bytes alone leaves its delta state at the replay value. Mark exactly
+    // the restored float groups and booleans for the next ordinary submission.
+    // These are the same MSB-first, four-register groups as NativeConstantDirtyLayout.
+    constexpr size_t kVertexBytes = 0x1000;
+    constexpr size_t kPixelBytes = 0xE00;
+    constexpr size_t kGroupBytes = 64;
+    static_assert(kReplayShaderConstantsSize == kVertexBytes + kPixelBytes);
+    std::array<uint64_t, 5> restored_dirty{};
+    const uint8_t* applied = GuestPointer(base_, device_ + kReplayShaderConstantsOffset);
+    const auto changed_groups = [&](size_t start, size_t size) {
+      const uint8_t* before = applied + start;
+      const uint8_t* after = backup_.shader_constants.data() + start;
+      uint64_t mask = 0;
+      if (std::memcmp(before, after, size) != 0) {
+        for (size_t offset = 0; offset < size; offset += kGroupBytes) {
+          if (std::memcmp(before + offset, after + offset, kGroupBytes) != 0) {
+            mask |= (uint64_t{1} << 63) >> (offset / kGroupBytes);
+          }
+        }
+      }
+      return mask;
+    };
+    restored_dirty[0] = changed_groups(0, kVertexBytes);
+    restored_dirty[1] = changed_groups(kVertexBytes, kPixelBytes);
+    if (std::memcmp(GuestPointer(base_, device_ + kReplayVertexBooleansOffset),
+                    backup_.vertex_booleans.data(), backup_.vertex_booleans.size()) != 0 ||
+        std::memcmp(GuestPointer(base_, device_ + kReplayPixelBooleansOffset),
+                    backup_.pixel_booleans.data(), backup_.pixel_booleans.size()) != 0) {
+      restored_dirty[4] = uint64_t{1} << 56;
+    }
+
     std::memcpy(GuestPointer(base_, device_ + kReplayFetchStateOffset), backup_.fetch_state.data(),
                 backup_.fetch_state.size());
     std::memcpy(GuestPointer(base_, device_ + kReplayShaderConstantsOffset),
@@ -673,6 +617,17 @@ class ScopedReplayDrawState {
                 backup_.pixel_booleans.data(), backup_.pixel_booleans.size());
     std::memcpy(GuestPointer(base_, device_ + kReplayFixedStateOffset), backup_.fixed_state.data(),
                 backup_.fixed_state.size());
+
+    // Keep pre-existing dirty work. The packed guest words are big-endian;
+    // memcpy avoids adding alignment assumptions to the restoration scope.
+    for (size_t word = 0; word < restored_dirty.size(); ++word) {
+      if (!restored_dirty[word]) continue;
+      uint8_t* destination = GuestPointer(base_, device_ + uint32_t(word * sizeof(uint64_t)));
+      uint64_t guest_word;
+      std::memcpy(&guest_word, destination, sizeof(guest_word));
+      guest_word |= __builtin_bswap64(restored_dirty[word]);
+      std::memcpy(destination, &guest_word, sizeof(guest_word));
+    }
   }
 
   ScopedReplayDrawState(const ScopedReplayDrawState&) = delete;
@@ -2636,6 +2591,9 @@ double GetExteriorReflectionCaptureDistance() {
   if (selection == "far") {
     return 80.0;
   }
+  if (selection == "near") {
+    return 20.0;
+  }
   return 40.0;
 }
 
@@ -2696,6 +2654,30 @@ bool QueryNativeDeviceCapabilities(DeviceCapabilitiesResult& result) {
   return false;
 }
 
+bool QueryNativeTemporalUpscaler(uint32_t output_width, uint32_t output_height,
+                                uint64_t sequence, TemporalUpscalerResult& result) {
+  const auto requested = rex::cvar::GetFlagByName("gta4_native_upscaler");
+  if (requested != "fsr3" && requested != "dlss") return false;
+  QueryTemporalUpscalerCommand command;
+  command.provider = requested == "fsr3" ? TemporalUpscalerProvider::kFsr3
+                                        : TemporalUpscalerProvider::kDlss;
+  const auto quality = rex::cvar::GetFlagByName("gta4_temporal_upscaler_quality");
+  if (quality == "native") command.quality = TemporalUpscalerQuality::kNative;
+  else if (quality == "quality") command.quality = TemporalUpscalerQuality::kQuality;
+  else if (quality == "balanced") command.quality = TemporalUpscalerQuality::kBalanced;
+  else if (quality == "performance") command.quality = TemporalUpscalerQuality::kPerformance;
+  else if (quality == "ultra_performance") command.quality = TemporalUpscalerQuality::kUltraPerformance;
+  else return false;
+  command.output_width = output_width;
+  command.output_height = output_height;
+  command.sequence = sequence;
+  if (auto* graphics = GetNativeGraphicsSystem()) {
+    return graphics->ExecuteTitleCommand(kTitleId, kTitleCommandAbi, &command, sizeof(command),
+                                         &result, sizeof(result));
+  }
+  return false;
+}
+
 SupersampledExtent GetNativePrimaryPhysicalExtent(uint32_t logical_width, uint32_t logical_height) {
   const uint32_t pixel_factor =
       g_native_supersampling_effective_factor.load(std::memory_order_acquire);
@@ -2716,12 +2698,27 @@ SupersampledExtent GetNativePrimaryPhysicalExtent(uint32_t logical_width, uint32
 }
 
 void ApplyShadowDistanceScale(uint8_t* base) {
-  const double configured_scale = REXCVAR_GET(gta4_shadow_distance_scale);
+  // Below the stock range the shadow volume no longer contains tall nearby
+  // casters: vehicle and ped shadows sink into the ground, leaving a sliver
+  // under the body. Only longer ranges are allowed.
+  const double configured_scale = std::max(
+      1.0, REXCVAR_GET(gta4_shadow_distance_scale) * REXCVAR_GET(gta4_shadow_distance_guard_factor));
   static std::mutex shadow_range_mutex;
   static bool originals_captured = false;
   static std::array<float, kNativeShadowContextCount> original_ranges{};
 
   std::lock_guard lock(shadow_range_mutex);
+  // Fewer directional shadow cascades for CPU-bound hosts (0 keeps stock).
+  if (const uint32_t cascades = REXCVAR_GET(gta4_shadow_cascade_count); cascades != 0) {
+    for (uint32_t context = 0; context < kNativeShadowContextCount; ++context) {
+      const uint32_t address =
+          kShadowQualityTable + context * kShadowQualityContextStride + kShadowQualityCascadeOffset;
+      const uint32_t stock = LoadU32(base, address);
+      if (cascades < stock) {
+        StoreU32(base, address, cascades);
+      }
+    }
+  }
   if (!originals_captured) {
     std::array<float, kNativeShadowContextCount> candidate_ranges{};
     for (uint32_t context = 0; context < kNativeShadowContextCount; ++context) {
@@ -2779,6 +2776,23 @@ struct NativeResolutionOverride {
   bool active() const { return override_width || override_height; }
 };
 
+// The display window's physical size. On Android the game activity is locked
+// to landscape, but on phones whose natural orientation is portrait the window
+// can still be portrait when the title picks its resolution, before the
+// rotation lands. That baked a portrait-shaped output (a 1440x3120 phone got a
+// narrow strip in the middle of the landscape screen), so take the landscape
+// shape of whatever size the window has right now.
+std::pair<uint32_t, uint32_t> LandscapeDrawableSize() {
+  auto* runtime = rex::Runtime::instance();
+  auto* window = runtime ? runtime->display_window() : nullptr;
+  uint32_t width = window ? window->GetActualPhysicalWidth() : 0;
+  uint32_t height = window ? window->GetActualPhysicalHeight() : 0;
+#if REX_PLATFORM_ANDROID
+  if (height > width) std::swap(width, height);
+#endif
+  return {width, height};
+}
+
 NativeResolutionOverride GetNativeResolutionOverride(uint32_t requested_width,
                                                      uint32_t requested_height) {
   int32_t configured_width = REXCVAR_GET(video_mode_width);
@@ -2804,10 +2818,7 @@ NativeResolutionOverride GetNativeResolutionOverride(uint32_t requested_width,
   // so GTA IV constructs its render graph and projection for the display's
   // physical pixel resolution and aspect ratio from the first frame.
   if (!override_width && !override_height) {
-    auto* runtime = rex::Runtime::instance();
-    auto* window = runtime ? runtime->display_window() : nullptr;
-    const uint32_t display_width = window ? window->GetActualPhysicalWidth() : 0;
-    const uint32_t display_height = window ? window->GetActualPhysicalHeight() : 0;
+    const auto [display_width, display_height] = LandscapeDrawableSize();
     if (display_width && display_height) {
       configured_width = int32_t(display_width);
       configured_height = int32_t(display_height);
@@ -2832,18 +2843,23 @@ NativeResolutionOverride GetNativeResolutionOverride(uint32_t requested_width,
   // Resolution selects a pixel budget; aspect selects a shape within it. Auto
   // follows the drawable even with an explicit resolution preset. Limit both
   // dimensions uniformly before fitting, avoiding independent 4095px clamps.
-  auto* aspect_runtime = rex::Runtime::instance();
-  auto* aspect_window = aspect_runtime ? aspect_runtime->display_window() : nullptr;
-  const gta4::aspect::Extent drawable{
-      aspect_window ? aspect_window->GetActualPhysicalWidth() : 0,
-      aspect_window ? aspect_window->GetActualPhysicalHeight() : 0};
+  const auto [drawable_width, drawable_height] = LandscapeDrawableSize();
+  const gta4::aspect::Extent drawable{drawable_width, drawable_height};
   const auto selected = gta4::aspect::resolution::Select(
       gta4::aspect::resolution::Limit({result.display_width, result.display_height}, 0x0FFF),
       REXCVAR_GET(gta4_aspect_ratio), drawable);
   result.display_width = result.width = selected.width;
   result.display_height = result.height = selected.height;
-  result.override_width |= selected.width != requested_width;
-  result.override_height |= selected.height != requested_height;
+  if (const uint32_t cap = REXCVAR_GET(gta4_output_height_cap);
+      cap >= 360 && result.display_height > cap) {
+    // Same shape, fewer output pixels: FSR upscales to this size and the
+    // presenter stretches the result to the display.
+    result.display_width = result.width =
+        std::max(2u, uint32_t(uint64_t(result.display_width) * cap / result.display_height) & ~1u);
+    result.display_height = result.height = cap;
+  }
+  result.override_width |= result.display_width != requested_width;
+  result.override_height |= result.display_height != requested_height;
 
   const uint32_t requested_ssaa_factor =
       GetAntiAliasingRoute(GetActiveAntiAliasingMode()).supersampling_pixel_factor;
@@ -2878,39 +2894,53 @@ NativeResolutionOverride GetNativeResolutionOverride(uint32_t requested_width,
   g_native_supersampling_effective_factor.store(effective_ssaa_factor, std::memory_order_release);
 
   const bool ssaa_active = requested_ssaa_factor > 1u;
-  const bool fsr1_requested = REXCVAR_GET(gta4_native_upscaler) == "fsr1" && !ssaa_active;
+  const bool fsr1_requested = REXCVAR_GET(gta4_native_upscaler) == "fsr1";
+  const bool metalfx_requested=REXCVAR_GET(gta4_native_upscaler)=="metalfx";
   const bool hdr_requested = rex::cvar::Query<bool>("vulkan_hdr");
-  if (fsr1_requested && !hdr_requested) {
-    const std::string& quality = REXCVAR_GET(gta4_fsr1_quality);
-    const double scale = quality == "ultra_quality" ? 1.3
-                         : quality == "balanced"    ? 1.7
-                         : quality == "performance" ? 2.0
-                                                    : 1.5;
-    const uint32_t candidate_width =
-        uint32_t(std::max(1.0, std::round(double(result.display_width) / scale)));
-    const uint32_t candidate_height =
-        uint32_t(std::max(1.0, std::round(double(result.display_height) / scale)));
-    if (candidate_width >= 640 && candidate_height >= 360) {
-      result.width = candidate_width;
-      result.height = candidate_height;
-      result.fsr1_active =
-          result.width < result.display_width || result.height < result.display_height;
-    } else {
-      static std::atomic<bool> logged_small_fsr_input{false};
-      if (!logged_small_fsr_input.exchange(true)) {
-        REXLOG_WARN(
-            "gta4-native-upscaler: FSR 1 {} input {}x{} for display {}x{} is below "
-            "the validated 640x360 render floor; using native resolution",
-            quality, candidate_width, candidate_height, result.display_width,
-            result.display_height);
-      }
+  DeviceCapabilitiesResult upscaling_capabilities{};
+  const bool perceptual_before_hdr = fsr1_requested && hdr_requested &&
+      QueryNativeDeviceCapabilities(upscaling_capabilities) &&
+      (upscaling_capabilities.capabilities & kCapabilityPerceptualPresentationBeforeHdr);
+  const auto upscaling = metalfx_requested
+      ? SelectMetalFxRenderExtent(result.display_width,result.display_height,true,REXCVAR_GET(gta4_fsr1_quality),ssaa_active)
+      : SelectFsr1RenderExtent(result.display_width, result.display_height,
+          fsr1_requested, REXCVAR_GET(gta4_fsr1_quality), ssaa_active, hdr_requested, perceptual_before_hdr);
+  result.width = upscaling.width; result.height = upscaling.height;
+  result.fsr1_active = fsr1_requested&&upscaling.active();
+  const auto selected_upscaler = REXCVAR_GET(gta4_native_upscaler);
+  if (selected_upscaler == "fsr3" || selected_upscaler == "dlss") {
+    TemporalUpscalerResult temporal;
+    const bool ready = !ssaa_active &&
+        QueryNativeTemporalUpscaler(result.display_width, result.display_height, 0, temporal) &&
+        temporal.status == TemporalUpscalerStatus::kReady &&
+        temporal.render_width >= 640 && temporal.render_height >= 360 &&
+        temporal.render_width <= result.display_width && temporal.render_height <= result.display_height;
+    if (ready) {
+      result.width = temporal.render_width;
+      result.height = temporal.render_height;
     }
-  } else if (fsr1_requested && hdr_requested) {
-    static std::atomic<bool> logged_hdr_fsr_fallback{false};
-    if (!logged_hdr_fsr_fallback.exchange(true)) {
-      REXLOG_WARN(
-          "gta4-native-upscaler: FSR 1 requires normalized perceptual input; "
-          "HDR requested, so internal rendering remains native resolution");
+    static std::atomic<uint32_t> temporal_extent_logs{0};
+    if (temporal_extent_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+      REXLOG_INFO("gta4-temporal-upscaler: requested={} quality={} ready={} status={} render={}x{} output={}x{}",
+          selected_upscaler, rex::cvar::GetFlagByName("gta4_temporal_upscaler_quality"), ready,
+          uint32_t(temporal.status), result.width, result.height, result.display_width, result.display_height);
+      if (!ready) REXLOG_WARN("{} is unavailable for this scene/backend; rendering at native resolution", selected_upscaler);
+    }
+  }
+  if(metalfx_requested){
+    static std::atomic<uint32_t> metalfx_extent_logs{0};
+    if(metalfx_extent_logs.fetch_add(1)<8)REXLOG_INFO("gta4-metalfx-upscaler: quality={} selection={} input={}x{} output={}x{}",REXCVAR_GET(gta4_fsr1_quality),uint32_t(upscaling.selection),result.width,result.height,result.display_width,result.display_height);
+  }
+  if (fsr1_requested) {
+    static std::atomic<uint32_t> logged_upscaling{0};
+    if (logged_upscaling.fetch_add(1, std::memory_order_relaxed) < 8) {
+      REXLOG_INFO("gta4-native-upscaler: quality={} selection={} render={}x{} display={}x{} hdr={} perceptual-before-hdr={}",
+          REXCVAR_GET(gta4_fsr1_quality), uint32_t(upscaling.selection), result.width, result.height,
+          result.display_width, result.display_height, hdr_requested, perceptual_before_hdr);
+      if (upscaling.selection == Fsr1Selection::kHdrInputUnsupported)
+        REXLOG_WARN("gta4-native-upscaler: active backend converts to HDR before upscaling; using native resolution");
+      else if (upscaling.selection == Fsr1Selection::kBelowRenderFloor)
+        REXLOG_WARN("gta4-native-upscaler: FSR1 input would fall below the validated 640x360 scene floor; using native resolution");
     }
   }
   {
@@ -3414,14 +3444,52 @@ bool LoadFiniteGuestFloats(uint8_t* base, uint32_t address, std::array<float, Co
   return true;
 }
 
-EnvironmentalDataV1 CaptureEnvironmentalData(uint8_t* base, uint32_t postfx) {
+const FusionTimecycle* CapturedFusionModifier(uint8_t* base, uint32_t address) {
+  if (!g_fusion_cycle_capture) return nullptr;
+  auto it = g_fusion_cycle_capture->temporary_modifiers.find(address);
+  if (it != g_fusion_cycle_capture->temporary_modifiers.end()) return &it->second;
+  // Retail modifier table: 200 records, 188 bytes each, name hash at offset zero.
+  if (address >= 0x82D2BD18 && address < 0x82D34FF8 &&
+      (address - 0x82D2BD18) % 188 == 0)
+    return FindFusionModifier(LoadU32(base, address));
+  return nullptr;
+}
+
+EnvironmentalDataV2 CaptureEnvironmentalData(uint8_t* base, uint32_t postfx) {
   static std::atomic<uint64_t> source_sequence{0};
-  EnvironmentalDataV1 data{};
+  EnvironmentalDataV2 data{};
   data.byte_size = sizeof(data);
   data.source_sequence = source_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
 
-  // No retail clock/weather ABI or timecycext producer has been established.
-  // Leave fog fields invalid; fixed host-effect defaults are not guest data.
+  const uint32_t render_index = LoadU32(base, kPostFxTimecycleIndexGlobal);
+  if (render_index < g_fusion_cycles.size()) {
+    std::lock_guard lock(g_fusion_cycle_mutex);
+    const auto& cycle = g_fusion_cycles[render_index];
+    data.fog_far_clip = std::bit_cast<float>(LoadU32(base,
+        kCloudDoubleBufferBase + render_index * kCloudDoubleBufferStride + 68));
+    if (std::isfinite(data.fog_far_clip) && data.fog_far_clip > 0)
+      data.valid_fields |= EnvironmentalFieldBit(EnvironmentalField::kFogFarClip);
+    if (cycle.valid) {
+      data.fog_density = cycle.values.values[0];
+      data.fog_height_falloff = cycle.values.values[1];
+      data.fog_altitude_tweak = cycle.values.values[2];
+      data.fog_power = cycle.values.values[3];
+      data.sun_shafts_intensity = cycle.values.values[4];
+      data.valid_fields |= EnvironmentalFieldBit(EnvironmentalField::kFogDensity) |
+          EnvironmentalFieldBit(EnvironmentalField::kFogHeightFalloff) |
+          EnvironmentalFieldBit(EnvironmentalField::kFogAltitudeTweak) |
+          EnvironmentalFieldBit(EnvironmentalField::kFogPower) |
+          EnvironmentalFieldBit(EnvironmentalField::kSunShaftIntensity);
+    }
+  }
+  if (g_captured_sun_payload.sky_valid) {
+    data.azimuth_color_height = g_captured_sun_payload.azimuth_color_height;
+    data.azimuth_east_strength = g_captured_sun_payload.azimuth_east_strength;
+    data.sky_color_exposure = g_captured_sun_payload.sky_color_exposure;
+    data.valid_fields |= EnvironmentalFieldBit(EnvironmentalField::kAzimuthColorHeight) |
+        EnvironmentalFieldBit(EnvironmentalField::kAzimuthEastStrength) |
+        EnvironmentalFieldBit(EnvironmentalField::kSkyColorExposure);
+  }
 
   if (g_captured_sun_payload.direction_valid) {
     data.sun_direction = g_captured_sun_payload.direction;
@@ -3472,6 +3540,8 @@ EnvironmentalDataV1 CaptureEnvironmentalData(uint8_t* base, uint32_t postfx) {
     if (LoadFiniteGuestFloats(base, viewport + kViewportViewProjectionOffset,
                               data.view_projection_matrix)) {
       data.valid_fields |= EnvironmentalFieldBit(EnvironmentalField::kViewProjectionMatrix);
+      if (InvertEnvironmentalMatrix(data.view_projection_matrix, data.inverse_view_projection_matrix))
+        data.valid_fields |= EnvironmentalFieldBit(EnvironmentalField::kInverseViewProjectionMatrix);
     }
     if (LoadFiniteGuestFloats(base, viewport + kViewportCameraPositionOffset,
                               data.camera_position)) {
@@ -3501,6 +3571,8 @@ void SubmitEnvironmentalData(uint8_t* base, uint32_t device, uint32_t postfx) {
   }
 }
 
+#include "gta4_temporal_hooks.inc"
+
 bool ShouldLogNativeHookCall(uint64_t call_count) {
   return call_count != 0 && rex::diagnostics::IsEnabled(rex::diagnostics::Category::kGuestHooks) &&
          (call_count <= 32 || !(call_count % 4096));
@@ -3514,7 +3586,7 @@ uint64_t NextNativeHookDiagnosticCall(std::atomic<uint64_t>& counter) {
 }
 
 void SubmitRenderPhaseMarker(uint32_t device, RenderPhase phase, RenderPhaseEvent event,
-                             uint32_t object, uint32_t caller) {
+                             uint32_t object, uint32_t caller, uint32_t half_scene_texture = 0) {
   if (!device) {
     return;
   }
@@ -3524,14 +3596,16 @@ void SubmitRenderPhaseMarker(uint32_t device, RenderPhase phase, RenderPhaseEven
   marker.event = event;
   marker.object = object;
   marker.caller = caller;
+  marker.half_scene_texture = half_scene_texture;
   SubmitNativeCommand(marker);
 }
 
 class ScopedRenderPhaseMarker {
  public:
-  ScopedRenderPhaseMarker(uint32_t device, RenderPhase phase, uint32_t object, uint32_t caller)
+  ScopedRenderPhaseMarker(uint32_t device, RenderPhase phase, uint32_t object, uint32_t caller,
+                          uint32_t half_scene_texture = 0)
       : device_(device), phase_(phase), object_(object), caller_(caller) {
-    SubmitRenderPhaseMarker(device_, phase_, RenderPhaseEvent::kBegin, object_, caller_);
+    SubmitRenderPhaseMarker(device_, phase_, RenderPhaseEvent::kBegin, object_, caller_, half_scene_texture);
   }
 
   ~ScopedRenderPhaseMarker() {
@@ -3781,7 +3855,7 @@ bool SubmitNativeVertexDeclaration(uint8_t* base, uint32_t device, uint32_t decl
   }
 
   bool log_declaration = false;
-  if (rex::diagnostics::IsEnabled(rex::diagnostics::Category::kNativeTrace)) {
+  {
     std::lock_guard lock(g_vertex_declaration_diagnostic_mutex);
     if (g_logged_vertex_declarations.size() < kVertexDeclarationDiagnosticLimit) {
       log_declaration = g_logged_vertex_declarations.emplace(declaration, true).second;
@@ -3999,15 +4073,20 @@ bool SubmitCapturedNativeCommand(PPCContext& ctx, uint8_t* base, uint32_t device
         PhoneGuestStateText(phone_replay.live)));
   }
   bool accepted = false;
+  const bool trace_fire_replay = FireTraceConfig().enabled &&
+      (g_fire_context.occurrence || captured.fire_capture);
+  const auto fire_live = trace_fire_replay ? CaptureFireReplayState(base, device) : FireReplayState{};
   {
     ScopedReplayDrawState replay_state(base, device, captured.draw_snapshot);
+    const auto fire_applied = trace_fire_replay ? CaptureFireReplayState(base, device) : FireReplayState{};
     if (trace_gbuffer_replay) {
       const auto [constants_hash, transform_hash] = capture_live_hashes();
       log_replay_state("cached-draw-replay-applied", CaptureLiveVertexTransform(base, device),
                        constants_hash, transform_hash, false);
     }
+    if(IsDrawCommandType(captured.type))temporal_host::Draw(base,device);
     accepted = (g_fire_context.occurrence || captured.fire_capture)
-        ? SubmitFireTracedCommand(bytes.data(), bytes.size(), device, captured.fire_capture.get(), command_list, replay_command_ordinal)
+        ? SubmitFireTracedCommand(bytes.data(), bytes.size(), device, captured.fire_capture.get(), command_list, replay_command_ordinal, &fire_live, &fire_applied)
         : TvDetailActive() ? SubmitTvTracedCommand(bytes.data(), bytes.size(), device)
         : SubmitPhoneTracedCommand(bytes.data(), bytes.size(), device,
                                    trace_phone_replay ? &phone_replay : nullptr);
@@ -4472,9 +4551,21 @@ extern "C" void sub_828C6620(PPCContext& ctx, uint8_t* base) {
 }
 
 extern "C" void sub_828C4338(PPCContext& ctx, uint8_t* base) {
+  // The executed model, not its outer model-list, distinguishes rigid submodels
+  // that share a vertex stream. r5 is a material bucket in this entry point.
+  temporal_host::Scope temporal_scope(temporal_host::instance.matrix, ctx.r3.u32,
+                                      temporal_host::instance.pose);
   FireModelEntry(ctx, base);
   TraceKnownOffscreenTransformTransition("offscreen-transition-model-materials", ctx, base,
                                          __imp__sub_828C4338);
+}
+
+extern "C" void sub_828C4578(PPCContext& ctx, uint8_t* base) {
+  // Skinned submodels retain the owning transform/skeleton from D4268 while
+  // capturing the model actually being executed in this nested call.
+  temporal_host::Scope temporal_scope(temporal_host::instance.matrix, ctx.r3.u32,
+                                      temporal_host::instance.pose);
+  __imp__sub_828C4578(ctx, base);
 }
 
 extern "C" void sub_821BE8A0(PPCContext& ctx, uint8_t* base) {
@@ -4483,11 +4574,14 @@ extern "C" void sub_821BE8A0(PPCContext& ctx, uint8_t* base) {
 }
 
 extern "C" void sub_828D41A8(PPCContext& ctx, uint8_t* base) {
+  // This rigid-model entry passes r6 through as the material bucket, not a pose.
+  temporal_host::Scope temporal_scope(ctx.r5.u32, ctx.r3.u32, 0);
   TraceKnownOffscreenTransformTransition("offscreen-transition-model-list-caller", ctx, base,
                                          __imp__sub_828D41A8);
 }
 
 extern "C" void sub_828D4268(PPCContext& ctx, uint8_t* base) {
+  temporal_host::Scope temporal_scope(ctx.r5.u32?ctx.r5.u32:ctx.r6.u32,ctx.r3.u32,ctx.r6.u32);
   TraceKnownOffscreenTransformTransition("offscreen-transition-model-transform-caller", ctx, base,
                                          __imp__sub_828D4268);
 }
@@ -4668,20 +4762,95 @@ extern "C" void sub_8266F7D8(PPCContext& ctx, uint8_t* base) {
 }
 
 extern "C" void sub_82670840(PPCContext& ctx, uint8_t* base) {
-  if (IsNativeMode() && ctx.r3.u32) {
-    CapturedSunPayload captured = g_captured_sun_payload;
-    captured.direction_valid =
-        LoadFiniteGuestFloats(base, ctx.r3.u32 + kSkySunDirectionOffset, captured.direction);
-    captured.color_valid =
-        LoadFiniteGuestFloats(base, ctx.r3.u32 + kSkySunColorOffset, captured.color);
-    if (captured.direction_valid) {
-      // The Xbox upload replaces the fourth source lane with abs(direction.y).
-      // The native projection contract consumes a world-space direction (w=0).
-      captured.direction[3] = 0.0f;
-    }
-    g_captured_sun_payload = captured;
-  }
+  const uint32_t sky = ctx.r3.u32;
+  const uint32_t render_context = ctx.r4.u32;
   __imp__sub_82670840(ctx, base);
+  if (!IsNativeMode() || !sky) return;
+  CapturedSunPayload captured{};
+  captured.direction_valid =
+      LoadFiniteGuestFloats(base, sky + kSkySunDirectionOffset, captured.direction);
+  captured.color_valid =
+      LoadFiniteGuestFloats(base, sky + kSkySunColorOffset, captured.color);
+  if (captured.direction_valid) {
+    // Sky shader coordinates are Y-up; viewport/world coordinates are Z-up.
+    captured.direction = {captured.direction[0], -captured.direction[2],
+                          captured.direction[1], 0.0f};
+  }
+  captured.color[3] = std::bit_cast<float>(LoadU32(base, sky + 0x40));
+  captured.color_valid &= std::isfinite(captured.color[3]);
+  captured.sky_valid =
+      LoadFiniteGuestFloats(base, sky + 0x110, captured.azimuth_color_height) &&
+      LoadFiniteGuestFloats(base, sky + 0x120, captured.azimuth_east_strength) &&
+      LoadFiniteGuestFloats(base, sky + 0x100, captured.sky_color_exposure);
+  captured.azimuth_color_height[3] = std::bit_cast<float>(LoadU32(base, sky + 0x140));
+  captured.azimuth_east_strength[3] = std::bit_cast<float>(LoadU32(base, sky + 0x144));
+  captured.sky_color_exposure[3] = std::bit_cast<float>(LoadU32(base, sky + 0x30));
+  captured.sky_valid &= std::isfinite(captured.azimuth_color_height[3]) &&
+      std::isfinite(captured.azimuth_east_strength[3]) &&
+      std::isfinite(captured.sky_color_exposure[3]);
+  g_captured_sun_payload = captured;
+  // Publish before deferred fog, rather than waiting until the final composite.
+  if (render_context) SubmitEnvironmentalData(base, LoadU32(base, render_context + 24), 0);
+}
+
+// sub_822CC388 interpolates the base cycle; sub_822CC940 then applies the
+// title's per-view far-clip modifiers. FusionFix's default baseline is 4500.
+extern "C" void sub_822CC388(PPCContext& ctx, uint8_t* base) {
+  const uint32_t cycle = ctx.r3.u32;
+  __imp__sub_822CC388(ctx, base);
+  if (IsNativeMode() && cycle && REXCVAR_GET(gta4_modern_shaders))
+    StoreU32(base, cycle + 68, std::bit_cast<uint32_t>(4500.0f));
+}
+
+extern "C" void sub_822CC940(PPCContext& ctx, uint8_t* base) {
+  if (!IsNativeMode()) { __imp__sub_822CC940(ctx, base); return; }
+  FusionCycleCapture capture;
+  capture.destination = ctx.r5.u32;
+  const int32_t hour_override = int32_t(LoadU32(base, 0x82DF3928));
+  const int32_t minute_override = int32_t(LoadU32(base, 0x82DF3920));
+  const float hour = float(hour_override == -1 ? LoadU32(base, 0x82DF3924) : hour_override);
+  const float minute = float(minute_override == -1 ? LoadU32(base, 0x82DF391C) : minute_override);
+  const float second = float(LoadU32(base, 0x82DF3918));
+  capture.valid = SampleFusionTimecycle(hour + minute / 60.0f + second / 3600.0f,
+      LoadU32(base, 0x82FEFD6C), LoadU32(base, 0x82FEFD68),
+      std::bit_cast<float>(LoadU32(base, 0x82FEFD58)), capture.values);
+  auto* previous = g_fusion_cycle_capture;
+  g_fusion_cycle_capture = &capture;
+  __imp__sub_822CC940(ctx, base);
+  g_fusion_cycle_capture = previous;
+  if (capture.destination >= kCloudDoubleBufferBase) {
+    const uint32_t relative = capture.destination - kCloudDoubleBufferBase;
+    const uint32_t index = relative / kCloudDoubleBufferStride;
+    if (relative % kCloudDoubleBufferStride == 0 && index < g_fusion_cycles.size()) {
+      std::lock_guard lock(g_fusion_cycle_mutex);
+      g_fusion_cycles[index] = {capture.values, capture.valid};
+    }
+  }
+}
+
+extern "C" void sub_822C7A08(PPCContext& ctx, uint8_t* base) {
+  if (g_fusion_cycle_capture && g_fusion_cycle_capture->valid)
+    g_fusion_cycle_capture->temporary_modifiers[ctx.r3.u32] = g_fusion_cycle_capture->values;
+  __imp__sub_822C7A08(ctx, base);
+}
+
+extern "C" void sub_822C7C00(PPCContext& ctx, uint8_t* base) {
+  if (g_fusion_cycle_capture && g_fusion_cycle_capture->valid) {
+    const auto* modifier = CapturedFusionModifier(base, ctx.r4.u32);
+    auto it = g_fusion_cycle_capture->temporary_modifiers.find(ctx.r3.u32);
+    if (modifier && it != g_fusion_cycle_capture->temporary_modifiers.end())
+      ApplyFusionModifier(it->second, *modifier, float(ctx.f1.f64));
+  }
+  __imp__sub_822C7C00(ctx, base);
+}
+
+extern "C" void sub_822C89D0(PPCContext& ctx, uint8_t* base) {
+  if (g_fusion_cycle_capture && g_fusion_cycle_capture->valid &&
+      ctx.r3.u32 == g_fusion_cycle_capture->destination) {
+    if (const auto* modifier = CapturedFusionModifier(base, ctx.r4.u32))
+      ApplyFusionModifier(g_fusion_cycle_capture->values, *modifier, float(ctx.f1.f64));
+  }
+  __imp__sub_822C89D0(ctx, base);
 }
 
 extern "C" void sub_821F1670(PPCContext& ctx, uint8_t* base) {
@@ -4809,8 +4978,19 @@ extern "C" void sub_824F3418(PPCContext& ctx, uint8_t* base) {
   }
 }
 
+// Complete local lifts keep the stock 300-unit remapping boundary in step
+// with the distance input. No shared guest constant is modified.
+// Theft4: gta4_draw_distance_guest.inc is translated game code (retail PPC lifted by
+// derive_draw_distance_hooks.py) and is not part of this repository. Without it the
+// game's own sub_821D6260 / sub_821D8CD8 run (stock 300-unit remap boundary).
+#if __has_include("gta4_draw_distance_guest.inc")
+#include "gta4_draw_distance_guest.inc"
+#endif
+
 extern "C" void sub_821DFFE8(PPCContext& ctx, uint8_t* base) {
-  const double configured_scale = REXCVAR_GET(gta4_draw_distance_scale);
+  const double configured_scale =
+      REXCVAR_GET(gta4_draw_distance_scale) *
+      (REXCVAR_GET(gta4_dynamic_draw_distance) ? REXCVAR_GET(gta4_draw_distance_dynamic_factor) : 1.0);
   if (!IsNativeMode()) {
     __imp__sub_821DFFE8(ctx, base);
     return;
@@ -4818,6 +4998,16 @@ extern "C" void sub_821DFFE8(PPCContext& ctx, uint8_t* base) {
 
   const float effective_scale = gta4::draw_distance::ResolveEngineScale(configured_scale);
   StoreU32(base, kDistanceScaleInputGlobal, std::bit_cast<uint32_t>(effective_scale));
+  {
+    // The 30 FPS guard changes the shadow range at run time; the quality
+    // table is otherwise written only when the shadow map is sized.
+    static double applied_guard = 1.0;
+    const double guard = REXCVAR_GET(gta4_shadow_distance_guard_factor);
+    if (guard != applied_guard) {
+      applied_guard = guard;
+      ApplyShadowDistanceScale(base);
+    }
+  }
   __imp__sub_821DFFE8(ctx, base);
 
   static std::atomic<uint64_t> override_count{0};
@@ -4921,11 +5111,15 @@ extern "C" void sub_82A47E28(PPCContext& ctx, uint8_t* base) {
     InvokeGuest(ctx, base, __imp__sub_82A46EA8, live_fence, selector_tree, replay_mask);
   }
 
-  StoreU64(base, device + 32, ~LoadU64(base, command_list + 96));
-  StoreU64(base, device, ~LoadU64(base, command_list + 64));
-  StoreU64(base, device + 8, ~LoadU64(base, command_list + 72));
-  StoreU64(base, device + 16, ~LoadU64(base, command_list + 80));
-  StoreU64(base, device + 24, ~LoadU64(base, command_list + 88));
+  // Unlike the original GPU-list prefix, native replay has not consumed the
+  // inherited CPU changes here. Keep them pending, including restoration from
+  // a previous replay. An empty or selector-filtered list must not erase them.
+  for (uint32_t word = 0; word < NativeDirtyState{}.words.size(); ++word) {
+    const uint32_t dirty_address = device + word * sizeof(uint64_t);
+    StoreU64(base, dirty_address,
+             LoadU64(base, dirty_address) |
+                 ~LoadU64(base, command_list + 64 + word * sizeof(uint64_t)));
+  }
 
   uint64_t selected_count = 0;
   uint64_t submitted_count = 0;
@@ -5111,6 +5305,93 @@ extern "C" void sub_82A3B540(PPCContext& ctx, uint8_t* base) {
   StoreU32(base, device + 10440, packed_bottom_right);
 }
 
+#if defined(__ANDROID__)
+#include <android/log.h>
+#define SHADOW_TRACE(...)   __android_log_print(ANDROID_LOG_WARN, "LibertyRecomp", "%s", fmt::format(__VA_ARGS__).c_str())
+#else
+#define SHADOW_TRACE(...) REXLOG_WARN(__VA_ARGS__)
+#endif
+// Diagnostics: how the six render targets made by the shadow initializer
+// (sub_82270A08) are bound, cleared, resolved and sampled, for N frames.
+REXCVAR_DEFINE_UINT32(gta4_trace_shadow_targets, 0, "GTA IV/Diagnostics",
+                      "Log binds, clears, resolves and samples of the shadow render targets "
+                      "for this many frames (change the value to trace again)")
+    .range(0, 8);
+
+namespace {
+// Globals written by sub_82270A08 with each created render target (8Bx8B
+// color, 4BxB color, 5Bx5B depth, 5Bx5B color, BxB depth, BxB color).
+constexpr std::array<uint32_t, 6> kShadowTargetGlobals = {0x82C58D48, 0x82C58D44, 0x82C58D5C,
+                                                          0x82C58D60, 0x82C58D58, 0x82C58D54};
+constexpr std::array<const char*, 6> kShadowTargetNames = {"8Bx8B", "4BxB", "5B-depth",
+                                                           "5B-color", "B-depth", "B-color"};
+uint32_t g_shadow_trace_value = 0;
+uint32_t g_shadow_trace_start = 0;
+
+int ShadowTargetIndex(uint8_t* base, uint32_t handle, bool texture) {
+  if (!handle) return -1;
+  for (size_t i = 0; i < kShadowTargetGlobals.size(); ++i) {
+    const uint32_t wrapper = LoadU32(base, kShadowTargetGlobals[i]);
+    if (!wrapper) continue;
+    const uint32_t object = LoadU32(base, wrapper + (texture ? 72 : 64));
+    if (object == handle) return int(i);
+  }
+  return -1;
+}
+
+std::string ShadowTargetFetch(uint8_t* base, uint32_t texture) {
+  if (!texture) return "-";
+  return fmt::format("{:08X},{:08X},{:08X},{:08X},{:08X},{:08X}", LoadU32(base, texture + 28),
+                     LoadU32(base, texture + 32), LoadU32(base, texture + 36),
+                     LoadU32(base, texture + 40), LoadU32(base, texture + 44),
+                     LoadU32(base, texture + 48));
+}
+
+bool ShadowTraceActive(uint8_t* base) {
+  const uint32_t frames = REXCVAR_GET(gta4_trace_shadow_targets);
+  static std::atomic<uint32_t> heartbeat{0};
+  if ((heartbeat.fetch_add(1, std::memory_order_relaxed) & 0x3FFF) == 0) {
+    SHADOW_TRACE("shadow-trace: heartbeat value={} frame={}", frames,
+                 GetNativeLightSubmittedFrame(base));
+  }
+  if (!frames) {
+    g_shadow_trace_value = 0;
+    return false;
+  }
+  const uint32_t frame = GetNativeLightSubmittedFrame(base);
+  if (g_shadow_trace_value != frames) {
+    g_shadow_trace_value = frames;
+    g_shadow_trace_start = frame;
+    for (size_t i = 0; i < kShadowTargetGlobals.size(); ++i) {
+      const uint32_t wrapper = LoadU32(base, kShadowTargetGlobals[i]);
+      const uint32_t surface = wrapper ? LoadU32(base, wrapper + 64) : 0;
+      const uint32_t texture = wrapper ? LoadU32(base, wrapper + 72) : 0;
+      const SurfaceDescriptor d = CaptureSurfaceDescriptor(base, surface);
+      SHADOW_TRACE(
+          "shadow-trace: target={} {} wrapper={:08X} surface={:08X} flags={:08X} base={:08X} "
+          "address={:08X} format={:08X} size={}x{} samples={} texture={:08X} fetch={}",
+          i, kShadowTargetNames[i], wrapper, surface, d.flags, d.base, d.address, d.format,
+          d.width, d.height, d.sample_type, texture, ShadowTargetFetch(base, texture));
+    }
+  }
+  return frame - g_shadow_trace_start < frames;
+}
+
+int ShadowBoundTarget(uint8_t* base, uint32_t device, uint32_t* slot = nullptr) {
+  for (uint32_t index = 0; index < 4; ++index) {
+    const int target =
+        ShadowTargetIndex(base, LoadU32(base, device + (kRenderTargetBase + index) * 4), false);
+    if (target >= 0) {
+      if (slot) *slot = index;
+      return target;
+    }
+  }
+  const int depth = ShadowTargetIndex(base, LoadU32(base, device + kDepthStencilOffset), false);
+  if (depth >= 0 && slot) *slot = 4;
+  return depth;
+}
+}  // namespace
+
 extern "C" void sub_82A3BF50(PPCContext& ctx, uint8_t* base) {
   if (!IsNativeMode()) {
     __imp__sub_82A3BF50(ctx, base);
@@ -5124,6 +5405,16 @@ extern "C" void sub_82A3BF50(PPCContext& ctx, uint8_t* base) {
   command.device = device;
   command.index = index;
   command.surface = CaptureSurfaceDescriptor(base, surface);
+  if (ShadowTraceActive(base)) {
+    const int target = ShadowTargetIndex(base, surface, false);
+    if (target >= 0 || index == 0) {
+      SHADOW_TRACE("shadow-trace: frame={} bind-rt index={} surface={:08X} target={} base={:08X} "
+                  "size={}x{} format={:08X} caller={:08X}",
+                  GetNativeLightSubmittedFrame(base), index, surface, target, command.surface.base,
+                  command.surface.width, command.surface.height, command.surface.format,
+                  uint32_t(ctx.lr));
+    }
+  }
   SubmitNativeCommand(command);
 }
 
@@ -5180,6 +5471,13 @@ extern "C" void sub_82A3C2B8(PPCContext& ctx, uint8_t* base) {
   command.surface = CaptureSurfaceDescriptor(base, surface);
   command.trace_wrapper = surface;
   command.trace_caller = uint32_t(ctx.lr);
+  if (ShadowTraceActive(base)) {
+    SHADOW_TRACE("shadow-trace: frame={} bind-depth surface={:08X} target={} base={:08X} "
+                "size={}x{} caller={:08X}",
+                GetNativeLightSubmittedFrame(base), surface, ShadowTargetIndex(base, surface, false),
+                command.surface.base, command.surface.width, command.surface.height,
+                uint32_t(ctx.lr));
+  }
   SubmitNativeCommand(command);
 }
 
@@ -5283,7 +5581,7 @@ extern "C" void sub_82A441F8(PPCContext& ctx, uint8_t* base) {
 extern "C" void D3DResource_Release(PPCContext& ctx, uint8_t* base) {
   const bool native_mode = IsNativeMode();
   const uint32_t resource = ctx.r3.u32;
-  REX_ORIGINAL_FUNC(D3DResource_Release)(ctx, base);
+  __imp__D3DResource_Release(ctx, base);
 
   // The generated implementation returns zero only after the guest reference
   // count reaches zero and the resource destructor has run. Notify the native
@@ -5475,6 +5773,15 @@ extern "C" void sub_82A44B78(PPCContext& ctx, uint8_t* base) {
   command.stage = stage;
   command.texture = texture;
   command.vector_font_id = g_vector_font_id;
+  if (ShadowTraceActive(base)) {
+    const int target = ShadowTargetIndex(base, texture, true);
+    if (target >= 0) {
+      SHADOW_TRACE("shadow-trace: frame={} sample stage={} texture={:08X} target={} fetch={} "
+                  "rt0={:08X}",
+                  GetNativeLightSubmittedFrame(base), stage, texture, target,
+                  ShadowTargetFetch(base, texture), LoadU32(base, device + kRenderTargetBase * 4));
+    }
+  }
   GTA4_FontSelectionTraceBinding(g_vector_font_id, g_vector_font_owner, texture, stage);
   SubmitNativeCommand(command);
 }
@@ -5660,6 +5967,7 @@ extern "C" void sub_82A3DF50(PPCContext& ctx, uint8_t* base) {
   for (size_t index = 0; index < command.dirty_state.words.size(); ++index) {
     command.dirty_state.words[index] |= commit_dirty_state.words[index];
   }
+  temporal_host::Draw(base,command.device);
   SubmitNativeCommand(command);
   FreeAlignedGuestAllocation(ctx, base, g_pending_draw_primitive_up.vertex_data);
   g_pending_draw_primitive_up = {};
@@ -5688,6 +5996,7 @@ extern "C" void sub_82A3DF60(PPCContext& ctx, uint8_t* base) {
   command.start_vertex = ctx.r5.u32;
   command.vertex_count = ctx.r6.u32;
   command.dirty_state = ConsumeNativeDrawDirtyState(base, device);
+  temporal_host::Draw(base,command.device);
   SubmitNativeCommand(command);
 }
 
@@ -5776,6 +6085,26 @@ void SubmitNativeResolve(uint8_t* base, uint32_t device, uint32_t flags,
     command.color_exp_bias = int32_t(LoadU32(base, parameters + 4));
     command.depth_format = LoadU32(base, parameters + 8);
   }
+  if (ShadowTraceActive(base)) {
+    const int source_target = ShadowTargetIndex(base, source_surface, false);
+    const int destination_target = ShadowTargetIndex(base, destination_texture, true);
+    if (source_target >= 0 || destination_target >= 0) {
+      SHADOW_TRACE(
+          "shadow-trace: frame={} resolve flags={:08X} source={:08X} source-target={} "
+          "source-base={:08X} source-size={}x{} rect={}:{},{},{},{} destination={:08X} "
+          "destination-target={} point={}:{},{} level={} slice={} fetch={} params={} caller={:08X}",
+          GetNativeLightSubmittedFrame(base), flags, source_surface, source_target,
+          command.source.base, command.source.width, command.source.height,
+          unsigned(command.source_rectangle_valid), command.source_rectangle.left,
+          command.source_rectangle.top, command.source_rectangle.right,
+          command.source_rectangle.bottom, destination_texture, destination_target,
+          unsigned(command.destination_point_valid), command.destination_point.x,
+          command.destination_point.y, destination_level, destination_slice_or_face,
+          ShadowTargetFetch(base, destination_texture), unsigned(command.parameters_valid),
+          trace_caller);
+    }
+  }
+  temporal_host::Draw(base,command.device);
   SubmitNativeCommand(command);
   RetireNativeBoundResource(base, device, destination_texture);
 }
@@ -6144,9 +6473,27 @@ extern "C" void sub_822D1710(PPCContext& ctx, uint8_t* base) {
   SubmitEnvironmentalData(base, device, postfx);
   ScopedNativeLightingExecution lighting_scope(
       base, 0x822D1710, RenderExecutionStage::kCompositePostFx, LightPassRole::kNone);
-  ScopedRenderPhaseMarker phase_scope(device, RenderPhase::kCompositePostFx, postfx, caller);
+  // sub_822D10C0 allocates postfx+12 at width/2 and height/2. Retail
+  // sub_828E0048 obtains its D3D handle through grcTexture's vtable+60.
+  uint32_t half_scene_texture = 0;
+  const uint32_t half_scene = postfx ? LoadU32(base, postfx + 12) : 0;
+  if (half_scene) {
+    const uint32_t vtable = LoadU32(base, half_scene);
+    const uint32_t accessor = vtable ? LoadU32(base, vtable + 60) : 0;
+    if (accessor) {
+      const PPCContext saved = ctx;
+      ctx.r3.u64 = half_scene;
+      REX_CALL_INDIRECT_FUNC(accessor);
+      half_scene_texture = ctx.r3.u32;
+      ctx = saved;
+    }
+  }
+  ScopedRenderPhaseMarker phase_scope(device, RenderPhase::kCompositePostFx, postfx, caller,
+                                     half_scene_texture);
 
+  temporal_host::Event(TemporalEvent::kBeforePostFx);
   __imp__sub_822D1710(ctx, base);
+  temporal_host::Event(TemporalEvent::kAfterPostFx);
 }
 
 extern "C" void sub_821BD0A0(PPCContext& ctx, uint8_t* base) {
@@ -6173,6 +6520,7 @@ extern "C" void sub_8267D528(PPCContext& ctx, uint8_t* base) {
   const uint32_t phase_object = ctx.r3.u32;
   const uint32_t caller = ctx.lr;
   const uint32_t device = LoadU32(base, kDeferredDeviceGlobal);
+  temporal_host::Begin(base,device,phase_object+176);
   ScopedNativeLightingExecution lighting_scope(
       base, 0x8267D528, RenderExecutionStage::kSceneToGBuffer, LightPassRole::kNone);
   ScopedRenderPhaseMarker phase_scope(device, RenderPhase::kSceneToGBuffer, phase_object, caller);
@@ -6914,6 +7262,7 @@ extern "C" void sub_82A3E348(PPCContext& ctx, uint8_t* base) {
         transform_before[10], transform_before[11], transform_before[12], transform_before[13],
         transform_before[14], transform_before[15]);
   }
+  temporal_host::Draw(base,command.device);
   SubmitNativeCommand(command);
 }
 
@@ -6971,6 +7320,15 @@ extern "C" void sub_82A457B0(PPCContext& ctx, uint8_t* base) {
   command.top = top;
   command.right = right;
   command.bottom = bottom;
+  if (ShadowTraceActive(base)) {
+    uint32_t slot = 0;
+    const int target = ShadowBoundTarget(base, device, &slot);
+    if (target >= 0) {
+      SHADOW_TRACE("shadow-trace: frame={} clear flags={:08X} rect={},{},{},{} bound-target={} "
+                  "slot={}",
+                  GetNativeLightSubmittedFrame(base), flags, left, top, right, bottom, target, slot);
+    }
+  }
   if (color) {
     for (uint32_t index = 0; index < 4; ++index) {
       command.color_bits[index] = LoadU32(base, color + index * sizeof(uint32_t));
@@ -7208,15 +7566,6 @@ extern "C" void sub_82A467D8(PPCContext& ctx, uint8_t* base) {
     return;
   }
 
-#ifdef THEFT4_LAB_BUILD
-  const bool observe_pacing = pacing::capture.Active();
-  pacing::Sample pacing_sample;
-  if (observe_pacing) {
-    pacing_sample.hook_begin = rex::chrono::Clock::QueryHostTickCount();
-    pacing_sample.system_thread = rex::thread::current_thread_system_id();
-    pacing_sample.guest_thread = rex::thread::current_thread_id();
-  }
-#endif
   const uint32_t device = ctx.r3.u32;
   const uint32_t submitted_frame = LoadU32(base, device + kSubmittedFrameOffset) + 1;
   StoreU32(base, device + kSubmittedFrameOffset, submitted_frame);
@@ -7303,26 +7652,7 @@ extern "C" void sub_82A467D8(PPCContext& ctx, uint8_t* base) {
         command.diagnostic_device_flag_10942, command.diagnostic_force_content_probe);
   }
   g_last_present_frontbuffer.store(command.frontbuffer_texture, std::memory_order_relaxed);
-#ifdef THEFT4_LAB_BUILD
-  if (observe_pacing) {
-    pacing_sample.frame = submitted_frame;
-    pacing_sample.submit_begin = rex::chrono::Clock::QueryHostTickCount();
-  }
-  const bool submitted = SubmitNativeCommand(command);
-  if (observe_pacing) {
-    pacing_sample.submitted = submitted;
-    pacing_sample.submit_end = rex::chrono::Clock::QueryHostTickCount();
-  }
-  if (submitted) {
-    PaceNativePresent(submitted_frame, observe_pacing ? &pacing_sample : nullptr);
-  } else if (observe_pacing) {
-    pacing::capture.Record(pacing_sample);
-  }
-#else
-  if (SubmitNativeCommand(command)) {
-    PaceNativePresent(submitted_frame);
-  }
-#endif
+  SubmitNativeCommand(command);
   ctx.r3.u32 = device;
 }
 

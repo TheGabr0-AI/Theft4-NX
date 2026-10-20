@@ -10,21 +10,39 @@ namespace rex::graphics::gta4_native {
 enum class ModernShaderFamily : uint8_t {
   kOther,
   kMotionBlur,
+  kDepthOfField,
   kTladGrain,
   kBloom,
   kWater,
   kLightVolume,
   kFog,
+  kSky,
   kVideo,
   kCount
 };
 constexpr ModernShaderFamily ClassifyModernShader(uint64_t hash) {
   switch (hash) {
+#include "fusion_forward_shader_hashes.inc"
     case 0xEE75C9F6AA1AB16Aull:
     case 0xE51D9DD95A333D92ull:
     case 0xD3B2B2125BC24911ull:
     case 0x94CC5AF0E2FF5B08ull:
+    case 0x535ACDAB8AE84D82ull:
       return ModernShaderFamily::kMotionBlur;
+    case 0xCC0C2F3146CCC96Eull:
+    case 0x2EAEDEB9125948C2ull:
+    case 0x54FABC991DB485C8ull:
+    case 0x6533D90E6317B046ull:
+    case 0x9568A3A7BD3CDE18ull:
+    case 0x8F2ECB251AE7FE9Aull:
+    case 0x5D2A71133DA823F7ull:
+    case 0x7756A65D296806FFull:
+    case 0xFE2FC0894C018D11ull:
+    case 0x9649029E1999BEA9ull:
+    case 0x069287E9B706AA14ull:
+    case 0x53906ADBE74441C6ull:
+    case 0xB44879A571332324ull:
+      return ModernShaderFamily::kDepthOfField;
     case 0x79044EA1461439CAull:
     case 0xC5D3E7806E478A16ull:
     case 0x67C1FB770BB55E69ull:
@@ -38,6 +56,10 @@ constexpr ModernShaderFamily ClassifyModernShader(uint64_t hash) {
     case 0xDF64C22EC010C136ull:
     case 0x458818340E2283DEull:
       return ModernShaderFamily::kLightVolume;
+    case 0x0421316FC8CF1313ull:
+    case 0x439458C53B3FF810ull:
+    case 0x000B4D6AC54D11CCull:
+      return ModernShaderFamily::kSky;
     case 0xEFAACEED3DBD802Dull:
     case 0x1A6669BBAFDC43E7ull:
       return ModernShaderFamily::kFog;
@@ -49,10 +71,42 @@ constexpr ModernShaderFamily ClassifyModernShader(uint64_t hash) {
       return ModernShaderFamily::kOther;
   }
 }
+constexpr bool IsFusionSkyShader(uint64_t hash) {
+  return hash == 0x439458C53B3FF810ull || hash == 0x000B4D6AC54D11CCull;
+}
+constexpr bool SupportsSplitPostFx(uint64_t hash) {
+  constexpr uint64_t composites[] = {
+      0x069287E9B706AA14ull,
+      0x2EAEDEB9125948C2ull,
+      0x535ACDAB8AE84D82ull,
+      0x53906ADBE74441C6ull,
+      0x54FABC991DB485C8ull,
+      0x5D2A71133DA823F7ull,
+      0x6533D90E6317B046ull,
+      0x67C1FB770BB55E69ull,
+      0x7756A65D296806FFull,
+      0x79044EA1461439CAull,
+      0x8F2ECB251AE7FE9Aull,
+      0x9568A3A7BD3CDE18ull,
+      0x9649029E1999BEA9ull,
+      0xB44879A571332324ull,
+      0xC5D3E7806E478A16ull,
+      0xCC0C2F3146CCC96Eull,
+      0xE4AF188ACBDA7362ull,
+      0xE51D9DD95A333D92ull,
+      0xEE75C9F6AA1AB16Aull,
+      0xFE2FC0894C018D11ull,
+  };
+  for (auto composite : composites) if (hash == composite) return true;
+  return false;
+}
+
 constexpr const char* ModernShaderFamilyName(ModernShaderFamily family) {
   switch (family) {
     case ModernShaderFamily::kMotionBlur:
       return "motion-blur";
+    case ModernShaderFamily::kDepthOfField:
+      return "depth-of-field";
     case ModernShaderFamily::kTladGrain:
       return "tlad-film-grain";
     case ModernShaderFamily::kBloom:
@@ -61,6 +115,8 @@ constexpr const char* ModernShaderFamilyName(ModernShaderFamily family) {
       return "water";
     case ModernShaderFamily::kLightVolume:
       return "light-volume";
+    case ModernShaderFamily::kSky:
+      return "sky";
     case ModernShaderFamily::kFog:
       return "fog";
     case ModernShaderFamily::kVideo:
@@ -81,6 +137,11 @@ struct ModernShaderSettings {
 };
 constexpr bool AllowModernShader(uint64_t hash, ModernShaderSettings settings) {
   const auto family = ClassifyModernShader(hash);
+  // The authored motion-blur replacements are compatibility/performance
+  // translations of the stock composite, not an optional visual redesign.
+  // Motion Blur itself is selected by the title presentation option.
+  if (family == ModernShaderFamily::kMotionBlur)
+    return true;
   if (!IsModernShader(family))
     return true;
   // This is an independent renderer-side veto. The guest pass-selection hook

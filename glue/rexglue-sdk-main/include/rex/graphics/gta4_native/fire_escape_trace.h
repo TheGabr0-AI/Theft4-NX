@@ -59,11 +59,11 @@ inline bool ElevatedRailTextureName(std::string_view name) {
          name == "cm_el_girder";
 }
 inline bool FireTextureName(std::string_view name) {
-  if (FireTraceConfig().elevated_rails)
-    return ElevatedRailTextureName(name) || name == "darkmetal512" ||
+  if (FireTraceConfig().elevated_rails &&
+      (ElevatedRailTextureName(name) || name == "darkmetal512" ||
            name == "grytarn_512" || name == "sl_watertnk_wood01" ||
            name == "pris_fence2pris_fence2b" || name == "cm_platform" ||
-           name == "cm_pwrlines";
+           name == "cm_pwrlines")) return true;
   return name.find("sl_rustedmtl_rail01") != std::string_view::npos ||
          name.find("sl_rustedmtl_msh01") != std::string_view::npos ||
          name.find("sl_rustedmetal01_256") != std::string_view::npos ||
@@ -71,11 +71,20 @@ inline bool FireTextureName(std::string_view name) {
          name.find("fire_esc") != std::string_view::npos;
 }
 inline bool FireStrongTextureName(std::string_view name) {
-  if (FireTraceConfig().elevated_rails) return ElevatedRailTextureName(name);
+  if (FireTraceConfig().elevated_rails && ElevatedRailTextureName(name)) return true;
   return name.find("sl_rustedmtl_rail01") != std::string_view::npos ||
          name.find("sl_rustedmtl_msh01") != std::string_view::npos ||
          name.find("fire_esc") != std::string_view::npos;
 }
+struct FireReplayState {
+  uint64_t vertex_constants = 0, pixel_constants = 0;
+  uint32_t guest_frame = 0;
+  std::array<uint32_t, 4> colors{};
+  uint32_t depth = 0;
+  std::array<uint32_t, 6> viewport{};
+  std::array<uint32_t, 16> transform{};
+  std::array<uint32_t, 4> lighting_c46{};
+};
 struct FireTraceContext {
   uint64_t occurrence = 0, event = 0;
   uint32_t device = 0, guest_frame = 0, caller = 0;
@@ -83,9 +92,10 @@ struct FireTraceContext {
   uint32_t technique = 0, pass = 0, texture_wrapper = 0, replay = 0;
   uint32_t command_list = 0, replay_ordinal = 0;
   std::array<char, 96> texture_name{};
+  FireReplayState replay_live{}, replay_applied{};
 };
 struct alignas(8) FireTraceEnvelope {
-  uint32_t version = 1, command_abi = 0, command_size = 0, reserved = 0;
+  uint32_t version = 2, command_abi = 0, command_size = 0, reserved = 0;
   FireTraceContext context{};
 };
 static_assert(std::is_trivially_copyable_v<FireTraceEnvelope>);
@@ -103,7 +113,7 @@ inline bool UnpackFireTraceEnvelope(const void*& data, size_t& size, uint32_t& a
                                    FireTraceContext& context) {
   if (abi != kFireTraceEnvelopeAbi || !data || size < sizeof(FireTraceEnvelope)) return false;
   FireTraceEnvelope e{}; std::memcpy(&e, data, sizeof(e));
-  if (e.version != 1 || e.reserved || !e.context.occurrence || !e.context.event ||
+  if (e.version != 2 || e.reserved || !e.context.occurrence || !e.context.event ||
       e.command_abi == kFireTraceEnvelopeAbi || !e.command_size ||
       e.command_size != size - sizeof(e) || e.context.texture_name.back()) return false;
   data = static_cast<const uint8_t*>(data) + sizeof(e);

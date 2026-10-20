@@ -50,7 +50,8 @@ TEXT_EXT = ('.cpp', '.h', '.inc', '.hpp', '.c', '.mm')
 COMPILED = ('gta4_native_hooks.cpp', 'gta4_phone_trace.inc', 'gta4_tv_trace.inc',
             'gta4_fire_escape_trace.inc', 'gta4_bulb_source_trace.inc', 'gta4_help_trace_hooks.inc',
             'gta4_fade_trace_hooks.inc', 'gta4_phone_trace_hooks.inc', 'gta4_aspect_hooks.cpp',
-            'gta4_font_selection_trace.cpp', 'gta4_presentation_options.cpp')
+            'gta4_font_selection_trace.cpp', 'gta4_presentation_options.cpp',
+            'gta4_temporal_hooks.inc', 'theft4_lra_app_stubs.cpp')
 NAMES_HEADER = 'gta4eu_names.h'
 # gta4_app.cpp is the LibertyRecomp application (macOS): only its cvar definitions are needed (the
 # hooks and the plugin read them), written to APP_CVARS with the one controller function the hooks

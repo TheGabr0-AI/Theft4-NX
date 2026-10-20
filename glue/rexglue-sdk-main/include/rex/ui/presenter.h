@@ -112,6 +112,9 @@ struct RawImage {
 };
 
 struct GuestOutputProvenance {
+  // LRA 7c97c58 (gta4_native): written by the native renderer, not read here.
+  uint32_t frame_rate_limit = 0;
+  bool producer_backpressure = false;
   uint64_t tv_session_id = 0;
   uint64_t title_present_id = 0;
   uint64_t selected_generation = 0;
@@ -398,6 +401,10 @@ class Presenter {
   // multiple at the same time, and it should acquire the latest guest output
   // image via ConsumeGuestOutput.
   virtual bool CaptureGuestOutput(RawImage& image_out) = 0;
+
+  // LRA 7c97c58 (gta4_native calls it at shutdown): this presenter has no frame
+  // publication gate whose waits could need releasing.
+  void CancelFramePacingWaits() {}
   const GuestOutputPaintConfig& GetGuestOutputPaintConfigFromUIThread() const {
     return guest_output_paint_config_;
   }

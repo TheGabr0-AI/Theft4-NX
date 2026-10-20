@@ -42,6 +42,9 @@ struct NativePipelineLookupContext {
   bool uses_presenter = false;
   bool primitive_restart_enable = false;
   bool host_fog = false;
+  bool early_fragment_tests = false;
+  bool colorless_fragment = false;
+  bool empty_fragment = false;
 
   bool operator==(const NativePipelineLookupContext&) const = default;
 };
@@ -58,27 +61,51 @@ class NativePipelineLookupMemo {
   using Context = NativePipelineLookupContext<ColorTargetCount>;
 
   Pipeline Find(const void* owner, const FixedState& fixed, const Context& context) const {
-    return pipeline_ && owner && owner == owner_ && context.lifetime && context == context_ &&
-                   fixed == fixed_
-               ? pipeline_
-               : Pipeline{};
+    if (!owner || !context.lifetime) return Pipeline{};
+    for (const auto& entry : entries_) {
+      if (entry.pipeline && owner == entry.owner && context == entry.context &&
+          fixed == entry.fixed) return entry.pipeline;
+    }
+    return Pipeline{};
   }
 
-  void Store(const void* owner, const FixedState& fixed, const Context& context, Pipeline pipeline) {
+  // signature: a 64-bit hash of the memo fixed state taken where the state
+  // was captured (0 = none). Equal signatures stand for equal fixed states.
+  Pipeline FindSigned(const void* owner, uint64_t signature, const Context& context) const {
+    if (!owner || !context.lifetime || !signature) return Pipeline{};
+    for (const auto& entry : entries_) {
+      if (entry.pipeline && entry.signature == signature && owner == entry.owner &&
+          context == entry.context) return entry.pipeline;
+    }
+    return Pipeline{};
+  }
+
+  void Store(const void* owner, const FixedState& fixed, const Context& context, Pipeline pipeline,
+             uint64_t signature = 0) {
     if (!owner || !context.lifetime || !pipeline) {
       return;
     }
-    owner_ = owner;
-    fixed_ = fixed;
-    context_ = context;
-    pipeline_ = pipeline;
+    for (auto& entry : entries_) {
+      if (entry.owner == owner && entry.context == context && entry.fixed == fixed) {
+        entry.pipeline = pipeline;
+        if (signature) entry.signature = signature;
+        return;
+      }
+    }
+    entries_[next_] = {owner, fixed, context, pipeline, signature};
+    next_ = (next_ + 1) % entries_.size();
   }
 
  private:
-  const void* owner_ = nullptr;
-  FixedState fixed_{};
-  Context context_{};
-  Pipeline pipeline_{};
+  struct Entry {
+    const void* owner = nullptr;
+    FixedState fixed{};
+    Context context{};
+    Pipeline pipeline{};
+    uint64_t signature = 0;
+  };
+  std::array<Entry, 4> entries_{};
+  size_t next_ = 0;
 };
 
 }  // namespace rex::graphics::gta4_native

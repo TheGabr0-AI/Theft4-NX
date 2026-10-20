@@ -1,5 +1,6 @@
 #pragma once
 #include <rex/chrono/clock.h>
+#include <type_traits>
 #include <utility>
 #include "native_cpu_profile.h"
 
@@ -52,6 +53,16 @@ class CpuContextScope {
   explicit CpuContextScope(CpuContext context) : owner_(current_cpu_recorder) {
     if (owner_)
       prior_ = owner_->SetContext(context);
+  }
+  // Builds the context only while a capture is running: per-command contexts
+  // otherwise chase pipeline and shader pointers for nothing.
+  template <typename MakeContext,
+            typename = std::enable_if_t<std::is_invocable_r_v<CpuContext, MakeContext&>>>
+  explicit CpuContextScope(MakeContext&& make)
+      : owner_(current_cpu_recorder && current_cpu_recorder->active() ? current_cpu_recorder
+                                                                       : nullptr) {
+    if (owner_)
+      prior_ = owner_->SetContext(make());
   }
   ~CpuContextScope() {
     if (owner_)

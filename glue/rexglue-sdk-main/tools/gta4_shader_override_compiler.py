@@ -401,6 +401,12 @@ def requires_late_fragment_tests(entry: dict[str, Any]) -> bool:
     ) != 0
 
 
+def runtime_entry_point(entry: dict[str, Any]) -> str:
+    # Vulkan title pipelines use shaderMain for both stock and override modules.
+    # GLSL source still declares main; rename only the exported SPIR-V entry.
+    return "shaderMain" if entry["language"] == "glsl" else entry["entry_point"]
+
+
 def compile_shader(
     entry: dict[str, Any],
     output_path: Path,
@@ -458,8 +464,10 @@ def compile_shader(
         "vulkan1.0",
         "-S",
         shader_stage,
-        "-e",
+        "--source-entrypoint",
         entry["entry_point"],
+        "-e",
+        runtime_entry_point(entry),
         "-g0",
         "-Os",
         "-I" + str(source_root),
@@ -793,7 +801,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 compiled_entry["words"], early_interface = validate_spirv(
                     spirv_path.read_bytes(),
                     entry["execution_model"],
-                    entry["entry_point"],
+                    runtime_entry_point(entry),
                     required_builtins=entry["required_builtins"],
                     require_early_fragment_tests=entry["require_early_fragment_tests"],
                     expected_input_locations=entry["expected_input_locations"],
@@ -824,7 +832,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     compiled_entry["late_words"], late_interface = validate_spirv(
                         late_spirv_path.read_bytes(),
                         entry["execution_model"],
-                        entry["entry_point"],
+                        runtime_entry_point(entry),
                         forbid_early_fragment_tests=True,
                         required_builtins=entry["required_builtins"],
                         expected_input_locations=entry["expected_input_locations"],

@@ -13,16 +13,23 @@
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
+#include <string>
 #include <unordered_set>
+#include <vector>
 
 #include <xxhash.h>
 
 #include <rex/cvar.h>
 #include <rex/ppc/context.h>
+#include <rex/runtime.h>
+#include <rex/ui/presenter.h>
 
 REXCVAR_DEFINE_INT32(pc_native_hooks_frames, 0, "pc-eu-base",
                      "N1: frames of per-frame counts of the game's Direct3D calls written to "
                      "native-hooks.csv; 0 = off");
+REXCVAR_DEFINE_INT32(pc_capture_every_s, 0, "pc-eu-base",
+                     "M0: the presenter's guest output every N seconds as cap-tNNNN.ppm; 0 = off");
+REXCVAR_DEFINE_STRING(pc_capture_dir, ".", "pc-eu-base", "M0: folder of the pc_capture_every_s captures");
 
 namespace {
 
@@ -50,7 +57,42 @@ const auto g_start = std::chrono::steady_clock::now();
 uint64_t g_frames = 0, g_last[kHookCount] = {};
 bool g_done = false;
 
+// M0 (16-deko3d-devlog.md): the presenter's guest output every pc_capture_every_s seconds as
+// PPM, for both GPU plugins, so the emulated and native renderers are compared on the frames
+// the game handed over (screen grabs of the window came out black after the first run).
+void CaptureEvery() {
+  const int32_t every = REXCVAR_GET(pc_capture_every_s);
+  if (every <= 0) return;
+  static auto next = g_start + std::chrono::seconds(every);
+  const auto now = std::chrono::steady_clock::now();
+  if (now < next) return;
+  next = now + std::chrono::seconds(every);
+  auto* runtime = rex::Runtime::instance();
+  auto* graphics = runtime ? runtime->graphics_system() : nullptr;
+  auto* presenter = graphics ? graphics->presenter() : nullptr;
+  rex::ui::RawImage image;
+  if (!presenter || !presenter->CaptureGuestOutput(image) || !image.width) return;
+  const int t = int(std::chrono::duration_cast<std::chrono::seconds>(now - g_start).count());
+  char name[64];
+  std::snprintf(name, sizeof(name), "/cap-t%04d.ppm", t);
+  std::FILE* out = std::fopen((REXCVAR_GET(pc_capture_dir) + name).c_str(), "wb");
+  if (!out) return;
+  std::fprintf(out, "P6\n%u %u\n255\n", image.width, image.height);
+  std::vector<uint8_t> row(size_t(image.width) * 3);
+  for (uint32_t y = 0; y < image.height; ++y) {
+    const uint8_t* src = image.data.data() + y * image.stride;
+    for (uint32_t x = 0; x < image.width; ++x) {
+      row[x * 3 + 0] = src[x * 4 + 0];
+      row[x * 3 + 1] = src[x * 4 + 1];
+      row[x * 3 + 2] = src[x * 4 + 2];
+    }
+    std::fwrite(row.data(), 1, row.size(), out);
+  }
+  std::fclose(out);
+}
+
 void EndFrame() {
+  CaptureEvery();
   const int32_t wanted = REXCVAR_GET(pc_native_hooks_frames);
   if (wanted <= 0) return;
   std::lock_guard<std::mutex> lock(g_mutex);
@@ -128,6 +170,11 @@ void EndFrame() {
 // shader-hashes.csv, to compare with the keys of a cache built from v8.
 REXCVAR_DEFINE_BOOL(pc_shader_hash_log, false, "pc-eu-base",
                     "Write the XXH3 of every shader container created to shader-hashes.csv");
+// With a folder, each new container is also written there as <hash>.<vs|ps>.bin: the
+// input XenosRecomp needs for the shaders a cache built from v8 lacks
+// (16-deko3d-devlog.md, M0). Game data: the folder stays outside the repository.
+REXCVAR_DEFINE_STRING(pc_shader_dump_dir, "", "pc-eu-base",
+                      "Folder for the shader containers seen by pc_shader_hash_log (empty: none)");
 
 namespace {
 
@@ -151,6 +198,15 @@ void LogShaderHash(PPCContext& ctx, uint8_t* base, const char* stage) {
   }
   std::fprintf(csv, "%016" PRIX64 ",%s,%u\n", hash, stage, virtual_size + physical_size);
   std::fflush(csv);
+  const std::string dump_dir = REXCVAR_GET(pc_shader_dump_dir);
+  if (!dump_dir.empty()) {
+    char name[64];
+    std::snprintf(name, sizeof(name), "/%016" PRIX64 ".%s.bin", hash, stage);
+    if (std::FILE* out = std::fopen((dump_dir + name).c_str(), "wb")) {
+      std::fwrite(base + container, 1, virtual_size + physical_size, out);
+      std::fclose(out);
+    }
+  }
 }
 
 }  // namespace

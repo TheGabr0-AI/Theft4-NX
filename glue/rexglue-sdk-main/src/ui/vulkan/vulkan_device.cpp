@@ -44,6 +44,9 @@ REXCVAR_DEFINE_BOOL(vulkan_require_fill_mode_non_solid, !REX_PLATFORM_DARWIN, "U
                     "Require fillModeNonSolid support for Vulkan GPU emulation (disable to "
                     "allow fallback to solid fill for line/point polygon modes)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(vulkan_command_counters, false, "UI/Vulkan",
+                    "Count barriers, renderings, draws, copies and pipeline binds per frame for "
+                    "the pipeline report (a wrapper on every such command)");
 REXCVAR_DEFINE_BOOL(vulkan_stencil_copy_ownership, true, "GPU/Vulkan",
                     "Enable maintenance8 color-to-stencil copies for ownership transfers")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -79,6 +82,9 @@ bool StencilCopyEnabled(VkDevice device) {
   return std::find(stencil_copy_devices.begin(), stencil_copy_devices.end(), device) !=
          stencil_copy_devices.end();
 }
+// LRA 7c97c58 (Theft4, 16-deko3d-devlog.md M0): per-frame Vulkan command counters.
+#include "command_counters.inc"
+
 #if REX_PLATFORM_NX
 // Run 26 (06 section 27, B.1): every vkAllocateMemory/vkFreeMemory of the
 // device counted by kind (rex::graphics::NxVkMemoryKind) in
@@ -326,6 +332,8 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
     // #238.
     XE_UI_VULKAN_STRUCT_EXTENSION(EXT_memory_budget)
   }
+  // LRA 7c97c58: GPU breadcrumbs for hang diagnosis (gta4_native_gpu_breadcrumbs).
+  XE_UI_VULKAN_STRUCT_EXTENSION(AMD_buffer_marker)
   if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 1, 0)) {
     // #414.
     XE_UI_VULKAN_STRUCT_PROMOTED_EXTENSION(KHR_maintenance4, 1, 3)
@@ -579,6 +587,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
        ++queue_family_index) {
     QueueFamily& queue_family = device->queue_families_[queue_family_index];
     const VkQueueFamilyProperties& queue_family_properties = queue_families[queue_family_index];
+    queue_family.queue_flags = queue_family_properties.queueFlags;
 
     const VkQueueFlags queue_unsupported_flags = ~queue_family_properties.queueFlags;
 
@@ -662,6 +671,8 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
 
   device->queue_families_[device->queue_family_graphics_compute_].queues.resize(std::max(
       size_t(1), device->queue_families_[device->queue_family_graphics_compute_].queues.size()));
+  // LRA 7c97c58 (gta4_native): the native offscreen queue is the graphics queue here.
+  device->queue_family_native_offscreen_ = device->queue_family_graphics_compute_;
   if (device->queue_family_sparse_binding_ != UINT32_MAX) {
     device->queue_families_[device->queue_family_sparse_binding_].queues.resize(std::max(
         size_t(1), device->queue_families_[device->queue_family_sparse_binding_].queues.size()));
@@ -812,6 +823,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
   XE_UI_VULKAN_LIMIT(minStorageBufferOffsetAlignment)
   XE_UI_VULKAN_LIMIT(maxFramebufferWidth)
   XE_UI_VULKAN_LIMIT(maxFramebufferHeight)
+  XE_UI_VULKAN_LIMIT(maxColorAttachments)
   XE_UI_VULKAN_ENUM_LIMIT(framebufferColorSampleCounts, SampleCountFlags)
   XE_UI_VULKAN_ENUM_LIMIT(framebufferDepthSampleCounts, SampleCountFlags)
   XE_UI_VULKAN_ENUM_LIMIT(framebufferStencilSampleCounts, SampleCountFlags)
@@ -855,6 +867,11 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
 
   if (with_native_shader_support) {
     XE_UI_VULKAN_FEATURE(shaderInt64)
+    // LRA 7c97c58: FidelityFX's Vulkan back end selects permutations from these.
+    XE_UI_VULKAN_FEATURE(shaderInt16)
+    XE_UI_VULKAN_FEATURE(shaderStorageImageExtendedFormats)
+    XE_UI_VULKAN_FEATURE(shaderStorageImageReadWithoutFormat)
+    XE_UI_VULKAN_FEATURE(shaderStorageImageWriteWithoutFormat)
   }
 
   if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 2, 0)) {
@@ -866,6 +883,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
       XE_UI_VULKAN_FEATURE_2(features_1_2, scalarBlockLayout);
     }
     if (with_native_shader_support) {
+      XE_UI_VULKAN_FEATURE_2(features_1_2, shaderFloat16);  // LRA 7c97c58
       XE_UI_VULKAN_FEATURE_2(features_1_2, runtimeDescriptorArray);
       XE_UI_VULKAN_FEATURE_2(features_1_2, descriptorBindingPartiallyBound);
       XE_UI_VULKAN_FEATURE_2(features_1_2, descriptorBindingSampledImageUpdateAfterBind);
@@ -1074,6 +1092,13 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
                  properties.deviceName);
     return nullptr;
   }
+  // LRA 7c97c58: optional entry points of gta4_native.
+  if (device->extensions_.ext_AMD_buffer_marker) {
+    dfn.vkCmdWriteBufferMarkerAMD = reinterpret_cast<PFN_vkCmdWriteBufferMarkerAMD>(
+        ifn.vkGetDeviceProcAddr(device->device_, "vkCmdWriteBufferMarkerAMD"));
+    if (!dfn.vkCmdWriteBufferMarkerAMD) device->extensions_.ext_AMD_buffer_marker = false;
+  }
+  if (REXCVAR_GET(vulkan_command_counters)) InstallCommandCounters(dfn);
 
   // Get the queues.
 

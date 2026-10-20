@@ -6,14 +6,28 @@
 #include <rex/diagnostics/policy.h>
 #include <rex/graphics/gta4_native/gpu_pass_origin.h>
 #include <rex/graphics/gta4_native/title_commands.h>
+#include "../../src/graphics/gta4_metal/temporal/title_boundary.h"
 
 namespace gta4::gpu_pass {
 using rex::graphics::gta4_native::GpuPassOrigin;
 inline thread_local GpuPassOrigin current{};
+inline thread_local bool final_composite = false;
+class ScopedFinalComposite {
+ public:
+  explicit ScopedFinalComposite(bool final) : previous_(final_composite) {
+    final_composite = final;
+  }
+  ~ScopedFinalComposite() { final_composite = previous_; }
+  ScopedFinalComposite(const ScopedFinalComposite&) = delete;
+  ScopedFinalComposite& operator=(const ScopedFinalComposite&) = delete;
+ private:
+  bool previous_;
+};
+inline std::atomic<bool> temporal_inputs{false};
 inline std::atomic<uint64_t> next_scope{1},unresolved_scopes{0},conflicting_scopes{0},oversized_envelopes{0};
 inline bool Enabled(){
   static const bool markers=[] {const char* p=std::getenv("REX_GTA4_GPU_PASS_MARKERS");return p&&std::strcmp(p,"1")==0;}();
-  return markers||rex::diagnostics::IsEnabled(rex::diagnostics::Category::kNativeProfiler);
+  return temporal_inputs.load(std::memory_order_relaxed)||markers||rex::diagnostics::IsEnabled(rex::diagnostics::Category::kNativeProfiler);
 }
 class ScopedExecutedList {
  public:

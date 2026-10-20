@@ -113,12 +113,28 @@ void FireMaterialPass(PPCContext& ctx, uint8_t* base, bool after) {
   if (g_fire_context.guest_frame % FireTraceConfig().interval == 0) FireTraceLog(after ? "pass-applied" : "pass-enter",
     fmt::format("occurrence={} frame={} technique={:08X} pass={:08X} material={:08X}",g_fire_context.occurrence,g_fire_context.guest_frame,g_fire_context.technique,g_fire_context.pass,g_fire_context.material));
 }
+FireReplayState CaptureFireReplayState(uint8_t* base, uint32_t device) {
+  FireReplayState state;
+  state.guest_frame = FireGuestFrame(base);
+  state.vertex_constants = XXH3_64bits(GuestPointer(base, device + 0x780), 0x1000);
+  state.pixel_constants = XXH3_64bits(GuestPointer(base, device + 0x1780), 0xE00);
+  for (size_t i = 0; i < state.colors.size(); ++i) state.colors[i] = LoadU32(base, device + 12432 + uint32_t(i * 4));
+  state.depth = LoadU32(base, device + 12448);
+  for (size_t i = 0; i < state.viewport.size(); ++i) state.viewport[i] = LoadU32(base, device + 12640 + uint32_t(i * 4));
+  for (size_t i = 0; i < state.transform.size(); ++i) state.transform[i] = LoadU32(base, device + kReplayVertexTransformConstantsOffset + uint32_t(i * 4));
+  // Python-derived: pixel bank 0x1780 + c46 * 16 = 6752.
+  for (size_t i = 0; i < state.lighting_c46.size(); ++i) state.lighting_c46[i] = LoadU32(base, device + 6752 + uint32_t(i * 4));
+  return state;
+}
 bool SubmitFireTracedCommand(const void* bytes, size_t size, uint32_t device,
-                            const FireTraceContext* captured = nullptr, uint32_t list = 0, uint32_t ordinal = 0) {
+                            const FireTraceContext* captured = nullptr, uint32_t list = 0, uint32_t ordinal = 0,
+                            const FireReplayState* replay_live = nullptr, const FireReplayState* replay_applied = nullptr) {
   auto c = g_fire_context.occurrence ? g_fire_context : captured ? *captured : FireTraceContext{};
   if (!FireTraceConfig().enabled || !c.occurrence) return SubmitTvTracedCommand(bytes, size, device);
   c.event = g_fire_next_event.fetch_add(1, std::memory_order_relaxed); c.device = device;
   c.replay = list != 0; c.command_list = list; c.replay_ordinal = ordinal;
+  if (replay_live) c.replay_live = *replay_live;
+  if (replay_applied) { c.replay_applied = *replay_applied; c.guest_frame = replay_applied->guest_frame; }
   if (g_fire_base) c.guest_frame = FireGuestFrame(g_fire_base);
   auto packed = PackFireTraceEnvelope(bytes,size,kTitleCommandAbi,c);
   auto* graphics = GetNativeGraphicsSystem();

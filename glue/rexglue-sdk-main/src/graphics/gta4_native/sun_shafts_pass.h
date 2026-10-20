@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sun_shafts_parameters.h"
 #include <array>
 #include <vector>
 
@@ -15,17 +16,6 @@ class VulkanDevice;
 
 namespace rex::graphics::gta4_native {
 
-struct SunShaftParameters {
-  std::array<float, 2> screen_position{};
-  std::array<float, 3> sun_color{};
-  float intensity = 0.0f;
-  float density = 0.0f;
-  float decay = 0.0f;
-  float horizon_fade = 0.0f;
-  bool valid = false;
-};
-
-SunShaftParameters BuildSunShaftParameters(const EnvironmentalDataV1* environmental_data);
 
 class SunShaftsPass {
  public:

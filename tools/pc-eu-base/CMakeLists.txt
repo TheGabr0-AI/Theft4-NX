@@ -63,6 +63,13 @@ if(THEFT4_GTA4_NATIVE)
   endif()
   set(REXGLUE_BUILD_GTA4_NATIVE ON CACHE BOOL "" FORCE)
   set(GTA4_NATIVE_SHADER_CACHE_ROOT "${THEFT4_GTA4_NATIVE_PRIVATE_ROOT}" CACHE PATH "" FORCE)
+  # LRA's override set has translated game shaders (16-deko3d-devlog.md): a local
+  # copy of LibertyRecompLib/shader_overrides; empty = the repository's 20 overrides.
+  set(THEFT4_GTA4_NATIVE_OVERRIDE_ROOT "" CACHE PATH
+      "Local folder with manifest.json and LRA's shader overrides (game-derived)")
+  if(THEFT4_GTA4_NATIVE_OVERRIDE_ROOT)
+    set(GTA4_NATIVE_SHADER_OVERRIDE_ROOT "${THEFT4_GTA4_NATIVE_OVERRIDE_ROOT}" CACHE PATH "" FORCE)
+  endif()
 else()
   set(REXGLUE_BUILD_GTA4_NATIVE OFF CACHE BOOL "" FORCE)
 endif()
@@ -133,6 +140,7 @@ if(THEFT4_GTA4_NATIVE)
     "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_aspect_hooks.cpp"
     "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_font_selection_trace.cpp"
     "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_presentation_options.cpp"
+    "${THEFT4_GTA4_NATIVE_EU_SRC}/theft4_lra_app_stubs.cpp"
     "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4eu_app_cvars.cpp"
     "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4eu_unresolved_stubs.cpp")
   target_include_directories(theft4-eu-base PRIVATE

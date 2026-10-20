@@ -1,3 +1,4 @@
+#include "native_profile_labels.h"
 #include "split_postfx_pass.h"
 
 #include <cstring>
@@ -9,23 +10,6 @@
 #include "split_postfx_ps.h"
 
 namespace rex::graphics::gta4_native {
-namespace {
-
-struct SplitPostFxPushConstants {
-  int32_t source_extent[2];
-  int32_t destination_extent[2];
-  uint32_t pass_index;
-  uint32_t depth_source;
-  uint32_t reserved[2];
-  float dof_projection[4];
-  float dof_distance[4];
-  float dof_blur[4];
-};
-
-static_assert(sizeof(SplitPostFxPushConstants) == 80);
-
-}  // namespace
-
 bool SplitPostFxPass::EnsureObjects(const ui::vulkan::VulkanDevice* device) {
   if (!device) {
     return false;
@@ -97,9 +81,8 @@ VkPipeline SplitPostFxPass::GetOrCreatePipeline(const ui::vulkan::VulkanDevice* 
   const auto& dfn = device->functions();
   const VkDevice vk_device = device->device();
   VkShaderModule vertex_shader =
-      ui::vulkan::util::CreateShaderModule(device, fullscreen_cw_vs, sizeof(fullscreen_cw_vs));
-  VkShaderModule pixel_shader = ui::vulkan::util::CreateShaderModule(
-      device, gta4_native_split_postfx_ps, sizeof(gta4_native_split_postfx_ps));
+      gpu_labels::CreateShader(device, fullscreen_cw_vs, sizeof(fullscreen_cw_vs), "GTA4/fullscreen_cw_vs");
+  VkShaderModule pixel_shader = gpu_labels::CreateShader(device, gta4_native_split_postfx_ps, sizeof(gta4_native_split_postfx_ps), "GTA4/gta4_native_split_postfx_ps");
   if (!vertex_shader || !pixel_shader) {
     if (vertex_shader) {
       dfn.vkDestroyShaderModule(vk_device, vertex_shader, nullptr);
@@ -184,7 +167,7 @@ bool SplitPostFxPass::RecordPass(VkCommandBuffer command_buffer,
                                  VkDescriptorPool descriptor_pool, VkPipeline pipeline,
                                  const std::array<VkImageView, 4>& inputs,
                                  PostFxResourcePool::Image& destination, uint32_t pass_index,
-                                 PostFxExtent source_extent,
+                                 PostFxExtent source_extent, PostFxExtent full_extent,
                                  const SplitPostFxParameters& parameters) {
   if (!command_buffer || !descriptor_pool || !pipeline || !destination.view) {
     return false;
@@ -248,6 +231,7 @@ bool SplitPostFxPass::RecordPass(VkCommandBuffer command_buffer,
   rendering_info.layerCount = 1;
   rendering_info.colorAttachmentCount = 1;
   rendering_info.pColorAttachments = &attachment;
+  gpu_labels::BeginRendering(device, command_buffer, rendering_info, __func__);
   dfn.vkCmdBeginRendering(command_buffer, &rendering_info);
   dfn.vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
   dfn.vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0,
@@ -265,6 +249,8 @@ bool SplitPostFxPass::RecordPass(VkCommandBuffer command_buffer,
   push.source_extent[1] = int32_t(source_extent.height);
   push.destination_extent[0] = int32_t(destination.extent.width);
   push.destination_extent[1] = int32_t(destination.extent.height);
+  push.full_extent[0] = int32_t(full_extent.width);
+  push.full_extent[1] = int32_t(full_extent.height);
   push.pass_index = pass_index;
   push.depth_source = uint32_t(parameters.depth_source);
   std::memcpy(push.dof_projection, parameters.dof_projection.data(), sizeof(push.dof_projection));
@@ -274,6 +260,7 @@ bool SplitPostFxPass::RecordPass(VkCommandBuffer command_buffer,
                          sizeof(push), &push);
   dfn.vkCmdDraw(command_buffer, 3, 1, 0, 0);
   dfn.vkCmdEndRendering(command_buffer);
+  gpu_labels::End(device, command_buffer);
 
   barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
   barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -289,21 +276,26 @@ bool SplitPostFxPass::RecordPass(VkCommandBuffer command_buffer,
 bool SplitPostFxPass::Record(VkCommandBuffer command_buffer, const ui::vulkan::VulkanDevice* device,
                              VkDescriptorPool descriptor_pool, VkPipelineCache pipeline_cache,
                              VkImage destination_image, VkImageView destination_view,
-                             VkImageView depth_view, VkImageView stipple_mask_view,
+                             VkImageView depth_view, VkImageView stipple_mask_view, VkImageView half_scene_view,
                              VkFormat color_format, PostFxExtent extent,
                              const SplitPostFxParameters& parameters,
                              PostFxResourcePool& resources,
-                             const NativeGpuTimingSink* timing) {
+                             const NativeGpuTimingSink* timing, std::string_view* failure) {
+  const auto fail = [failure](std::string_view reason) { if (failure) *failure = reason; return false; };
+  if (failure) *failure = {};
   const bool needs_dof = !NativeDofCanBeElided(parameters.dof_projection,
                                               parameters.dof_distance, parameters.dof_blur);
-  if (!destination_image || !destination_view || !depth_view || !stipple_mask_view ||
-      !resources.scene_snapshot().view ||
-      !resources.EnsureSplitPostFxImages(device, color_format, extent, needs_dof)) {
-    return false;
-  }
+  if (!ValidSplitPostFxParameters(parameters)) return fail("invalid-dof-constants");
+  if (needs_dof && !half_scene_view) return fail("half-scene-missing-or-incompatible");
+  if (!destination_image || !destination_view) return fail("scene-view-unavailable");
+  if (!depth_view) return fail("depth-view-unavailable");
+  if (!stipple_mask_view) return fail("stipple-mask-unavailable");
+  if (!resources.scene_snapshot().view) return fail("scene-snapshot-unavailable");
+  if (!resources.EnsureSplitPostFxImages(device, color_format, extent, needs_dof))
+    return fail("intermediate-allocation-or-extent-rejected");
   VkPipeline pipeline = GetOrCreatePipeline(device, pipeline_cache, color_format);
   if (!pipeline) {
-    return false;
+    return fail("pipeline-unavailable");
   }
   auto& full_ping = resources.split_full_ping();
   auto& half_ping = resources.split_half_ping();
@@ -322,33 +314,33 @@ bool SplitPostFxPass::Record(VkCommandBuffer command_buffer, const ui::vulkan::V
   }
   if (!RecordPass(command_buffer, device, descriptor_pool, pipeline,
                   {snapshot, snapshot, depth_view, stipple_mask_view}, needs_dof ? full_ping : output,
-                  0, extent, parameters)) {
-    return false;
+                  0, extent, extent, parameters)) {
+    return fail("stipple-pass-failed");
   }
   if (!needs_dof) return true;
   if (timing) {
     timing->Switch(command_buffer, performance::GpuRange::kPostFxBokeh);
   }
   if (!RecordPass(command_buffer, device, descriptor_pool, pipeline,
-                  {full_ping.view, full_ping.view, depth_view, stipple_mask_view}, half_ping, 1,
-                  extent, parameters)) {
-    return false;
+                  {half_scene_view, half_scene_view, depth_view, stipple_mask_view}, half_ping, 1,
+                  half_ping.extent, extent, parameters)) {
+    return fail("bokeh16-pass-failed");
   }
   if (timing) {
     timing->Switch(command_buffer, performance::GpuRange::kPostFxBlur);
   }
   if (!RecordPass(command_buffer, device, descriptor_pool, pipeline,
                   {half_ping.view, half_ping.view, depth_view, stipple_mask_view}, half_pong, 2,
-                  half_ping.extent, parameters)) {
-    return false;
+                  half_ping.extent, extent, parameters)) {
+    return fail("tent4-pass-failed");
   }
   if (timing) {
     timing->Switch(command_buffer, performance::GpuRange::kPostFxDofCombine);
   }
   if (!RecordPass(command_buffer, device, descriptor_pool, pipeline,
                   {full_ping.view, half_pong.view, depth_view, stipple_mask_view}, output, 3,
-                  extent, parameters)) {
-    return false;
+                  extent, extent, parameters)) {
+    return fail("depth-combine-pass-failed");
   }
 
   // The combination already landed in the original scene image. The old

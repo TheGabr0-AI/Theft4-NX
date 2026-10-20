@@ -23,6 +23,8 @@
 #include <rex/ui/presenter.h>
 #include <rex/ui/surface.h>
 #include <rex/ui/vulkan/device.h>
+#include <rex/ui/vulkan/generated_frame.h>
+#include <rex/ui/vulkan/image_access.h>
 #include <rex/ui/vulkan/instance.h>
 #include <rex/ui/vulkan/submission_tracker.h>
 #include <rex/ui/vulkan/ui_samplers.h>
@@ -116,7 +118,20 @@ class VulkanPresenter final : public Presenter {
     float hdr_headroom() const { return hdr_headroom_; }
     float sdr_white_level() const { return sdr_white_level_; }
 
+    // LRA 7c97c58 (gta4_native): the shared-image access timeline and generated frames. Here
+    // there is one queue, so the ticket is empty (ImageAccessSubmit::Attach adds nothing),
+    // and no frame generation: SetGeneratedFrame refuses.
+    const ImageAccessTicket& image_access() const { return image_access_; }
+    void MarkImageAccessSubmitted() { image_access_submitted_ = true; }
+    bool image_access_submitted() const { return image_access_submitted_; }
+    bool SetGeneratedFrame(VkImage, VkImageView, VkImage, VkImageView, VkExtent2D,
+                           std::shared_ptr<void>, uint64_t, uint64_t) {
+      return false;
+    }
+
    private:
+    ImageAccessTicket image_access_{};
+    bool image_access_submitted_ = false;
     VkImage image_;
     VkImageView image_view_;
     uint64_t image_version_;
@@ -168,6 +183,9 @@ class VulkanPresenter final : public Presenter {
   Surface::TypeFlags GetSupportedSurfaceTypes() const override;
 
   bool CaptureGuestOutput(RawImage& image_out) override;
+
+  // LRA 7c97c58 (gta4_native): no generated-frame presentation in this presenter.
+  bool CanPresentGeneratedFrames() const { return false; }
 
   void AwaitUISubmissionCompletionFromUIThread(uint64_t submission_index) {
     ui_submission_tracker_.AwaitSubmissionCompletion(submission_index);

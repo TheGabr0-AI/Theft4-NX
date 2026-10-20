@@ -10,6 +10,7 @@
  */
 
 #include <algorithm>
+#include <cstdlib>
 
 #include <rex/filesystem.h>
 
@@ -35,6 +36,14 @@ bool CreateParentFolder(const std::filesystem::path& path) {
     }
   }
   return true;
+}
+
+// LRA 7c97c58 (gta4_native's font atlases and button prompts).
+std::filesystem::path GetResourcesFolder() {
+  if (const char* override_dir = std::getenv("REX_RESOURCES_DIR"); override_dir && *override_dir) {
+    return std::filesystem::path(override_dir);
+  }
+  return GetExecutableFolder().parent_path() / "Resources";
 }
 
 }  // namespace filesystem

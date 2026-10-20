@@ -1,3 +1,4 @@
+#include "native_profile_labels.h"
 #include "sun_shafts_pass.h"
 
 #include <algorithm>
@@ -12,80 +13,6 @@
 #include "sun_shafts_ps.h"
 
 namespace rex::graphics::gta4_native {
-namespace {
-
-struct SunShaftPushConstants {
-  int32_t source_extent[2];
-  int32_t destination_extent[2];
-  uint32_t pass_index;
-  uint32_t sample_count;
-  float density;
-  float decay;
-  float sun_screen[4];
-  float sun_color_and_sky_start[4];
-  float sky_end_and_reserved[4];
-};
-
-static_assert(sizeof(SunShaftPushConstants) == 80);
-
-constexpr uint32_t kSunShaftSampleCount = 24;
-constexpr float kFusionDefaultIntensity = 0.002f;
-constexpr float kFusionDefaultDensity = 0.9f;
-constexpr float kFusionDefaultDecay = 0.95f;
-
-}  // namespace
-
-SunShaftParameters BuildSunShaftParameters(const EnvironmentalDataV1* environmental_data) {
-  SunShaftParameters result{};
-  constexpr uint64_t kRequiredFields =
-      EnvironmentalFieldBit(EnvironmentalField::kSunDirection) |
-      EnvironmentalFieldBit(EnvironmentalField::kSunColor) |
-      EnvironmentalFieldBit(EnvironmentalField::kViewProjectionMatrix) |
-      EnvironmentalFieldBit(EnvironmentalField::kCameraAltitude);
-  if (!environmental_data ||
-      (environmental_data->valid_fields & kRequiredFields) != kRequiredFields) {
-    return result;
-  }
-
-  const auto& direction = environmental_data->sun_direction;
-  const auto& matrix = environmental_data->view_projection_matrix;
-  std::array<float, 4> clip{};
-  for (size_t column = 0; column < clip.size(); ++column) {
-    clip[column] = direction[0] * matrix[column] + direction[1] * matrix[4 + column] +
-                   direction[2] * matrix[8 + column];
-  }
-  if (!std::isfinite(clip[3]) || std::abs(clip[3]) <= 1.0e-6f) {
-    return result;
-  }
-
-  const float inverse_w = 1.0f / clip[3];
-  const float sun_x = clip[0] * inverse_w * 0.5f + 0.5f;
-  const float sun_y = -clip[1] * inverse_w * 0.5f + 0.5f;
-  if (!std::isfinite(sun_x) || !std::isfinite(sun_y)) {
-    return result;
-  }
-  // GPU Gems recommends a guard band for nearly perpendicular light directions.
-  result.screen_position = {std::clamp(sun_x, -1.0f, 2.0f),
-                            std::clamp(sun_y, -1.0f, 2.0f)};
-  std::copy_n(environmental_data->sun_color.begin(), result.sun_color.size(),
-              result.sun_color.begin());
-  if (!std::all_of(result.sun_color.begin(), result.sun_color.end(),
-                   [](float value) { return std::isfinite(value); })) {
-    return {};
-  }
-
-  const float azimuth = std::clamp(direction[2] / 0.209101f, 0.0f, 1.0f);
-  const float smooth_azimuth = azimuth * azimuth * (3.0f - 2.0f * azimuth);
-  const float altitude = 1.0f - std::exp2(-0.01f * std::max(environmental_data->camera_altitude,
-                                                          0.0f));
-  result.horizon_fade = std::clamp(std::max(smooth_azimuth, altitude), 0.0f, 1.0f);
-  result.intensity = kFusionDefaultIntensity;
-  result.density = kFusionDefaultDensity;
-  result.decay = kFusionDefaultDecay;
-  result.valid = result.horizon_fade > 0.0f;
-  return result;
-}
-
 bool SunShaftsPass::EnsureObjects(const ui::vulkan::VulkanDevice* device) {
   if (!device) {
     return false;
@@ -157,9 +84,8 @@ VkPipeline SunShaftsPass::GetOrCreatePipeline(const ui::vulkan::VulkanDevice* de
   const auto& dfn = device->functions();
   const VkDevice vk_device = device->device();
   VkShaderModule vertex_shader =
-      ui::vulkan::util::CreateShaderModule(device, fullscreen_cw_vs, sizeof(fullscreen_cw_vs));
-  VkShaderModule pixel_shader = ui::vulkan::util::CreateShaderModule(
-      device, gta4_native_sun_shafts_ps, sizeof(gta4_native_sun_shafts_ps));
+      gpu_labels::CreateShader(device, fullscreen_cw_vs, sizeof(fullscreen_cw_vs), "GTA4/fullscreen_cw_vs");
+  VkShaderModule pixel_shader = gpu_labels::CreateShader(device, gta4_native_sun_shafts_ps, sizeof(gta4_native_sun_shafts_ps), "GTA4/gta4_native_sun_shafts_ps");
   if (!vertex_shader || !pixel_shader) {
     if (vertex_shader) {
       dfn.vkDestroyShaderModule(vk_device, vertex_shader, nullptr);
@@ -308,6 +234,7 @@ bool SunShaftsPass::RecordPass(VkCommandBuffer command_buffer,
   rendering_info.layerCount = 1;
   rendering_info.colorAttachmentCount = 1;
   rendering_info.pColorAttachments = &attachment;
+  gpu_labels::BeginRendering(device, command_buffer, rendering_info, __func__);
   dfn.vkCmdBeginRendering(command_buffer, &rendering_info);
   dfn.vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
   dfn.vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0,
@@ -321,27 +248,13 @@ bool SunShaftsPass::RecordPass(VkCommandBuffer command_buffer,
   scissor.extent = {destination.extent.width, destination.extent.height};
   dfn.vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 
-  SunShaftPushConstants push{};
-  push.source_extent[0] = int32_t(source_extent.width);
-  push.source_extent[1] = int32_t(source_extent.height);
-  push.destination_extent[0] = int32_t(destination.extent.width);
-  push.destination_extent[1] = int32_t(destination.extent.height);
-  push.pass_index = pass_index;
-  push.sample_count = kSunShaftSampleCount;
-  push.density = parameters.density;
-  push.decay = parameters.decay;
-  push.sun_screen[0] = parameters.screen_position[0];
-  push.sun_screen[1] = parameters.screen_position[1];
-  push.sun_screen[2] = parameters.intensity;
-  push.sun_screen[3] = parameters.horizon_fade;
-  std::copy(parameters.sun_color.begin(), parameters.sun_color.end(),
-            push.sun_color_and_sky_start);
-  push.sun_color_and_sky_start[3] = 0.9f;
-  push.sky_end_and_reserved[0] = 1.0f;
+  const auto push = BuildSunShaftPushConstants(parameters, source_extent.width, source_extent.height,
+      destination.extent.width, destination.extent.height, pass_index);
   dfn.vkCmdPushConstants(command_buffer, pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                          sizeof(push), &push);
   dfn.vkCmdDraw(command_buffer, 3, 1, 0, 0);
   dfn.vkCmdEndRendering(command_buffer);
+  gpu_labels::End(device, command_buffer);
 
   barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
   barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -438,8 +351,8 @@ bool SunShaftsPass::Record(VkCommandBuffer command_buffer,
   copy.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
   copy.dstSubresource.layerCount = 1;
   copy.extent = {extent.width, extent.height, 1};
-  dfn.vkCmdCopyImage(command_buffer, output.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                     destination_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+  gpu_labels::Transfer(device, command_buffer, "GTA4/Record/vkCmdCopyImage", [&] { return dfn.vkCmdCopyImage(command_buffer, output.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     destination_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy); });
   barriers[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
   barriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
   barriers[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;

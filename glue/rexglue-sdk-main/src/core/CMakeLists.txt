@@ -141,6 +141,13 @@ elseif(UNIX)
     )
 endif()
 
+# Title graphics settings are registered once in the shared runtime (LRA
+# 7c97c58): they must exist before either renderer plugin is selected.
+target_sources(rexcore PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/graphics/gta4_native/core/options.cpp
+    ${PROJECT_SOURCE_DIR}/src/graphics/gta4_native/modern_shader_options.cpp
+)
+
 # Xenos data-format layer (stateless; headers under include/rex/graphics/).
 # The GPU emulation consuming it lives in the rexgpu-xenos plugin.
 target_sources(rexcore PRIVATE

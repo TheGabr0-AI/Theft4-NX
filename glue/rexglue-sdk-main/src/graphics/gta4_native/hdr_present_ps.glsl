@@ -12,6 +12,10 @@ layout(push_constant) uniform HDRPresentConstants {
   float peak_nits;
   float shoulder_start;
   float shoulder_power;
+#ifdef GTA4_FUSED_BILINEAR_HDR
+  layout(offset = 48) ivec2 presentation_origin;
+  layout(offset = 56) ivec2 presentation_extent;
+#endif
 } present_constants;
 
 layout(location = 0) out vec4 output_color;
@@ -20,12 +24,25 @@ float luma(vec3 color) {
   return dot(color, vec3(0.2126, 0.7152, 0.0722));
 }
 
-vec4 fetch_source(ivec2 coordinate) {
-  return texelFetch(source_image,
-                    clamp(coordinate, ivec2(0),
-                          present_constants.source_extent - ivec2(1)),
-                    0);
+// output_mode bit 64: the source is the float surface the title would have
+// blitted into its RGBA8 frontbuffer; every read repeats that conversion.
+vec4 frontbuffer_unorm8(vec4 value) {
+  return (present_constants.output_mode & 64u) != 0u
+             ? floor(clamp(value, vec4(0.0), vec4(1.0)) * 255.0 + 0.5) * (1.0 / 255.0)
+             : value;
 }
+
+vec4 fetch_source(ivec2 coordinate) {
+  return frontbuffer_unorm8(texelFetch(source_image,
+                                       clamp(coordinate, ivec2(0),
+                                             present_constants.source_extent - ivec2(1)),
+                                       0));
+}
+
+vec4 source_lod(vec2 uv) {
+  return frontbuffer_unorm8(textureLod(source_image, uv, 0.0));
+}
+#define textureLod(image, uv, lod) source_lod(uv)
 
 // A conservative, single-pass edge resolve for native-resolution output. It
 // blends only across a coherent luminance discontinuity, not along it. The
@@ -367,6 +384,16 @@ void main() {
   ivec2 coordinate = clamp(ivec2(source_position), ivec2(0),
                            present_constants.source_extent - ivec2(1));
   bool ssaa_enabled = (present_constants.output_mode & 32u) != 0u;
+#ifdef GTA4_FUSED_BILINEAR_HDR
+  // Preserve the two-pass order: filter the perceptual source first, round to
+  // the former RGBA16Float intermediate, then apply the unchanged HDR curve.
+  // The origin may be negative for overscan. The encoder clips to the drawable.
+  vec2 uv = (gl_FragCoord.xy - vec2(present_constants.presentation_origin)) *
+            (1.0 / vec2(present_constants.presentation_extent));
+  vec4 filtered = textureLod(source_image, uv, 0.0);
+  vec4 source = vec4(unpackHalf2x16(packHalf2x16(filtered.xy)),
+                     unpackHalf2x16(packHalf2x16(vec2(filtered.z, 1.0))));
+#else
   vec4 source = ssaa_enabled
                     ? resolve_ssaa_area(destination_coordinate)
                     : (present_constants.output_mode & 16u) != 0u
@@ -374,6 +401,7 @@ void main() {
                           : (present_constants.output_mode & 2u) != 0u
                                 ? resolve_spatial_edge(coordinate)
                                 : fetch_source(coordinate);
+#endif
   bool source_is_srgb_encoded =
       (present_constants.output_mode & 4u) != 0u && !ssaa_enabled;
   bool hdr_enabled = present_constants.hdr_mode != 0u;

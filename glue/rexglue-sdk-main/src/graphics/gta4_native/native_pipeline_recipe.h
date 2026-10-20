@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 
 #include <algorithm>
 #include <array>
@@ -10,6 +11,9 @@
 #include <rex/ui/vulkan/api.h>
 
 namespace rex::graphics::gta4_native {
+
+// TEMP (Android perf investigation): request driver shader statistics.
+inline std::atomic<bool> g_capture_pipeline_statistics{false};
 
 // Complete effective state of the native draw pipeline. No guest memory,
 // surface object, vector storage or borrowed pNext chain reaches the compiler.
@@ -294,6 +298,8 @@ class NativePipelineRecipe {
     info.pColorBlendState = &blend;
     info.pDynamicState = &dynamic;
     info.layout = layout;
+    if (g_capture_pipeline_statistics.load(std::memory_order_relaxed))
+      info.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
     return create(device, cache, 1, &info, nullptr, pipeline);
   }
 

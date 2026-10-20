@@ -76,7 +76,8 @@ struct Module {
 // Accept only the direct float32 color interface used by the admitted cache;
 // malformed or unsupported modules fail rather than silently changing semantics.
 inline std::optional<std::vector<uint32_t>> AddNativeColorOutputEpilogue(
-    std::span<const uint32_t> input, std::string* error = nullptr) {
+    std::span<const uint32_t> input, std::string* error = nullptr,
+    uint32_t passthrough_output_mask = 0) {
   using namespace color_output_spirv;
   auto fail = [&](const char* reason) -> std::optional<Words> {
     if (error) *error = reason;
@@ -174,6 +175,9 @@ inline std::optional<std::vector<uint32_t>> AddNativeColorOutputEpilogue(
     if (!interface_ids[id] || builtin[id] || v.size() < 4 ||
         (v[0] & 0xFFFF) != U(spv::Op::OpVariable) ||
         v[3] != uint32_t(spv::StorageClass::Output)) continue;
+    // Host temporal MRTs carry motion/reactivity/depth, not guest color. Their
+    // exact locations are explicitly admitted by the temporal shader caller.
+    if (locations[id] < 32 && (passthrough_output_mask & (uint32_t{1} << locations[id]))) continue;
     if (locations[id] >= kNativeColorOutputTargetCount ||
         (output_mask & (1u << locations[id]))) return fail("unsupported-output-location");
     const auto& ptr = definitions[v[1]];

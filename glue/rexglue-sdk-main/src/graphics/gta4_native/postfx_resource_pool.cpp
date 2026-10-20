@@ -1,3 +1,4 @@
+#include "native_profile_labels.h"
 #include "postfx_resource_pool.h"
 
 #include <array>
@@ -122,7 +123,7 @@ bool PostFxResourcePool::RequiresSceneSnapshotRecreation(VkFormat format,
 bool PostFxResourcePool::EnsureSplitPostFxImages(const ui::vulkan::VulkanDevice* device,
                                                  VkFormat format, PostFxExtent extent, bool needs_dof) {
   if (!needs_dof) return true;
-  const PostFxExtent half_extent = CalculatePostFxExtent(extent.width, extent.height, 2);
+  const PostFxExtent half_extent{extent.width / 2, extent.height / 2};
   return EnsureImage(device, format, extent, split_full_ping_) &&
          EnsureImage(device, format, half_extent, split_half_ping_) &&
          EnsureImage(device, format, half_extent, split_half_pong_);
@@ -131,7 +132,7 @@ bool PostFxResourcePool::EnsureSplitPostFxImages(const ui::vulkan::VulkanDevice*
 bool PostFxResourcePool::RequiresSplitPostFxRecreation(VkFormat format,
                                                        PostFxExtent extent, bool needs_dof) const {
   if (!needs_dof) return false;
-  const PostFxExtent half_extent = CalculatePostFxExtent(extent.width, extent.height, 2);
+  const PostFxExtent half_extent{extent.width / 2, extent.height / 2};
   return RequiresImageRecreation(format, extent, split_full_ping_) ||
          RequiresImageRecreation(format, half_extent, split_half_ping_) ||
          RequiresImageRecreation(format, half_extent, split_half_pong_);
@@ -198,8 +199,8 @@ bool PostFxResourcePool::RecordSceneSnapshot(VkCommandBuffer command_buffer,
   copy.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
   copy.dstSubresource.layerCount = 1;
   copy.extent = {extent.width, extent.height, 1};
-  dfn.vkCmdCopyImage(command_buffer, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                     scene_snapshot_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+  gpu_labels::Transfer(device, command_buffer, "GTA4/RecordSceneSnapshot/vkCmdCopyImage", [&] { return dfn.vkCmdCopyImage(command_buffer, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     scene_snapshot_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy); });
 
   barriers[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
   barriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;

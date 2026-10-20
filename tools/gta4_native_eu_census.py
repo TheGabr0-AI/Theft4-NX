@@ -52,7 +52,7 @@ EU_D3D_LO, EU_D3D_HI, V8_MINUS_EU = 0x829C7000, 0x829E4600, 0x714A0
 NATIVE_RECOMP_FILES = {
     'gta4_native_hooks.cpp', 'gta4_phone_trace.inc', 'gta4_tv_trace.inc', 'gta4_fire_escape_trace.inc',
     'gta4_bulb_source_trace.inc', 'gta4_help_trace_hooks.inc', 'gta4_fade_trace_hooks.inc',
-    'gta4_phone_trace_hooks.inc', 'gta4_gpu_pass_context.h',
+    'gta4_phone_trace_hooks.inc', 'gta4_gpu_pass_context.h', 'gta4_temporal_hooks.inc',
 }
 
 FUNC_HEAD = re.compile(r'^(?:DEFINE_REX_FUNC|extern "C" REX_FUNC|PPC_FUNC_IMPL|REX_FUNC)\((?:__imp__)?([A-Za-z_0-9]+)\)')

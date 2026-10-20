@@ -1,6 +1,9 @@
 #include "gta4_app.h"
+#include "gta4_hack_registry.h"
 #include "gta4_present_mode_policy.h"
+#include "gta4_streaming_hooks.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -14,6 +17,7 @@
 #include <rex/graphics/gta4_native/hdr_policy.h>
 #include <rex/graphics/gta4_native/supersampling_policy.h>
 #include <rex/graphics/video_mode_util.h>
+#include <rex/kernel/xboxkrnl/threading.h>
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
@@ -36,9 +40,25 @@
 #include "input/text_chat_dialog.h"
 #include "input/context_touch_controls.h"
 #include "input/context_touch_overlay.h"
+#include "input/context_touch_settings.h"
 #include "rpf_button_prompts.h"
 #include <network/community_multiplayer.h>
 #include <network/gta4_voice_audio.h>
+
+#if REX_PLATFORM_ANDROID
+#include <android/log.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#include <cctype>
+#include <dirent.h>
+#include <dlfcn.h>
+#include <fstream>
+#include <sched.h>
+#include <sstream>
+#include <thread>
+#include <unordered_map>
+#endif
 
 REXCVAR_DEFINE_STRING(gta4_multiplayer_backend, "community", "GTA IV/Multiplayer",
                       "Compatibility service: offline, lan, or community")
@@ -70,6 +90,12 @@ REXCVAR_DEFINE_BOOL(install, false, "GTA IV/Installation", "Run the full game in
 REXCVAR_DEFINE_BOOL(install_dlc, false, "GTA IV/Installation",
                     "Run the episode installation wizard")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_STRING(install_game_source, "", "GTA IV/Installation",
+                      "Host path of the base-game source preselected in the installation wizard")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_STRING(install_update_source, "", "GTA IV/Installation",
+                      "Host path of the v8 title update preselected in the installation wizard")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(install_check, false, "GTA IV/Installation",
                     "Verify the installed game and episode layouts before launch")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -86,14 +112,14 @@ REXCVAR_DEFINE_STRING(gta4_aspect_ratio, "auto", "GTA IV/Graphics/Display",
                       "Render aspect: auto follows the display; fixed ratios fit without stretching")
     .allowed({"auto", "original", "16:9", "16:10", "3:2", "4:3", "5:4", "21:9", "43:18", "32:9", "32:10"})
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
-REXCVAR_DEFINE_STRING(gta4_present_mode, "auto", "GTA IV/Graphics/Display",
-                      "Presentation mode: auto, vsync, mailbox, or immediate")
-    .allowed({"auto", "vsync", "mailbox", "immediate"})
-    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
-REXCVAR_DEFINE_UINT32(gta4_frame_limit, 60, "GTA IV/Graphics/Display",
-                      "Maximum guest frame rate: 0 is unlocked; supported caps are 30, 60, and "
+REXCVAR_DEFINE_STRING(gta4_present_mode, "vsync", "GTA IV/Graphics/Display",
+                      "Vertical sync: vsync is On; immediate is Off; auto/mailbox are legacy modes")
+    .allowed({"auto", "vsync", "fifo", "mailbox", "immediate"});
+// Android: 30 FPS with VSync divides the 60 Hz panel evenly.
+REXCVAR_DEFINE_UINT32(gta4_frame_limit, REX_PLATFORM_ANDROID ? 30 : 60, "GTA IV/Graphics/Display",
+                      "Maximum game and host presentation rate: 0 is unlocked; caps are 30, 40, 60, and "
                       "120 FPS")
-    .allowed({"0", "30", "60", "120"});
+    .allowed({"0", "30", "40", "60", "120"});
 REXCVAR_DEFINE_STRING(gta4_native_hdr_mode, "off", "GTA IV/Graphics/HDR",
                       "HDR output: off, scRGB, or Auto HDR")
     .allowed({"off", "scrgb", "auto_hdr"});
@@ -116,15 +142,20 @@ REXCVAR_DEFINE_DOUBLE(gta4_native_auto_hdr_shoulder_power, 2.5,
                       "Auto HDR highlight shoulder exponent")
     .range(1.0, 10.0);
 
-REXCVAR_DEFINE_UINT32(gta4_shadow_map_base_size, 512, "GTA IV/Graphics/Shadows",
+REXCVAR_DEFINE_UINT32(gta4_shadow_map_base_size, REX_PLATFORM_ANDROID ? 256 : 512,
+                      "GTA IV/Graphics/Shadows",
                       "Base shadow-map size (512 creates a 4096x4096 point-shadow cache)")
     .range(256, 1024)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_DOUBLE(gta4_shadow_distance_guard_factor, 1.0, "GTA IV/Graphics/Shadows",
+                      "Multiplier on the shadow distance owned by the 30 FPS guard")
+    .range(0.1, 1.0);
 REXCVAR_DEFINE_DOUBLE(gta4_shadow_distance_scale, 2.0, "GTA IV/Graphics/Shadows",
                       "Multiplier applied to GTA IV's directional shadow range")
-    .range(1.0, 4.0)
+    .range(0.1, 4.0)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
-REXCVAR_DEFINE_STRING(gta4_reflection_resolution, "1080p", "GTA IV/Graphics/Reflections",
+REXCVAR_DEFINE_STRING(gta4_reflection_resolution, REX_PLATFORM_ANDROID ? "original" : "1080p",
+                      "GTA IV/Graphics/Reflections",
                       "Reflection resolution preset: original, 1080p, or full")
     .allowed({"original", "1080p", "full"})
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
@@ -154,16 +185,24 @@ REXCVAR_DEFINE_STRING(gta4_reflection_aa, "original", "GTA IV/Graphics/Reflectio
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_STRING(gta4_reflection_capture_distance, "original",
                       "GTA IV/Graphics/Reflections/Advanced",
-                      "Exterior environment capture distance: original (40), extended (60), or "
+                      "Exterior environment capture distance: near (20), original (40), extended (60), or "
                       "far (80)")
-    .allowed({"original", "extended", "far"});
-REXCVAR_DEFINE_STRING(gta4_native_anti_aliasing, "smaa", "GTA IV/Graphics/Anti-Aliasing",
+    .allowed({"near", "original", "extended", "far"});
+REXCVAR_DEFINE_STRING(gta4_native_anti_aliasing, REX_PLATFORM_ANDROID ? "fxaa" : "smaa",
+                      "GTA IV/Graphics/Anti-Aliasing",
                       "Anti-aliasing: off, fxaa, smaa, deferred MSAA, or even-factor SSAA")
     // `spatial` remains loadable as a deprecated compatibility alias. It is
     // never exposed by the frontend or accepted by the controller setter.
-    .allowed({"off", "fxaa", "smaa", "msaa2x", "msaa4x", "ssaa2x", "ssaa4x",
+    .allowed({"off", "fxaa", "smaa", "taa", "metalfx_taa", "msaa2x", "msaa4x", "msaa4x_smaa", "ssaa2x", "ssaa4x",
               "ssaa6x", "ssaa8x", "ssaa10x", "ssaa12x", "ssaa14x", "ssaa16x",
               "spatial"});
+REXCVAR_DEFINE_BOOL(gta4_metalfx_frame_generation, false, "GTA IV/Graphics/Display",
+                    "MetalFX 2x frame interpolation; requires temporal AA and synchronized display")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_STRING(gta4_native_frame_generation, "off", "GTA IV/Graphics/Display",
+                      "Vulkan frame interpolation: off, fsr3, or dlss; requires FSR 3.1 or DLSS temporal reconstruction")
+    .allowed({"off", "fsr3", "dlss"})
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(gta4_native_anti_aliasing_unified, false,
                     "GTA IV/Graphics/Anti-Aliasing/Compatibility",
                     "Canonical unified anti-aliasing selection has replaced legacy split values");
@@ -171,8 +210,12 @@ REXCVAR_DEFINE_STRING(gta4_native_smaa_quality, "high", "GTA IV/Graphics/Anti-Al
                       "SMAA 1x preset: low, medium, high, or ultra")
     .allowed({"low", "medium", "high", "ultra"});
 REXCVAR_DEFINE_STRING(gta4_native_upscaler, "native", "GTA IV/Graphics/Upscaling",
-                      "Output upscaler: native or fsr1")
-    .allowed({"native", "fsr1"})
+                      "Output upscaler: native, fsr1, MetalFX, FSR 3.1, or DLSS; temporal modes require backend support")
+    .allowed({"native", "fsr1", "metalfx", "fsr3", "dlss"})
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_STRING(gta4_temporal_upscaler_quality, "quality", "GTA IV/Graphics/Upscaling",
+                      "FSR 3.1/DLSS preset; dimensions come from the active provider")
+    .allowed({"native", "quality", "balanced", "performance", "ultra_performance"})
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_STRING(gta4_fsr1_quality, "quality", "GTA IV/Graphics/Upscaling",
                       "FSR 1 preset: ultra_quality, quality, balanced, or performance")
@@ -182,11 +225,23 @@ REXCVAR_DEFINE_DOUBLE(gta4_fsr1_sharpness_reduction, 0.2, "GTA IV/Graphics/Upsca
                       "FSR 1 RCAS sharpness reduction in stops")
     .range(0.0, 2.0)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
-REXCVAR_DEFINE_BOOL(gta4_force_highest_lod, true, "GTA IV/Graphics/LOD",
+// Keep the authored resident LOD hierarchy by default. Forcing LOD0 at every
+// distance bypasses transitions as soon as a new drawable becomes resident.
+REXCVAR_DEFINE_BOOL(gta4_force_highest_lod, false, "GTA IV/Graphics/LOD",
                     "Prefer the highest resident model LOD regardless of distance");
-REXCVAR_DEFINE_DOUBLE(gta4_draw_distance_scale, 3.0, "GTA IV/Graphics/LOD",
+REXCVAR_DEFINE_BOOL(gta4_dynamic_draw_distance, false, "GTA IV/Graphics/LOD",
+                    "Lower the draw distance while frames miss the frame-rate target, restore it with headroom");
+REXCVAR_DEFINE_DOUBLE(gta4_dynamic_draw_distance_min, 0.7, "GTA IV/Graphics/LOD",
+                      "Lowest fraction of the configured draw distance the dynamic controller may use")
+    .range(0.25, 1.0);
+// Written by the renderer's controller; multiplies gta4_draw_distance_scale.
+REXCVAR_DEFINE_DOUBLE(gta4_draw_distance_dynamic_factor, 1.0, "GTA IV/Graphics/LOD",
+                      "Current dynamic draw-distance factor (managed automatically)")
+    .range(0.25, 1.0);
+REXCVAR_DEFINE_DOUBLE(gta4_draw_distance_scale, REX_PLATFORM_ANDROID ? 1.0 : 3.0,
+                      "GTA IV/Graphics/LOD",
                       "Multiplier applied through GTA IV's built-in world-distance input")
-    .range(1.0, 4.0);
+    .range(0.25, 4.0);
 REXCVAR_DEFINE_UINT32(gta4_drawable_reference_limit, 20000, "GTA IV/Graphics/LOD",
                       "Drawable-reference capacity used by extended draw distances")
     .range(13000, 40000)
@@ -427,6 +482,21 @@ AntiAliasingApplyResult SetConfiguredAntiAliasingMode(std::string_view value) {
     return AntiAliasingApplyResult::kRejected;
   }
 
+  if(UsesTemporalAntiAliasing(*requested)&&rex::cvar::GetFlagByName("gpu_plugin")!="gta4-metal"){
+    REXLOG_WARN("GTA4AAPolicy: {} requires the Metal renderer",value);
+    return AntiAliasingApplyResult::kRejected;
+  }
+  if(rex::cvar::GetFlagByName("gta4_native_upscaler")=="metalfx"&&*requested!=AntiAliasingMode::kMetalFxTaa){
+    REXLOG_WARN("GTA4AAPolicy: MetalFX upscaling includes temporal AA; select Native upscaling before changing AA");
+    return AntiAliasingApplyResult::kRejected;
+  }
+  const auto upscaler = rex::cvar::GetFlagByName("gta4_native_upscaler");
+  if ((upscaler == "fsr3" || upscaler == "dlss") &&
+      (UsesSceneMsaa(*requested) || UsesSceneSupersampling(*requested))) {
+    REXLOG_WARN("GTA4AAPolicy: {} requires a single-sample scene; select Native upscaling before {}",
+                upscaler, value);
+    return AntiAliasingApplyResult::kRejected;
+  }
   std::lock_guard lock(g_anti_aliasing_controller_mutex);
   InitializeFrontendAntiAliasingControllerLocked();
   const AntiAliasingMode active =
@@ -455,7 +525,7 @@ AntiAliasingApplyResult SetConfiguredAntiAliasingMode(std::string_view value) {
     std::string_view legacy_scene_msaa = "original";
     if (*requested == AntiAliasingMode::kMsaa2x) {
       legacy_scene_msaa = "2x";
-    } else if (*requested == AntiAliasingMode::kMsaa4x) {
+    } else if (GetAntiAliasingRoute(*requested).scene_sample_count == 4u) {
       legacy_scene_msaa = "4x";
     }
     // SetFlagByName intentionally records a pending restart even if the value
@@ -513,13 +583,16 @@ void SetStartupFlag(std::string_view name, std::string_view value) {
 }
 
 void ApplyPresentationMode() {
-  const auto policy = gta4::presentation::ResolveMode(REXCVAR_GET(gta4_present_mode));
+  const auto configured = rex::cvar::GetFlagByName("gta4_present_mode");
+  const auto policy = gta4::presentation::ResolveMode(configured == "auto" ? "vsync" : configured);
   if (!policy.explicit_mode) return;
   SetStartupFlag("vsync", policy.vsync ? "true" : "false");
   SetStartupFlag("vulkan_prefer_present_mode_fifo", policy.prefer_fifo ? "true" : "false");
   SetStartupFlag("vulkan_allow_present_mode_immediate", policy.immediate ? "true" : "false");
   SetStartupFlag("vulkan_allow_present_mode_mailbox", policy.mailbox ? "true" : "false");
   SetStartupFlag("vulkan_allow_present_mode_fifo_relaxed", "false");
+  REXLOG_INFO("GTA4VSync requested={} enabled={} fifo={} immediate={} mailbox={} apply=live",
+              configured, policy.vsync, policy.prefer_fifo, policy.immediate, policy.mailbox);
 }
 
 void LogEpisodeInstallState(const std::filesystem::path& marketplace_root) {
@@ -595,7 +668,7 @@ std::optional<rex::PathConfig> GTA4App::OnFinalizePaths(
     REXLOG_WARN("GTA IV installation is not launch-ready: {}", readiness_error);
   }
   const bool dlc_only = ready && force_dlc && !force_install;
-  new gta4::install::InstallDialog(
+  auto* install_dialog = new gta4::install::InstallDialog(
       imgui_drawer(), liberty_root_, dlc_only,
       [paths = std::move(paths), resume = std::move(resume)]() mutable {
         std::error_code error;
@@ -608,17 +681,73 @@ std::optional<rex::PathConfig> GTA4App::OnFinalizePaths(
         resume(std::move(paths));
       },
       [this]() { app_context().QuitFromUIThread(); });
+  install_dialog->Preselect(REXCVAR_GET(install_game_source), REXCVAR_GET(install_update_source));
   return std::nullopt;
 }
 
 void GTA4App::OnPreSetup(rex::RuntimeConfig& config) {
+  gta4::hacks::ApplySafeModeIfRequested();
   rex::input::mnk::SetNativeControllerCompatibilityBindings(
       gta4::input::KeyboardControllerBindings());
   if (!config.graphics && config.gpu_plugin.empty()) {
     config.gpu_plugin = "gta4-native";
   }
 
+  // Resolve the backend-dependent combination before the AA controller latches
+  // its active scene configuration. A pending frontend choice cannot change
+  // the active render graph until the next launch.
+  const bool metal_backend=config.gpu_plugin=="gta4-metal";
+  const bool vendor_temporal_requested = REXCVAR_GET(gta4_native_upscaler) == "fsr3" ||
+                                        REXCVAR_GET(gta4_native_upscaler) == "dlss";
+  if (vendor_temporal_requested && config.gpu_plugin != "gta4-native") {
+    REXLOG_WARN("{} requires the native Vulkan renderer; using native resolution on this backend",
+                REXCVAR_GET(gta4_native_upscaler));
+    REXCVAR_SET(gta4_native_upscaler, "native");
+  }
+  if (REXCVAR_GET(gta4_native_frame_generation) != "off") {
+    if (config.gpu_plugin != "gta4-native") {
+      REXLOG_WARN("{} frame generation requires the native Vulkan renderer; disabled for this launch",
+                  REXCVAR_GET(gta4_native_frame_generation));
+      REXCVAR_SET(gta4_native_frame_generation, "off");
+    } else if (!vendor_temporal_requested) {
+      REXLOG_WARN("Vulkan frame generation requires FSR 3.1 or DLSS temporal reconstruction; "
+                  "use its Native preset for native resolution; disabled for this launch");
+      REXCVAR_SET(gta4_native_frame_generation, "off");
+    } else if (REXCVAR_GET(gta4_present_mode) == "immediate") {
+      REXLOG_WARN("Vulkan frame generation uses synchronized presentation; selecting VSync for this launch");
+      REXCVAR_SET(gta4_present_mode, "vsync");
+    }
+  }
+  const auto requested_aa=rex::graphics::gta4_native::ParseAntiAliasingMode(REXCVAR_GET(gta4_native_anti_aliasing));
+  if(!metal_backend){
+    if(REXCVAR_GET(gta4_native_upscaler)=="metalfx"){
+      REXLOG_WARN("MetalFX temporal upscaling requires the Metal renderer; using native resolution");
+      REXCVAR_SET(gta4_native_upscaler,"native");
+    }
+    if(requested_aa&&rex::graphics::gta4_native::UsesTemporalAntiAliasing(*requested_aa)){
+      REXLOG_WARN("Temporal AA requires the Metal renderer; using SMAA on this backend");
+      REXCVAR_SET(gta4_native_anti_aliasing,"smaa");REXCVAR_SET(gta4_native_anti_aliasing_unified,true);
+    }
+    if(REXCVAR_GET(gta4_metalfx_frame_generation)){
+      REXLOG_WARN("MetalFX frame generation requires the Metal renderer; disabled for this launch");
+      REXCVAR_SET(gta4_metalfx_frame_generation,false);
+    }
+  }else if(REXCVAR_GET(gta4_native_upscaler)=="metalfx"||
+      (REXCVAR_GET(gta4_metalfx_frame_generation)&&(!requested_aa||!rex::graphics::gta4_native::UsesTemporalAntiAliasing(*requested_aa)))){
+    REXCVAR_SET(gta4_native_anti_aliasing,"metalfx_taa");REXCVAR_SET(gta4_native_anti_aliasing_unified,true);
+  }
+  if(metal_backend&&REXCVAR_GET(gta4_metalfx_frame_generation)&&REXCVAR_GET(gta4_present_mode)=="immediate"){
+    REXLOG_WARN("MetalFX frame generation uses synchronized presentation; selecting VSync for this launch");
+    REXCVAR_SET(gta4_present_mode,"vsync");
+  }
   ApplyPresentationMode();
+  // This callback owns no application pointer. Registry setters serialize the
+  // flag group; swapchain recreation remains on the existing presenter path.
+  static std::once_flag presentation_callback;
+  std::call_once(presentation_callback, [] {
+    rex::cvar::RegisterChangeCallback("gta4_present_mode",
+        [](std::string_view, std::string_view) { ApplyPresentationMode(); });
+  });
   rex::graphics::gta4_native::InitializeHdrController();
 
   const bool ssaa_active =
@@ -677,9 +806,228 @@ void GTA4App::OnPreSetup(rex::RuntimeConfig& config) {
   };
 }
 
+#if REX_PLATFORM_ANDROID
+// Off by default: on the Adreno 650 handheld it made the pinned threads faster
+// but not the frame rate (the GPU and the recorder bound it).
+REXCVAR_DEFINE_BOOL(android_pin_hot_threads, false, "GTA IV/Performance",
+                    "Keep the busiest threads (renderer stages, game logic) on the big CPU cores");
+
+REXCVAR_DEFINE_BOOL(android_gpu_turbo, false, "GTA IV/Performance",
+                    "Keep the Adreno GPU at its highest clock (kgsl power control off, as "
+                    "libadrenotools' adrenotools_set_turbo does): more heat and battery use");
+
+REXCVAR_DEFINE_BOOL(android_thermal_log, true, "GTA IV/Performance",
+                    "Log the GPU thermal level, clocks and temperature and the CPU clock limits "
+                    "every 5 seconds");
+
+namespace {
+
+// kgsl power control (KGSL_PROP_PWRCTRL through IOCTL_KGSL_SETPROPERTY): 0
+// pins the GPU at its highest power level, 1 gives scaling back to the
+// governor. The setting is device-wide and outlives the process, so the game
+// applies its own value at start (turbo off included) and restores scaling
+// when it shuts down normally. Without root it works on kgsl devices only.
+void ApplyGpuTurbo(bool turbo) {
+  struct KgslSetProperty {
+    unsigned int type;
+    void* value;
+    size_t size;
+  };
+  constexpr unsigned int kKgslPropPowerControl = 0xE;
+  uint32_t enable = turbo ? 0u : 1u;
+  KgslSetProperty property{kKgslPropPowerControl, &enable, sizeof(enable)};
+  const int fd = open("/dev/kgsl-3d0", O_RDWR | O_CLOEXEC);
+  if (fd < 0) return;
+  const int result = ioctl(fd, _IOW(0x09, 0x32, KgslSetProperty), &property);
+  close(fd);
+  __android_log_print(ANDROID_LOG_WARN, "LibertyRecomp", "gpu-turbo: %s (%s)",
+                      turbo ? "on" : "off", result == 0 ? "applied" : "refused");
+}
+
+// Handhelds throttle the GPU on junction temperature, and the frame rate then
+// follows its clock ceiling, not the scene (seen in skate3-android). Logging
+// the kgsl and cpufreq state shows whether a slower session is the device
+// heating up rather than the game.
+void StartThermalLog() {
+  std::thread([] {
+    bool turbo = REXCVAR_GET(android_gpu_turbo);
+    ApplyGpuTurbo(turbo);
+    const auto read = [](const char* path) {
+      std::ifstream file(path);
+      std::string value;
+      std::getline(file, value);
+      return value.empty() ? std::string("?") : value;
+    };
+    for (;;) {
+      std::this_thread::sleep_for(std::chrono::seconds(5));
+      if (REXCVAR_GET(android_gpu_turbo) != turbo) {
+        turbo = !turbo;
+        ApplyGpuTurbo(turbo);
+      }
+      if (!REXCVAR_GET(android_thermal_log)) continue;
+      const std::string kgsl = "/sys/class/kgsl/kgsl-3d0/";
+      std::string cpu_limits;
+      for (int cpu : {0, 4, 7}) {
+        cpu_limits += read(("/sys/devices/system/cpu/cpu" + std::to_string(cpu) +
+                            "/cpufreq/scaling_max_freq").c_str());
+        cpu_limits += cpu == 7 ? "" : "/";
+      }
+      // Guest threads spinning on yields (pinyon-shift found a title loop that
+      // gave up after 1000 of them, which return at once on the host).
+      const std::string yields = rex::kernel::xboxkrnl::TakeYieldCountSummary(4);
+      __android_log_print(ANDROID_LOG_WARN, "LibertyRecomp",
+                          "thermal: gpu-level=%s gpu-max=%s gpu-clk=%s gpu-busy=%s gpu-temp=%s "
+                          "cpu-max-khz=%s yields/spins-5s=%s",
+                          read((kgsl + "thermal_pwrlevel").c_str()).c_str(),
+                          read((kgsl + "max_gpuclk").c_str()).c_str(),
+                          read((kgsl + "gpuclk").c_str()).c_str(),
+                          read((kgsl + "gpu_busy_percentage").c_str()).c_str(),
+                          read((kgsl + "temp").c_str()).c_str(), cpu_limits.c_str(),
+                          yields.empty() ? "none" : yields.c_str());
+    }
+  }).detach();
+}
+
+// The scheduler often places the renderer's pipeline stages and the game
+// threads on the little cores for a while, and the slowest stage holds up the
+// others. Once a second the busiest threads (at most one per big core) are
+// limited to the big cores; the rest keep every core.
+void StartHotThreadPinning() {
+  std::thread([] {
+    std::vector<uint64_t> max_frequency;
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+      std::ifstream file("/sys/devices/system/cpu/cpu" + std::to_string(cpu) +
+                         "/cpufreq/cpuinfo_max_freq");
+      uint64_t frequency = 0;
+      if (!(file >> frequency)) break;
+      max_frequency.push_back(frequency);
+    }
+    if (max_frequency.empty()) return;
+    const uint64_t slowest = *std::min_element(max_frequency.begin(), max_frequency.end());
+    cpu_set_t big{}, all{};
+    size_t big_count = 0;
+    for (size_t cpu = 0; cpu < max_frequency.size(); ++cpu) {
+      CPU_SET(cpu, &all);
+      if (max_frequency[cpu] > slowest) {
+        CPU_SET(cpu, &big);
+        ++big_count;
+      }
+    }
+    if (!big_count) return;  // No big.LITTLE.
+
+    // CPU ticks (100 Hz) per second a thread needs to be pinned, or to stay.
+    constexpr uint64_t kPinTicks = 30, kKeepTicks = 20;
+    std::unordered_map<pid_t, uint64_t> last_ticks;
+    std::unordered_set<pid_t> pinned;
+    const auto set_affinity = [](pid_t tid, const cpu_set_t& set) {
+      sched_setaffinity(tid, sizeof(set), &set);
+    };
+    for (;;) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      if (!REXCVAR_GET(android_pin_hot_threads)) {
+        for (pid_t tid : pinned) set_affinity(tid, all);
+        pinned.clear();
+        last_ticks.clear();
+        continue;
+      }
+      std::vector<std::pair<uint64_t, pid_t>> busy;
+      std::unordered_map<pid_t, uint64_t> ticks;
+      if (DIR* tasks = opendir("/proc/self/task")) {
+        while (const dirent* entry = readdir(tasks)) {
+          if (!std::isdigit(static_cast<unsigned char>(entry->d_name[0]))) continue;
+          const pid_t tid = pid_t(std::atoi(entry->d_name));
+          std::ifstream stat_file(std::string("/proc/self/task/") + entry->d_name + "/stat");
+          std::string stat((std::istreambuf_iterator<char>(stat_file)), {});
+          const size_t name_end = stat.rfind(')');
+          if (name_end == std::string::npos) continue;
+          // Fields after the name start at 3 (state); utime is 14, stime 15.
+          std::istringstream fields(stat.substr(name_end + 2));
+          std::string field;
+          uint64_t utime = 0, stime = 0;
+          for (int index = 3; index <= 15 && fields >> field; ++index) {
+            if (index == 14) utime = std::strtoull(field.c_str(), nullptr, 10);
+            if (index == 15) stime = std::strtoull(field.c_str(), nullptr, 10);
+          }
+          ticks[tid] = utime + stime;
+          const auto last = last_ticks.find(tid);
+          if (last != last_ticks.end()) busy.emplace_back(utime + stime - last->second, tid);
+        }
+        closedir(tasks);
+      }
+      last_ticks = std::move(ticks);
+      std::sort(busy.begin(), busy.end(), std::greater<>());
+      std::unordered_set<pid_t> hot;
+      for (const auto& [delta, tid] : busy) {
+        if (hot.size() == big_count) break;
+        if (delta >= kPinTicks || (delta >= kKeepTicks && pinned.contains(tid))) hot.insert(tid);
+      }
+      for (pid_t tid : pinned)
+        if (!hot.contains(tid) && last_ticks.contains(tid)) set_affinity(tid, all);
+      for (pid_t tid : hot)
+        if (!pinned.contains(tid)) set_affinity(tid, big);
+      pinned = std::move(hot);
+    }
+  }).detach();
+}
+
+// Tuning without a relaunch: files/live_cvars.txt is re-read whenever it
+// changes, one --name=value per line. Settings the title latches at startup
+// still need a restart; per-frame ones (draw distance, density) apply live.
+void StartLiveCvarWatcher(std::filesystem::path path) {
+  std::thread([path = std::move(path)] {
+    std::filesystem::file_time_type applied{};
+    for (;;) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      std::error_code error;
+      const auto stamp = std::filesystem::last_write_time(path, error);
+      if (error || stamp == applied) {
+        continue;
+      }
+      applied = stamp;
+      std::ifstream file(path);
+      std::string line;
+      while (std::getline(file, line)) {
+        while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back()))) line.pop_back();
+        if (line.empty() || line[0] == '#') continue;
+        const size_t start = line.find_first_not_of('-');
+        const size_t equals = line.find('=');
+        if (start == std::string::npos || equals == std::string::npos || equals <= start) continue;
+        const std::string name = line.substr(start, equals - start);
+        const std::string value = line.substr(equals + 1);
+        if (name == "gta4_profile_start") {
+          // Arms one native-renderer profile capture from inside gameplay
+          // (see gta4_profile_native_autostart).
+          using StartFn = int (*)();
+          void* plugin = dlopen("librexgpu-gta4-native.so", RTLD_NOW | RTLD_NOLOAD);
+          auto start_fn =
+              plugin ? reinterpret_cast<StartFn>(dlsym(plugin, "rex_gta4_native_profile_start"))
+                     : nullptr;
+          const bool started = start_fn && start_fn();
+          __android_log_print(ANDROID_LOG_WARN, "LibertyRecomp", "live profile capture %s",
+                              started ? "armed" : "unavailable");
+          continue;
+        }
+        const bool ok = rex::cvar::SetFlagByName(name, value);
+        __android_log_print(ok ? ANDROID_LOG_WARN : ANDROID_LOG_ERROR, "LibertyRecomp",
+                            "live-cvar %s=%s %s", name.c_str(), value.c_str(),
+                            ok ? "applied" : "rejected");
+      }
+    }
+  }).detach();
+}
+
+}  // namespace
+#endif
+
 void GTA4App::OnPostSetup() {
+#if REX_PLATFORM_ANDROID
+  StartLiveCvarWatcher(rex::filesystem::GetUserFolder() / "live_cvars.txt");
+  StartHotThreadPinning();
+  StartThermalLog();
+#endif
   gta4::presentation::InitializeOptions();
   rex::graphics::gta4_native::InitializeAntiAliasingController();
+  gta4::input::ConfigureContextTouchSettings(native_config_path_.parent_path() / "touch-controls.ini");
   gta4::input::InitializeContextTouchControls();
   if (REXCVAR_GET(gta4_diagnostics_skip_user_music)) {
     gta4::input::PublishUserMusicPlayer(nullptr);
@@ -985,7 +1333,8 @@ void GTA4App::TitleProfileSyncWorkerMain() {
 void GTA4App::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
   gta4::game_center::Initialize();
   context_touch_overlay_ =
-      std::make_unique<gta4::input::ContextTouchOverlay>(drawer);
+      std::make_unique<gta4::input::ContextTouchOverlay>(
+          drawer, immediate_drawer(), native_config_path_.parent_path() / "touch-icons", window());
   text_chat_dialog_ = std::make_unique<gta4::input::TextChatDialog>(
       drawer, [this](bool captured) {
         SetTitleInputCaptured(captured);
@@ -1016,11 +1365,22 @@ bool GTA4App::RequiresSynchronizedInitialThreadResume() const {
              rex::graphics::gta4_native::kTitleCommandAbi;
 }
 
+bool GTA4App::OnWindowCloseRequested() {
+  gta4::streaming::FinishTrace();
+  (void)gta4::input::FlushContextTouchSettings();
+  return true;
+}
+
 void GTA4App::OnShutdown() {
+#if REX_PLATFORM_ANDROID
+  if (REXCVAR_GET(android_gpu_turbo)) ApplyGpuTurbo(false);
+#endif
+  gta4::streaming::FinishTrace();
   if (entitlement_service_) {
     entitlement_service_->SetConnectionRestoredHandler({});
     entitlement_service_ = nullptr;
   }
+  (void)gta4::input::FlushContextTouchSettings();
   gta4::input::ShutdownContextTouchControls();
   context_touch_overlay_.reset();
   rex::ui::UnregisterBind("bind_gta4_all_chat");

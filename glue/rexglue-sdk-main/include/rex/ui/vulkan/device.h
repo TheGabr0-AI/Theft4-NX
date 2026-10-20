@@ -10,6 +10,7 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <string>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -19,6 +20,10 @@
 namespace rex {
 namespace ui {
 namespace vulkan {
+
+// TEMP (Android perf investigation): per-frame averages of counted Vulkan commands
+// since the previous call.
+std::string ConsumeCommandCounters(uint32_t frames);
 
 class VulkanDevice {
  public:
@@ -37,8 +42,16 @@ class VulkanDevice {
   ~VulkanDevice();
 
   const VulkanInstance* vulkan_instance() const { return vulkan_instance_; }
+  // TEMP (Android perf investigation): VK_KHR_performance_query pools usable.
+  bool performance_query_enabled() const { return performance_query_enabled_; }
+  bool pipeline_statistics_enabled() const { return pipeline_statistics_enabled_; }
 
   VkPhysicalDevice physical_device() const { return physical_device_; }
+
+  bool dlss_extensions_enabled() const { return dlss_extensions_enabled_; }
+  const std::string& dlss_unavailable_reason() const { return dlss_unavailable_reason_; }
+  bool dlss_frame_generation_extensions_enabled() const { return dlss_fg_extensions_enabled_; }
+  const std::string& dlss_frame_generation_unavailable_reason() const { return dlss_fg_unavailable_reason_; }
 
   // If functionality from higher API versions is used, increase this.
   // This is for VkApplicationInfo.
@@ -92,6 +105,7 @@ class VulkanDevice {
     VkDeviceSize minStorageBufferOffsetAlignment = 256;
     uint32_t maxFramebufferWidth = 4096;
     uint32_t maxFramebufferHeight = 4096;
+    uint32_t maxColorAttachments = 0;
     VkSampleCountFlags framebufferColorSampleCounts = VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT;
     VkSampleCountFlags framebufferDepthSampleCounts = VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT;
     VkSampleCountFlags framebufferStencilSampleCounts =
@@ -128,6 +142,10 @@ class VulkanDevice {
     bool sparseBinding = false;
     bool sparseResidencyBuffer = false;
     bool shaderInt64 = false;
+    bool shaderInt16 = false;
+    bool shaderStorageImageExtendedFormats = false;
+    bool shaderStorageImageReadWithoutFormat = false;
+    bool shaderStorageImageWriteWithoutFormat = false;
 
     // Vulkan 1.2 features used by Liberty's precompiled native shader cache.
     bool runtimeDescriptorArray = false;
@@ -137,6 +155,8 @@ class VulkanDevice {
     bool descriptorBindingUpdateUnusedWhilePending = false;
     bool descriptorBindingVariableDescriptorCount = false;
     bool bufferDeviceAddress = false;
+    bool timelineSemaphore = false;
+    bool shaderFloat16 = false;
 
     // VK_KHR_sampler_mirror_clamp_to_edge (#15, promoted to 1.2)
 
@@ -205,9 +225,8 @@ class VulkanDevice {
     bool variableMultisampleRate = false;
   };
 
-#if defined(REX_PLATFORM_NX) && REX_PLATFORM_NX
-  static_assert(sizeof(Properties) == 568 && alignof(Properties) == 8);
-#endif
+  // Theft4: the Switch size check of this struct (sizeof == 568 before LRA's
+  // fields) is gone with them; the NVK build is to be checked again (M2).
 
   // Properties of the core API and enabled extensions, and enabled features.
   // Some supported functionality is enabled conditionally based on the
@@ -220,6 +239,8 @@ class VulkanDevice {
   // the Vulkan API they were promoted to it supported (with the
   // `ext_major_minor_` prefix rather than `ext_`).
   struct Extensions {
+    bool ext_GOOGLE_display_timing = false;
+    bool ext_AMD_buffer_marker = false;
     bool ext_KHR_swapchain = false;                     // #2
     bool ext_1_1_KHR_dedicated_allocation = false;      // #128
     bool ext_EXT_shader_stencil_export = false;         // #141
@@ -246,6 +267,9 @@ class VulkanDevice {
   VkDevice device() const { return device_; }
 
   struct Functions {
+    PFN_vkGetRefreshCycleDurationGOOGLE vkGetRefreshCycleDurationGOOGLE = nullptr;
+    PFN_vkCmdWriteBufferMarkerAMD vkCmdWriteBufferMarkerAMD = nullptr;
+    PFN_vkGetPastPresentationTimingGOOGLE vkGetPastPresentationTimingGOOGLE = nullptr;
 #define XE_UI_VULKAN_FUNCTION(name) PFN_##name name = nullptr;
 #define XE_UI_VULKAN_FUNCTION_PROMOTED(extension_name, core_name) \
   PFN_##core_name core_name = nullptr;
@@ -267,6 +291,20 @@ class VulkanDevice {
   };
 
   const Functions& functions() const { return functions_; }
+
+  // vkWaitForFences until the fences signal or the device fails, a second at
+  // a time: an Adreno 830 driver (Snapdragon 8 Elite) returns VK_TIMEOUT at
+  // once for a UINT64_MAX timeout (found by pinyon-shift), which callers took
+  // for a failure.
+  VkResult WaitForFences(uint32_t fence_count, const VkFence* fences, VkBool32 wait_all) const {
+    for (;;) {
+      const VkResult result = functions_.vkWaitForFences(device_, fence_count, fences, wait_all,
+                                                         UINT64_C(1000000000));
+      if (result != VK_TIMEOUT) {
+        return result;
+      }
+    }
+  }
 
   template <typename Object>
   void SetObjectName(const VkObjectType object_type, const Object object_handle,
@@ -312,6 +350,10 @@ class VulkanDevice {
 
   const std::vector<QueueFamily>& queue_families() const { return queue_families_; }
   uint32_t queue_family_graphics_compute() const { return queue_family_graphics_compute_; }
+  uint32_t queue_family_native_offscreen() const { return queue_family_native_offscreen_; }
+  bool has_native_offscreen_queue() const {
+    return queue_family_native_offscreen_ != queue_family_graphics_compute_;
+  }
   // UINT32_MAX if not supported or not enabled.
   // May be the same as queue_family_graphics_compute().
   uint32_t queue_family_sparse_binding() const { return queue_family_sparse_binding_; }
@@ -334,10 +376,16 @@ class VulkanDevice {
   explicit VulkanDevice(const VulkanInstance* vulkan_instance, VkPhysicalDevice physical_device);
 
   const VulkanInstance* vulkan_instance_ = nullptr;
+  bool performance_query_enabled_ = false;
+  bool pipeline_statistics_enabled_ = false;
   VkPhysicalDevice physical_device_ = nullptr;
 
   Properties properties_;
   Extensions extensions_;
+  bool dlss_extensions_enabled_ = false;
+  std::string dlss_unavailable_reason_;
+  bool dlss_fg_extensions_enabled_ = false;
+  std::string dlss_fg_unavailable_reason_;
 
   VkDevice device_ = nullptr;
 
@@ -345,6 +393,7 @@ class VulkanDevice {
 
   std::vector<QueueFamily> queue_families_;
   uint32_t queue_family_graphics_compute_ = UINT32_MAX;
+  uint32_t queue_family_native_offscreen_ = UINT32_MAX;
   uint32_t queue_family_sparse_binding_ = UINT32_MAX;
 
   MemoryTypes memory_types_;

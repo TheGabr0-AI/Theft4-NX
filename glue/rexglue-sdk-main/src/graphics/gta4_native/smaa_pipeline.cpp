@@ -1,3 +1,4 @@
+#include "native_profile_labels.h"
 #include "smaa_pipeline.h"
 #include "smaa_source_sync.h"
 
@@ -95,10 +96,9 @@ VkPipeline CreateFullscreenPipeline(const ui::vulkan::VulkanDevice* device,
                                     size_t fragment_size) {
   const auto& dfn = device->functions();
   const VkDevice vk_device = device->device();
-  VkShaderModule vertex = ui::vulkan::util::CreateShaderModule(
-      device, fullscreen_cw_vs, sizeof(fullscreen_cw_vs));
+  VkShaderModule vertex = gpu_labels::CreateShader(device, fullscreen_cw_vs, sizeof(fullscreen_cw_vs), "GTA4/fullscreen_cw_vs");
   VkShaderModule fragment =
-      ui::vulkan::util::CreateShaderModule(device, fragment_code, fragment_size);
+      gpu_labels::CreateShader(device, fragment_code, fragment_size, fragment_code == smaa_edge_low_ps ? "GTA4/smaa_edge_low_ps" : fragment_code == smaa_edge_medium_ps ? "GTA4/smaa_edge_medium_ps" : fragment_code == smaa_edge_high_ps ? "GTA4/smaa_edge_high_ps" : fragment_code == smaa_edge_ultra_ps ? "GTA4/smaa_edge_ultra_ps" : fragment_code == smaa_weight_low_ps ? "GTA4/smaa_weight_low_ps" : fragment_code == smaa_weight_medium_ps ? "GTA4/smaa_weight_medium_ps" : fragment_code == smaa_weight_high_ps ? "GTA4/smaa_weight_high_ps" : fragment_code == smaa_weight_ultra_ps ? "GTA4/smaa_weight_ultra_ps" : fragment_code == smaa_neighborhood_ps ? "GTA4/smaa_neighborhood_ps" : "GTA4/SMAA-fragment-unknown");
   if (!vertex || !fragment) {
     if (vertex) {
       dfn.vkDestroyShaderModule(vk_device, vertex, nullptr);
@@ -416,8 +416,8 @@ bool SmaaPipeline::RecordLookupUpload(VkCommandBuffer command_buffer,
     copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     copy.imageSubresource.layerCount = 1;
     copy.imageExtent = {images[index]->extent.width, images[index]->extent.height, 1};
-    dfn.vkCmdCopyBufferToImage(command_buffer, staging[index]->buffer, images[index]->image,
-                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    gpu_labels::Transfer(device, command_buffer, "GTA4/RecordLookupUpload/vkCmdCopyBufferToImage", [&] { return dfn.vkCmdCopyBufferToImage(command_buffer, staging[index]->buffer, images[index]->image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy); });
     barriers[index].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barriers[index].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     barriers[index].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -537,6 +537,7 @@ bool SmaaPipeline::Record(VkCommandBuffer command_buffer, const ui::vulkan::Vulk
     rendering.layerCount = 1;
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachments = &attachment;
+    gpu_labels::BeginRendering(device, command_buffer, rendering, __func__);
     dfn.vkCmdBeginRendering(command_buffer, &rendering);
     VkViewport viewport{};
     viewport.width = float(extent.width);
@@ -553,6 +554,7 @@ bool SmaaPipeline::Record(VkCommandBuffer command_buffer, const ui::vulkan::Vulk
                            sizeof(constants), &constants);
     dfn.vkCmdDraw(command_buffer, 3, 1, 0, 0);
     dfn.vkCmdEndRendering(command_buffer);
+    gpu_labels::End(device, command_buffer);
     barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;

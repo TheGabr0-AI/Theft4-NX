@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "dirty_state_delta.h"
+#include "native_snapshot_resource.h"
 
 namespace rex::graphics::gta4_native {
 
@@ -68,9 +69,20 @@ inline bool CaptureConstantPayloadDelta(std::span<const uint8_t> source,
                                         const DirtyRangeSet& dirty_ranges,
                                         uint32_t bytes_per_element,
                                         ConstantPayloadDelta& result) {
-  result = {};
+  // Cleared, not reassigned: recycled commands keep these buffers' capacity.
+  result.ranges.clear();
+  result.payload.clear();
+  result.complete_snapshot = false;
   if (!bytes_per_element) {
     return false;
+  }
+  // One allocation per vector: payload growth by insert reallocated several
+  // times per draw on the producer thread.
+  {
+    uint64_t total = 0;
+    for (const DirtyElementRange& dirty : dirty_ranges.ranges) total += uint64_t(dirty.count) * bytes_per_element;
+    if (total <= source.size()) result.payload.reserve(size_t(total));
+    result.ranges.reserve(dirty_ranges.ranges.size());
   }
   for (const DirtyElementRange& dirty : dirty_ranges.ranges) {
     if (!dirty.count || dirty.first > std::numeric_limits<uint32_t>::max() / bytes_per_element ||
@@ -129,7 +141,26 @@ struct ConstantStateVersion {
   // State bytes and token are immutable once the version is published.
   mutable std::shared_ptr<const ConstantStateVersion> parent;
   mutable std::shared_ptr<const std::vector<uint8_t>> materialized;
+  // Valid prefix of materialized when the render worker snapshots only what
+  // the consuming draws read (the buffer is always byte_size long). Render
+  // worker only; while the version is current, the canonical bank equals its
+  // content, so the prefix can still be extended for a later draw. 0: all.
+  mutable size_t materialized_bytes = 0;
 };
+
+// Versions and snapshot control blocks are allocated for nearly every draw
+// that changes constants and released on retirement threads. Only the render
+// worker (the owner of every AuthoritativeConstantState) allocates from this
+// resource. Never destroyed: versions may outlive any static teardown order.
+inline NativeSnapshotResource& ConstantVersionResource() {
+  static auto* resource = new NativeSnapshotResource();
+  return *resource;
+}
+
+inline std::shared_ptr<ConstantStateVersion> MakeConstantStateVersion() {
+  return std::allocate_shared<ConstantStateVersion>(
+      std::pmr::polymorphic_allocator<ConstantStateVersion>(&ConstantVersionResource()));
+}
 
 enum class ConstantApplyStatus : uint8_t {
   kApplied,
@@ -149,6 +180,55 @@ struct ConstantApplyResult {
 // One instance is owned by the render worker for each device and shader
 // stage. Published versions retain only copied deltas. A contiguous host view
 // is reconstructed lazily on first consumer use and then memoized.
+// Recycles the full-bank snapshot buffers taken for every draw that changes
+// constants (two 3.5-4 KB heap blocks per draw otherwise). Releases may come
+// from any thread (command retirement is asynchronous), hence the mutex.
+class ConstantSnapshotPool {
+ public:
+  static std::shared_ptr<const std::vector<uint8_t>> Copy(const std::vector<uint8_t>& source,
+                                                          size_t copy_bytes = SIZE_MAX) {
+    copy_bytes = std::min(copy_bytes, source.size());
+    std::vector<uint8_t>* buffer = nullptr;
+    {
+      std::lock_guard lock(mutex());
+      auto& list = free_list(source.size());
+      if (!list.empty()) {
+        buffer = list.back();
+        list.pop_back();
+      }
+    }
+    if (buffer) {
+      std::memcpy(buffer->data(), source.data(), copy_bytes);
+    } else if (copy_bytes == source.size()) {
+      buffer = new std::vector<uint8_t>(source);
+    } else {
+      buffer = new std::vector<uint8_t>(source.size());
+      std::memcpy(buffer->data(), source.data(), copy_bytes);
+    }
+    return std::shared_ptr<const std::vector<uint8_t>>(
+        buffer,
+        [](const std::vector<uint8_t>* bytes) {
+          auto* owned = const_cast<std::vector<uint8_t>*>(bytes);
+          std::lock_guard lock(mutex());
+          auto& list = free_list(owned->size());
+          if (list.size() < 8192) list.push_back(owned);
+          else delete owned;
+        },
+        std::pmr::polymorphic_allocator<std::byte>(&ConstantVersionResource()));
+  }
+
+ private:
+  static std::mutex& mutex() { static std::mutex instance; return instance; }
+  // One list per bank size (vertex, pixel and the rare others).
+  static std::vector<std::vector<uint8_t>*>& free_list(size_t size) {
+    static std::vector<std::pair<size_t, std::vector<std::vector<uint8_t>*>>> lists;
+    for (auto& [list_size, list] : lists)
+      if (list_size == size) return list;
+    lists.emplace_back(size, std::vector<std::vector<uint8_t>*>{});
+    return lists.back().second;
+  }
+};
+
 class AuthoritativeConstantState {
  public:
   static constexpr uint32_t kMaximumDeferredAncestors = 64;
@@ -161,19 +241,75 @@ class AuthoritativeConstantState {
   const std::vector<uint8_t>& canonical() const { return canonical_; }
   const std::shared_ptr<const ConstantStateVersion>& current_version() const { return current_; }
 
-  template <typename HashCallback>
-  ConstantApplyResult Apply(const ConstantPayloadDelta& delta, HashCallback&& hash_callback) {
-    // Most draws do not change both constant stages. Once initialized, an
-    // empty delta is already valid and cannot create a new state version.
-    if (initialized_ && !delta.complete_snapshot && delta.ranges.empty() &&
-        delta.payload.empty()) {
-      return {ConstantApplyStatus::kApplied, false, current_};
+  // Draw capture owns the authoritative state before later commands mutate it.
+  // Copy that complete state once here, rather than reconstructing a chain of
+  // deltas on the frame's Vulkan recording critical path. Unconsumed updates
+  // stay deferred and allocate no full-size snapshot.
+  // bytes: the prefix later consumers read (all of it by default).
+  const std::shared_ptr<const ConstantStateVersion>& SnapshotCurrentVersion(
+      size_t bytes = SIZE_MAX) const {
+    if (!current_) return current_;
+    bytes = std::min(bytes, canonical_.size());
+    if (!current_->materialized) {
+      current_->materialized = ConstantSnapshotPool::Copy(canonical_, bytes);
+      current_->materialized_bytes = bytes;
+      current_->parent.reset();
+    } else if (current_->materialized_bytes && current_->materialized_bytes < bytes) {
+      // Bytes past the old prefix are read by no earlier consumer.
+      auto* data = const_cast<uint8_t*>(current_->materialized->data());
+      std::memcpy(data + current_->materialized_bytes,
+                  canonical_.data() + current_->materialized_bytes,
+                  bytes - current_->materialized_bytes);
+      current_->materialized_bytes = bytes;
     }
+    return current_;
+  }
+
+
+  // consume: a draw takes the new state at once. The version then holds the
+  // complete bytes and no delta, so nothing is copied twice or allocated for
+  // a replay chain that would never be used.
+  template <typename HashCallback>
+  ConstantApplyResult Apply(const ConstantPayloadDelta& delta, HashCallback&& hash_callback,
+                            bool consume = false) {
     if (!ValidateConstantPayloadDelta(delta, canonical_.size())) {
       return {ConstantApplyStatus::kInvalidDelta, false, current_};
     }
     if (!initialized_ && !delta.complete_snapshot) {
       return {ConstantApplyStatus::kNeedsCompleteSnapshot, false, current_};
+    }
+    if (consume) {
+      if (!CanIncrementStateVersion(version_)) {
+        // Checked before writing: the state must keep matching current_.
+        bool unchanged = initialized_;
+        for (const ConstantDeltaRange& range : delta.ranges) {
+          unchanged = unchanged && std::memcmp(canonical_.data() + range.destination_offset,
+                                               delta.payload.data() + range.payload_offset,
+                                               range.byte_count) == 0;
+        }
+        return {unchanged ? ConstantApplyStatus::kApplied : ConstantApplyStatus::kVersionSpaceExhausted,
+                false, current_};
+      }
+      bool changed = !initialized_;
+      for (const ConstantDeltaRange& range : delta.ranges) {
+        const uint8_t* source = delta.payload.data() + range.payload_offset;
+        uint8_t* destination = canonical_.data() + range.destination_offset;
+        if (initialized_ && std::memcmp(destination, source, range.byte_count) == 0) continue;
+        changed = true;
+        std::memcpy(destination, source, range.byte_count);
+      }
+      if (!changed) return {ConstantApplyStatus::kApplied, false, current_};
+      IncrementStateVersion(version_);
+      initialized_ = true;
+      auto next = MakeConstantStateVersion();
+      next->token = version_;
+      next->content_hash = hash_callback(std::span<const uint8_t>(canonical_));
+      next->byte_size = canonical_.size();
+      // No delta and no parent: the draw snapshots this version from the
+      // canonical bank right away (SnapshotCurrentVersion), while it is current.
+      next->delta.complete_snapshot = true;
+      current_ = std::move(next);
+      return {ConstantApplyStatus::kApplied, true, current_};
     }
 
     ConstantPayloadDelta changed_delta;
@@ -204,7 +340,7 @@ class AuthoritativeConstantState {
     IncrementStateVersion(version_);
     initialized_ = true;
 
-    auto next = std::make_shared<ConstantStateVersion>();
+    auto next = MakeConstantStateVersion();
     next->token = version_;
     next->content_hash = hash_callback(std::span<const uint8_t>(canonical_));
     next->byte_size = canonical_.size();
@@ -259,12 +395,15 @@ class AuthoritativeConstantState {
     // temporary owning chain and its allocator traffic for a single delta.
     if (version->parent && version->parent->materialized &&
         version->parent->materialized->size() == version->byte_size &&
+        (!version->parent->materialized_bytes ||
+         version->parent->materialized_bytes == version->byte_size) &&
         ValidateConstantPayloadDelta(version->delta, version->byte_size)) {
       auto bytes = std::make_shared<std::vector<uint8_t>>(*version->parent->materialized);
       for (const auto& range : version->delta.ranges)
         std::memcpy(bytes->data() + range.destination_offset,
                     version->delta.payload.data() + range.payload_offset, range.byte_count);
       version->materialized = std::move(bytes);
+      version->materialized_bytes = version->byte_size;
       version->parent.reset();
       return version->materialized;
     }
@@ -275,6 +414,8 @@ class AuthoritativeConstantState {
       chain.push_back(cursor);
       cursor = cursor->parent;
     }
+    if (cursor && cursor->materialized_bytes && cursor->materialized_bytes != cursor->byte_size)
+      return {};
     auto bytes = std::make_shared<std::vector<uint8_t>>(
         cursor && cursor->materialized ? *cursor->materialized
                                        : std::vector<uint8_t>(version->byte_size));
@@ -289,6 +430,7 @@ class AuthoritativeConstantState {
       }
     }
     version->materialized = bytes;
+    version->materialized_bytes = version->byte_size;
     // The memoized contiguous state is now a complete immutable base. Cutting
     // its ancestry prevents a long-running device from retaining every prior
     // delta version across frames.
@@ -352,6 +494,12 @@ struct SharedConstantSemanticKey {
   uint64_t cached_descriptor_epoch = 0;
   uint64_t environmental_data_hash = 0;
   uint64_t environmental_sequence = 0;
+  uint64_t tone_lut_address = 0;
+  uint64_t cloud_mask_address = 0;
+  uint32_t cloud_mask_width = 0, cloud_mask_height = 0;
+  uint32_t modern_effects_enabled = 0;
+  uint32_t water_reflection = 0;
+  std::array<uint32_t, 6> viewport_bits{};
   uint32_t device = 0;
   uint32_t descriptor_copy = 0;
   uint32_t descriptor_page = std::numeric_limits<uint32_t>::max();
@@ -370,6 +518,7 @@ struct SharedConstantSemanticKey {
   uint32_t pixel_booleans = 0;
   uint8_t descriptor_backend = 0;
   uint8_t environment_present = 0;
+  uint8_t split_postfx_applied = 0;
 
   constexpr bool operator==(const SharedConstantSemanticKey&) const = default;
 };

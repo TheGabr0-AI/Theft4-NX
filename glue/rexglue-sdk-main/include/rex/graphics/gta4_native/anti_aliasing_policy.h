@@ -22,6 +22,9 @@ enum class AntiAliasingMode : uint8_t {
   kSsaa12x,
   kSsaa14x,
   kSsaa16x,
+  kMsaa4xSmaa,  // Four scene samples, then SMAA 1x on the resolved title image.
+  kTaa,
+  kMetalFxTaa,
 };
 
 enum class AntiAliasingApplyResult : uint8_t {
@@ -52,9 +55,12 @@ struct AntiAliasingRoute {
   // physical width and height of host-only render targets and is resolved
   // back to the logical output extent before presentation.
   uint32_t supersampling_pixel_factor = 1u;
+  uint32_t temporal_method = 0u; // 1: native TAA; 2: MetalFX temporal AA.
 };
 
 constexpr std::optional<AntiAliasingMode> ParseAntiAliasingMode(std::string_view value) {
+  if (value == "taa") return AntiAliasingMode::kTaa;
+  if (value == "metalfx_taa") return AntiAliasingMode::kMetalFxTaa;
   if (value == "off") {
     return AntiAliasingMode::kOff;
   }
@@ -69,6 +75,9 @@ constexpr std::optional<AntiAliasingMode> ParseAntiAliasingMode(std::string_view
   }
   if (value == "msaa4x") {
     return AntiAliasingMode::kMsaa4x;
+  }
+  if (value == "msaa4x_smaa") {
+    return AntiAliasingMode::kMsaa4xSmaa;
   }
   if (value == "ssaa2x") {
     return AntiAliasingMode::kSsaa2x;
@@ -99,6 +108,8 @@ constexpr std::optional<AntiAliasingMode> ParseAntiAliasingMode(std::string_view
 
 constexpr std::string_view AntiAliasingModeName(AntiAliasingMode mode) {
   switch (mode) {
+    case AntiAliasingMode::kTaa: return "taa";
+    case AntiAliasingMode::kMetalFxTaa: return "metalfx_taa";
     case AntiAliasingMode::kOff:
       return "off";
     case AntiAliasingMode::kFxaa:
@@ -109,6 +120,8 @@ constexpr std::string_view AntiAliasingModeName(AntiAliasingMode mode) {
       return "msaa2x";
     case AntiAliasingMode::kMsaa4x:
       return "msaa4x";
+    case AntiAliasingMode::kMsaa4xSmaa:
+      return "msaa4x_smaa";
     case AntiAliasingMode::kSsaa2x:
       return "ssaa2x";
     case AntiAliasingMode::kSsaa4x:
@@ -129,8 +142,13 @@ constexpr std::string_view AntiAliasingModeName(AntiAliasingMode mode) {
   return "off";
 }
 
+constexpr bool UsesTemporalAntiAliasing(AntiAliasingMode mode) {
+  return mode == AntiAliasingMode::kTaa || mode == AntiAliasingMode::kMetalFxTaa;
+}
+
 constexpr bool UsesSceneMsaa(AntiAliasingMode mode) {
-  return mode == AntiAliasingMode::kMsaa2x || mode == AntiAliasingMode::kMsaa4x;
+  return mode == AntiAliasingMode::kMsaa2x || mode == AntiAliasingMode::kMsaa4x ||
+         mode == AntiAliasingMode::kMsaa4xSmaa;
 }
 
 constexpr bool UsesSceneSupersampling(AntiAliasingMode mode) {
@@ -138,7 +156,7 @@ constexpr bool UsesSceneSupersampling(AntiAliasingMode mode) {
 }
 
 constexpr bool UsesSceneTopology(AntiAliasingMode mode) {
-  return UsesSceneMsaa(mode) || UsesSceneSupersampling(mode);
+  return UsesSceneMsaa(mode) || UsesSceneSupersampling(mode) || UsesTemporalAntiAliasing(mode);
 }
 
 constexpr AntiAliasingRoute GetAntiAliasingRoute(AntiAliasingMode mode) {
@@ -151,6 +169,8 @@ constexpr AntiAliasingRoute GetAntiAliasingRoute(AntiAliasingMode mode) {
       return {.scene_sample_count = 2u};
     case AntiAliasingMode::kMsaa4x:
       return {.scene_sample_count = 4u};
+    case AntiAliasingMode::kMsaa4xSmaa:
+      return {.presentation_smaa = true, .scene_sample_count = 4u};
     case AntiAliasingMode::kSsaa2x:
       return {.supersampling_pixel_factor = 2u};
     case AntiAliasingMode::kSsaa4x:
@@ -167,25 +187,41 @@ constexpr AntiAliasingRoute GetAntiAliasingRoute(AntiAliasingMode mode) {
       return {.supersampling_pixel_factor = 14u};
     case AntiAliasingMode::kSsaa16x:
       return {.supersampling_pixel_factor = 16u};
+    case AntiAliasingMode::kTaa: return {.temporal_method = 1u};
+    case AntiAliasingMode::kMetalFxTaa: return {.temporal_method = 2u};
     case AntiAliasingMode::kOff:
       return {};
   }
   return {};
 }
 
-constexpr bool HasExclusiveAntiAliasingRoute(const AntiAliasingRoute& route) {
+// Validate supported stage combinations, including the explicit hybrid mode.
+constexpr bool IsValidAntiAliasingRoute(const AntiAliasingRoute& route) {
   const bool scene_msaa = route.scene_sample_count > 1u;
   const bool scene_ssaa = route.supersampling_pixel_factor > 1u;
-  return !(route.presentation_fxaa && route.presentation_smaa) &&
+  const bool sample_count_valid = route.scene_sample_count == 1u ||
+      route.scene_sample_count == 2u || route.scene_sample_count == 4u;
+  const bool pixel_factor_valid = route.supersampling_pixel_factor == 1u ||
+      (route.supersampling_pixel_factor >= 2u && route.supersampling_pixel_factor <= 16u &&
+       (route.supersampling_pixel_factor & 1u) == 0u);
+  const bool temporal_valid = route.temporal_method <= 2u && (!route.temporal_method ||
+      (!scene_msaa && !scene_ssaa && !route.presentation_fxaa && !route.presentation_smaa));
+  return sample_count_valid && pixel_factor_valid && temporal_valid &&
+         !(route.presentation_fxaa && route.presentation_smaa) &&
          !(route.presentation_fxaa && scene_msaa) &&
-         !(route.presentation_smaa && scene_msaa) &&
+         !(route.presentation_smaa && scene_msaa && route.scene_sample_count != 4u) &&
          !(route.presentation_fxaa && scene_ssaa) &&
          !(route.presentation_smaa && scene_ssaa) && !(scene_msaa && scene_ssaa);
 }
 
 constexpr bool CanApplyAntiAliasingLive(AntiAliasingMode active,
                                         AntiAliasingMode requested) {
-  return active == requested || (!UsesSceneTopology(active) && !UsesSceneTopology(requested));
+  const auto before = GetAntiAliasingRoute(active);
+  const auto after = GetAntiAliasingRoute(requested);
+  // A post-process toggle can be live when the physical scene topology is unchanged.
+  return before.scene_sample_count == after.scene_sample_count &&
+         before.supersampling_pixel_factor == after.supersampling_pixel_factor &&
+         before.temporal_method == after.temporal_method;
 }
 
 // Old configurations stored final-image AA and scene MSAA independently.
@@ -196,6 +232,8 @@ constexpr bool CanApplyAntiAliasingLive(AntiAliasingMode active,
 constexpr ResolvedAntiAliasingConfiguration ResolveAntiAliasingConfiguration(
     std::string_view configured_mode, std::string_view legacy_scene_msaa,
     bool legacy_spatial_enabled, bool unified_mode_selected = false) {
+  if (const auto mode = ParseAntiAliasingMode(configured_mode); mode && UsesTemporalAntiAliasing(*mode))
+    return {*mode, AntiAliasingCompatibility::kCanonical, true};
   if (unified_mode_selected) {
     if (const auto canonical = ParseAntiAliasingMode(configured_mode)) {
       return {*canonical, AntiAliasingCompatibility::kCanonical,
@@ -213,6 +251,10 @@ constexpr ResolvedAntiAliasingConfiguration ResolveAntiAliasingConfiguration(
   if (configured_mode == "msaa2x") {
     return {AntiAliasingMode::kMsaa2x, AntiAliasingCompatibility::kCanonical,
             legacy_scene_msaa == "4x"};
+  }
+  if (configured_mode == "msaa4x_smaa") {
+    return {AntiAliasingMode::kMsaa4xSmaa, AntiAliasingCompatibility::kCanonical,
+            legacy_scene_msaa == "2x"};
   }
   if (configured_mode == "msaa4x") {
     return {AntiAliasingMode::kMsaa4x, AntiAliasingCompatibility::kCanonical,

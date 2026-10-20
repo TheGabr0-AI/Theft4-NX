@@ -11,6 +11,7 @@
  */
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <rex/platform.h>
@@ -118,6 +119,13 @@ class VulkanInstance {
 
   void EnumeratePhysicalDevices(std::vector<VkPhysicalDevice>& physical_devices_out) const;
 
+  // LRA 7c97c58 (gta4_native): DLSS's instance extensions. DLSS is not built here, so these
+  // stay false with the reason below.
+  bool dlss_extensions_enabled() const { return dlss_extensions_enabled_; }
+  const std::string& dlss_unavailable_reason() const { return dlss_unavailable_reason_; }
+  bool dlss_frame_generation_extensions_enabled() const { return dlss_fg_extensions_enabled_; }
+  const std::string& dlss_frame_generation_unavailable_reason() const { return dlss_fg_unavailable_reason_; }
+
  private:
   explicit VulkanInstance() = default;
 
@@ -132,6 +140,11 @@ class VulkanInstance {
   Extensions extensions_;
 
   VkInstance instance_ = nullptr;
+
+  bool dlss_extensions_enabled_ = false;
+  std::string dlss_unavailable_reason_ = "DLSS is not part of this build";
+  bool dlss_fg_extensions_enabled_ = false;
+  std::string dlss_fg_unavailable_reason_ = "DLSS is not part of this build";
 
   static VkBool32 DebugUtilsMessengerCallback(
       VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
