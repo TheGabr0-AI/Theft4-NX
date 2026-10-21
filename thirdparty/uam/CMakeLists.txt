@@ -77,6 +77,11 @@ if(NOT DEFINED NX_ROOT)
   target_include_directories(uam_tool PRIVATE ${UAM_DIR}/source ${UAM_MESA} ${UAM_GEN} ${UAM_GEN}/glsl)
   target_compile_definitions(uam_tool PRIVATE "PACKAGE_STRING=\"uam 1.1.0\"" DESKTOP NDEBUG)
   set_target_properties(uam_tool PROPERTIES OUTPUT_NAME uam CXX_STANDARD 11)
+  if(MSVC)
+    # Theft4 (16-deko3d-devlog.md, M1): Mesa's parser and nv50_ir recurse deeply; the largest GTA IV vertex
+    # shaders overflowed Windows' 1 MB default stack. The console's compile thread has 8 MB.
+    target_link_options(uam_tool PRIVATE /STACK:16777216)
+  endif()
   target_compile_options(uam_tool PRIVATE -w)
   target_link_libraries(uam_tool PRIVATE uamlib)
 endif()

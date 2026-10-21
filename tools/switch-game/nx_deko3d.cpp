@@ -62,21 +62,6 @@ uint64_t Fnv1a64(const std::string& text) {
   return h;
 }
 
-std::vector<uint8_t> ReadFile(const std::string& path) {
-  std::vector<uint8_t> data;
-  FILE* f = std::fopen(path.c_str(), "rb");
-  if (!f) return data;
-  std::fseek(f, 0, SEEK_END);
-  const long size = std::ftell(f);
-  std::fseek(f, 0, SEEK_SET);
-  if (size > 0) {
-    data.resize(size_t(size));
-    if (std::fread(data.data(), 1, data.size(), f) != data.size()) data.clear();
-  }
-  std::fclose(f);
-  return data;
-}
-
 uint32_t U32(const std::vector<uint8_t>& d, size_t at) {
   uint32_t v = 0;
   if (at + 4 <= d.size()) std::memcpy(&v, d.data() + at, 4);
@@ -121,48 +106,75 @@ bool CompareDksh(plume::Deko3DDevice* device, DkStage stage, const char* name, c
 //   gta4_deko3d_glsl.bin: "GDKG", u32 version 1, u32 count, then count entries of {u32 stage (DkStage),
 //     u32 text offset, u32 text size, u32 values offset, u32 value count}, the values (u32) and the texts;
 //   gta4_deko3d_shaders.bin: the PC's DKSH cache (tools/deko3d/gta4_deko3d_shaders.py: "GDK1").
+// Both files are large (about 110 and 100 MB): only their tables are read; a shader's text and a
+// PC DKSH are read from the card when needed, so the game keeps its memory.
 struct Package {
   struct Shader {
     DkStage stage;
-    std::string text;
+    uint32_t text_offset = 0, text_size = 0;
     std::vector<uint32_t> values;
   };
   std::vector<Shader> shaders;
   std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> pc_dksh;  // key -> offset, size
-  std::vector<uint8_t> cache;
+  FILE* glsl = nullptr;
+  FILE* cache = nullptr;
   size_t variants = 0;
+  ~Package() {
+    if (glsl) std::fclose(glsl);
+    if (cache) std::fclose(cache);
+  }
 };
+
+bool ReadAt(FILE* f, uint64_t offset, void* out, size_t size) {
+  return f && std::fseek(f, long(offset), SEEK_SET) == 0 && std::fread(out, 1, size, f) == size;
+}
+
+std::string ReadText(Package& p, const Package::Shader& s) {
+  std::string text(s.text_size, '\0');
+  if (!ReadAt(p.glsl, s.text_offset, text.data(), text.size())) text.clear();
+  return text;
+}
 
 bool LoadPackage(Package& p) {
   const std::string dir = g_options.package_dir;
-  const std::vector<uint8_t> glsl = ReadFile(dir + "/gta4_deko3d_glsl.bin");
-  p.cache = ReadFile(dir + "/gta4_deko3d_shaders.bin");
-  if (glsl.size() < 12 || std::memcmp(glsl.data(), "GDKG", 4) != 0 || U32(glsl, 4) != 1) {
+  p.glsl = std::fopen((dir + "/gta4_deko3d_glsl.bin").c_str(), "rb");
+  p.cache = std::fopen((dir + "/gta4_deko3d_shaders.bin").c_str(), "rb");
+  uint32_t head[4] = {};
+  if (!ReadAt(p.glsl, 0, head, 12) || std::memcmp(head, "GDKG", 4) != 0 || head[1] != 1) {
     Logf("deko3d: no game shader package in %s (gta4_deko3d_glsl.bin): no background compiles", dir.c_str());
     return false;
   }
-  if (p.cache.size() < 16 || std::memcmp(p.cache.data(), "GDK1", 4) != 0) {
+  uint32_t cache_head[4] = {};
+  if (!ReadAt(p.cache, 0, cache_head, 16) || std::memcmp(cache_head, "GDK1", 4) != 0) {
     Logf("deko3d: no PC DKSH cache in %s (gta4_deko3d_shaders.bin): no comparison", dir.c_str());
-    p.cache.clear();
+    if (p.cache) std::fclose(p.cache);
+    p.cache = nullptr;
   } else {
-    const uint32_t count = U32(p.cache, 8), tag = U32(p.cache, 12);
-    const size_t table = 16 + tag;
-    Logf("deko3d: PC DKSH cache: %u variants, tag '%.*s'", count, int(tag), (const char*)p.cache.data() + 16);
-    for (uint32_t i = 0; i < count && table + (i + 1) * 16 <= p.cache.size(); ++i) {
-      uint64_t key;
-      std::memcpy(&key, p.cache.data() + table + i * 16, 8);
-      p.pc_dksh[key] = {U32(p.cache, table + i * 16 + 8), U32(p.cache, table + i * 16 + 12)};
+    const uint32_t count = cache_head[2], tag = cache_head[3];
+    std::string tag_text(tag, '\0');
+    ReadAt(p.cache, 16, tag_text.data(), tag);
+    std::vector<uint8_t> table(size_t(count) * 16);
+    if (ReadAt(p.cache, 16 + tag, table.data(), table.size())) {
+      for (uint32_t i = 0; i < count; ++i) {
+        uint64_t key;
+        std::memcpy(&key, table.data() + i * 16, 8);
+        p.pc_dksh[key] = {U32(table, i * 16 + 8), U32(table, i * 16 + 12)};
+      }
     }
+    Logf("deko3d: PC DKSH cache: %u variants, tag '%s'", count, tag_text.c_str());
   }
-  const uint32_t count = U32(glsl, 8);
-  for (uint32_t i = 0; i < count && 12 + (i + 1) * 20 <= glsl.size(); ++i) {
-    const size_t e = 12 + i * 20;
+  const uint32_t count = head[2];
+  std::vector<uint8_t> entries(size_t(count) * 20);
+  if (!ReadAt(p.glsl, 12, entries.data(), entries.size())) return false;
+  for (uint32_t i = 0; i < count; ++i) {
+    const size_t e = i * 20;
     Package::Shader s;
-    s.stage = DkStage(U32(glsl, e));
-    const uint32_t to = U32(glsl, e + 4), ts = U32(glsl, e + 8), vo = U32(glsl, e + 12), vc = U32(glsl, e + 16);
-    if (size_t(to) + ts > glsl.size() || size_t(vo) + size_t(vc) * 4 > glsl.size()) break;
-    s.text.assign((const char*)glsl.data() + to, ts);
-    for (uint32_t k = 0; k < vc; ++k) s.values.push_back(U32(glsl, vo + k * 4));
+    s.stage = DkStage(U32(entries, e));
+    s.text_offset = U32(entries, e + 4);
+    s.text_size = U32(entries, e + 8);
+    const uint32_t vo = U32(entries, e + 12), vc = U32(entries, e + 16);
+    s.values.resize(vc);
+    if (vc && !ReadAt(p.glsl, vo, s.values.data(), size_t(vc) * 4)) break;
     p.variants += s.values.size();
     p.shaders.push_back(std::move(s));
   }
@@ -284,6 +296,7 @@ void RenderThread() {
   const bool have_package = g_options.compile_seconds > 0 && LoadPackage(package);
   CompileStats cs;
   size_t shader_index = 0, value_index = 0;
+  std::string shader_text;
 
   const uint64_t start = NowNs();
   uint64_t frames = 0, next_report = start + 10'000'000'000ull;
@@ -341,7 +354,8 @@ void RenderThread() {
       const uint64_t slice_end = NowNs() + 30'000'000ull;
       while (NowNs() < slice_end && shader_index < package.shaders.size()) {
         const Package::Shader& s = package.shaders[shader_index];
-        const std::string text = VariantText(s.text, s.values[value_index]);
+        if (value_index == 0) shader_text = ReadText(package, s);
+        const std::string text = VariantText(shader_text, s.values[value_index]);
         std::vector<uint8_t> dksh;
         std::string log;
         const uint64_t t0 = NowNs();
@@ -354,8 +368,12 @@ void RenderThread() {
           auto it = package.pc_dksh.find(Fnv1a64(text));
           if (it == package.pc_dksh.end()) {
             ++cs.missing_pc;
-          } else if (it->second.second == dksh.size() && size_t(it->second.first) + dksh.size() <= package.cache.size() &&
-                     std::memcmp(package.cache.data() + it->second.first, dksh.data(), dksh.size()) == 0) {
+          } else if (it->second.second == dksh.size() &&
+                     [&] {
+                       std::vector<uint8_t> pc(dksh.size());
+                       return ReadAt(package.cache, it->second.first, pc.data(), pc.size()) &&
+                              std::memcmp(pc.data(), dksh.data(), pc.size()) == 0;
+                     }()) {
             ++cs.identical;
           } else if (++cs.different <= 8) {
             Logf("deko3d: background DKSH differs from the PC's (shader %zu, value 0x%X: console %zu bytes, PC %u)",

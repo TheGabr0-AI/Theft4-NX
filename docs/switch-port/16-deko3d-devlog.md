@@ -277,6 +277,40 @@ Variants: GTA IV's specialization constant has two features (the cache's masks):
 normals, and the alpha test (0x702: bit 1 on, the function in bits 8-10). A shader with mask 0 has one
 variant; one with the alpha test nine (off, and the eight functions); twice that when bit 0 is in the mask.
 
+### Result (2026-10-21, all 1,274 European shaders)
+
+| Stage | Count |
+|---|---|
+| shaders (1,274 containers + 638 late alpha-test sources) | **1,912** SPIR-V, **0** DXC failures |
+| SPIR-V → GLSL (SPIRV-Cross) and the text checks | 1,912 of 1,912 |
+| banjo-nx's passes (first run) | 1,360 optimised, 552 kept as they were (uam refused the optimised text too, the two forms below), 0 timeouts |
+| **variants through uam** | **12,060 of 12,120 compiled (99.5 %), 60 failed** |
+| distinct DKSH in the cache | 6,284 (99 MB, `gta4_deko3d_shaders.bin`); the SD package `gta4_deko3d_glsl.bin` 112 MB |
+
+The first full run gave 11,488 of 12,120; two GTA IV forms, now fixed in the converter
+(`gta4_fixups`), caused 572 of the 632 failures:
+
+- **vertex input locations**: XenosRecomp gives each semantic a fixed location (TEXCOORD0-3 at 13-16,
+  COLOR0 17, BLENDWEIGHT 18, BLENDINDICES 19) and uam takes 0-15 ("invalid explicit location N specified
+  for `in_var_COLOR0`", 542 variants): the inputs are renumbered in order and the map is the second
+  line of the GLSL (`// gta4-dk vertex-inputs 0>0 13>1 18>2 19>3`), which the renderer will follow;
+- **pixel constants c224-c255** (90): the Vulkan build reads them by address; the deko3d pixel block is
+  declared with 256 float4 in every pixel shader (the renderer binds 4,096 bytes).
+
+**The 60 failures, cause and shaders:** all are vertex shaders (60 of 636) whose control flow
+XenosRecomp writes as its general `for (;;)` state machine (183 vertex shaders have it, 123 of them
+compile); 53 of the 60 are skinned (BLENDINDICES). uam crashes on 50 of them (segmentation fault, the
+same with devkitPro's own `uam.exe` 1.1.0 and with a 16 MB stack) and refuses 10 with "Error
+compiling program: -4". 20 are 19,800-29,300-line shaders, 40 are copies of one 2,741-line skinned
+shader. The cause inside uam is not isolated (da verificare): a minimal dynamic-UBO-index shader
+compiles. List: `<private>/eu-private/deko3d-out/report.txt`. Ways out to try: XenosRecomp's
+`XENOS_RECOMP_MERGE_PREDICATES`, splitting the state machine, or a uam fix found with a debug build.
+Without them those vertex shaders draw nothing on deko3d (their draws are rejected and counted).
+
+Time: the passes and checks run one shader at a time (a Python process and up to three uam runs each)
+and every variant is a uam process: about 6.5 hours for the first full run on this 4-core PC with 3
+jobs; `--reuse` keeps every result whose input text did not change.
+
 ### What plume calls LRA's renderer would need that deko3d lacks
 
 LRA's renderer calls Vulkan, not plume (above), so the question is asked of its Vulkan use (93
@@ -359,3 +393,36 @@ Recommendation: A, in two console runs: first the draws of the logo, loading scr
 rejected; then the 3D scene. Both start from this run's answers: whether uam's DKSH match the PC's on
 the console, how long uam takes per variant, and whether the device, swapchain and memory hold for
 four minutes beside the game.
+
+### The build (2026-10-21)
+
+`out/build/switch-game-dk` (`-DREXGLUE_SWITCH_NO_NVK=ON -DREXGLUE_SWITCH_DEKO3D=ON`, and
+`-DREXGLUE_SWITCH_DEKO3D_DEBUG=ON` for the debug NRO): `theft4-dk.nro` 45.9 MB and `theft4-dk-debug.nro`
+45.9 MB (the NVK NRO is about 58 MB). No Mesa driver in the ELF (`vkGetInstanceProcAddr` absent from the
+map). The frozen NVK build (`out/build/switch-game`) still compiles and links after the SDK changes.
+The game's shader package is read from the card a table and a text at a time (112 + 99 MB files: not
+loaded whole, the game keeps its memory).
+
+### Run 35: what to copy, what to read
+
+Copy to `sdmc:/switch/theft4/`: `theft4-dk-debug.nro` (first) or `theft4-dk.nro`, and `game.toml` from
+`out/console-runs/run35-build/`; to `sdmc:/switch/theft4/deko3d/`: `gta4_deko3d_glsl.bin` and
+`gta4_deko3d_shaders.bin` from `<private>/eu-private/deko3d-out/` (game data from the player's copy;
+without them the build still runs, with no background compiles). One boot of 4 minutes, standard clocks.
+
+On screen: 5 s of the test pattern (corners red / green / blue / white clockwise from the top left on
+dark grey, a yellow square partly covered by a magenta one **whose overlap stays yellow**), then dark
+blue. The game runs behind it on the null GPU (sound should play); its frames are not drawn.
+
+In `game.log`, the `deko3d:` lines:
+
+1. `starting`, `device, queue, swapchain 1280x720 (3 images), depth target` (or the failure);
+2. `DKSH test pattern vertex/pixel shader: console == PC, identical` and `DKSH console == PC for the test
+   pattern: yes|NO`;
+3. `PC DKSH cache: 6284 variants`, `game shader package: 1912 shaders, 12120 variants` (when copied);
+4. `test pattern done after N frames`;
+5. every 10 s: frames, **errors** (in the debug NRO, libdeko3dd's messages come through `plume:` lines),
+   **command memory**, image/buffer/code memory, **uam compiles and ms**, draws, barriers, **rejected
+   draws** (the game's, skipped by the null GPU);
+6. `background uam so far` / `done`: variants compiled, **identical to the PC**, different, not in the
+   PC cache, failed, and **uam's ms per variant** (mean, p50, p90, p99, max).

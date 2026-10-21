@@ -1,5 +1,5 @@
 diff --git a/refs/sa2-nx/app/thirdparty/uam/CMakeLists.txt b/Theft4-NX-clean/thirdparty/uam/CMakeLists.txt
-index 05a6e4e..dd3489c 100644
+index 05a6e4e..1f289b0 100644
 --- a/refs/sa2-nx/app/thirdparty/uam/CMakeLists.txt
 +++ b/Theft4-NX-clean/thirdparty/uam/CMakeLists.txt
 @@ -14,6 +14,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
@@ -13,6 +13,18 @@ index 05a6e4e..dd3489c 100644
  set(UAM_MESA ${UAM_DIR}/mesa-imported)
  set(UAM_GEN ${UAM_DIR}/generated)
  
+@@ -73,6 +77,11 @@ if(NOT DEFINED NX_ROOT)
+   target_include_directories(uam_tool PRIVATE ${UAM_DIR}/source ${UAM_MESA} ${UAM_GEN} ${UAM_GEN}/glsl)
+   target_compile_definitions(uam_tool PRIVATE "PACKAGE_STRING=\"uam 1.1.0\"" DESKTOP NDEBUG)
+   set_target_properties(uam_tool PROPERTIES OUTPUT_NAME uam CXX_STANDARD 11)
++  if(MSVC)
++    # Theft4 (16-deko3d-devlog.md, M1): Mesa's parser and nv50_ir recurse deeply; the largest GTA IV vertex
++    # shaders overflowed Windows' 1 MB default stack. The console's compile thread has 8 MB.
++    target_link_options(uam_tool PRIVATE /STACK:16777216)
++  endif()
+   target_compile_options(uam_tool PRIVATE -w)
+   target_link_libraries(uam_tool PRIVATE uamlib)
+ endif()
 diff --git a/refs/sa2-nx/app/thirdparty/uam/mesa-imported/c11/threads.h b/Theft4-NX-clean/thirdparty/uam/mesa-imported/c11/threads.h
 index 25be488..f7f9ecb 100644
 --- a/refs/sa2-nx/app/thirdparty/uam/mesa-imported/c11/threads.h

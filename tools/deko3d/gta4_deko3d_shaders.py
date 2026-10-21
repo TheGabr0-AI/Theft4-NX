@@ -309,6 +309,8 @@ def main():
                 key = re.sub(r'\d+', 'N', w)[:160]
                 warnings[key] += 1
                 warned[key].append(f'{stem}_{value:x}')
+            if not err and not os.path.isfile(dksh):
+                err = 'uam wrote no DKSH'
             if err:
                 failures['uam'].append((f'{stem}_{value:x}', err))
                 continue
