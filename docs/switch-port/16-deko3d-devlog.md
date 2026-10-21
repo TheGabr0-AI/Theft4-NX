@@ -426,3 +426,194 @@ In `game.log`, the `deko3d:` lines:
    draws** (the game's, skipped by the null GPU);
 6. `background uam so far` / `done`: variants compiled, **identical to the PC**, different, not in the
    PC cache, failed, and **uam's ms per variant** (mean, p50, p90, p99, max).
+
+## 2026-10-21: run 35 read (A), and M3 started (B to F)
+
+The user's run 35 (`theft4-dk-debug.nro` and `theft4-dk.nro`, commit `a199a68`, `nx_gpu = deko3d`), logs in
+`out/console-runs/run35-logs` (`game-debug.log` and `game-crash-debug.log` from the debug NRO, `game.log` and
+`game-crash.log` from the release one). On the console: the test pattern's rectangles all as expected, sound
+right, nothing else drawn (expected: the null GPU), the game reaches the game and reads the pad; holding + to
+quit showed an error (with NVK the exit was clean).
+
+User's decision for M3: a deko3d back end written inside `gta4_native`, the recording of draws separated from the
+front end (state, shader choice, preparation of textures and vertices); the Vulkan part stays as it is; no plume
+for drawing. Stages B1-B5 behind the cvar `nx_dk_stage`.
+
+### A. Run 35 from the `deko3d:` lines
+
+| Question | Answer (debug NRO; the release one the same within a frame) |
+|---|---|
+| DKSH console == PC | **yes**: the test pattern's vertex shader (1,280 bytes, uam 11 ms) and pixel shader (512 bytes, 7 ms) identical; in the background **19 of 19** game variants compiled by the console's uam identical to the PC's DKSH (0 different, 0 not in the PC cache, 0 failed) |
+| libdeko3dd errors | **0** during the run (`errors 0` in every line); one at the exit (below) |
+| command memory, images | plume's queue 1,024 KiB of command memory; images 3,840 KiB (the swapchain); buffers 0; code 1 KiB |
+| uam per variant | **5.1 to 30 s** per GTA IV variant on the console (mean 8.4 s, p50 8.2 s, p90 10.2 s, max 30.0 s), on core 2 at 0x3B beside the running game, against 7-11 ms for the test pattern's small shaders: only 19 of 12,120 variants in the 150 s budget. Run-time compiles of the game's shaders are not an option: **the console must load the PC's DKSH** (B3 does) |
+| variants equal to the PC | 19 of 19 |
+| draws skipped | 3.59 million in 208 s (release), the null GPU's: about 580 per swap |
+| frames | 303 frames of test pattern in 5 s (60 Hz); during the background compiles the pattern loop presented one frame per compile (the loop waited for uam), then ten per second |
+
+**The error at the exit**, decoded with `addr2line` on `switch-game-debug.elf`:
+
+- `exit(1)` from `defaultDebugFunc` (`dk_device.cpp:30`, libdeko3dd): the debug library shows an error applet
+  (`errorApplicationCreate`/`Show`, **the error the user saw**) and calls `exit(1)`, after `deko3d says
+  (dkDeviceDestroy, result 9): unfreed memory blocks`. What was being taken down: `nx_deko3d::Stop()` from
+  `ExitGame`, then plume's `Deko3DDevice::~Deko3DDevice`, then `dkDeviceDestroy` with a block still alive: plume
+  makes `texSizeBlock` ("texture sizes") at device creation and its destructor never frees it.
+- 0.3 s later, the access violation (`far 0x60`) on the **Main XThread** in
+  `std::_Hashtable<std::string, ...>::_M_locate_tr` (an `unordered_map<string, ...>` lookup; the key in the
+  registers is `"video_mode_width"`): `exit(1)` ran the static destructors, the cvar table among them, while the
+  game's main thread was still running and looked up a cvar. A consequence of the first, not a second bug.
+- The release library does not check at `dkDeviceDestroy`: its exit is clean (`exit(0)`, `game-crash.log`).
+
+### D. The exit (one attempt)
+
+- `thirdparty/plume-deko3d/plume_deko3d.cpp` (`patches/plume-deko3d-sa2-nx-adf3a4e-teardown.patch`):
+  ESISTENTE `~Deko3DDevice` destroys the retired blocks, the image chunks, the code blocks, `pushBlock` and
+  `zeroBlock`, then the queue and the device. NUOVO: also `texSizeBlock`; a counter of live blocks
+  (`makeBlock`/`destroyBlock`) logged before `dkDeviceDestroy` if not zero.
+- `tools/switch-game/nx_deko3d.cpp`: ESISTENTE the render thread returned and its locals were destroyed in
+  reverse order. NUOVO: after the last fence, everything made on the device is reset explicitly (fence, list,
+  pipeline, layout, shaders, framebuffers, depth, swapchain, queue), then the device (whose destructor stops and
+  waits for plume's compile thread, 2 s at most), with two log lines.
+- The new recorder (B) does the same in its own teardown: the recorder (GPU idle), the uam thread (joined), the
+  device last, with the live blocks logged (`deko3d: teardown:` lines).
+
+Da verificare on the console (the debug NRO's exit with + held). If it still fails: HOME.
+
+### C. The emulator: not done
+
+sa2-nx's `docs/deko3d-renderer-guide.md` section 5 and `docs/renut-renderer.md` name **banjo-nx's Ryubing build**
+(a Ryujinx fork) and say where it lives: a local source folder of banjo-nx's author, with RenderDoc used on it.
+Neither project gives a URL, a release or a commit for it, and banjo-nx's own repository is not among our
+references. Following the rule (no builds from anywhere else), stopped here: no emulator, and the three
+"emulator start" SDK changes were not ported (they would be untestable). To pick this up, banjo-nx's project has
+to publish the build or say where it comes from.
+
+### E. The 60 vertex shaders uam fails on
+
+- They are **60 different vertex shaders, variant 0 each**, but only **12 distinct GLSL texts** (the same
+  shader under several hashes): 39 of them share one 2,577-line text with 22 `case`s in XenosRecomp's
+  `for (;;) { switch (pc) ... }` state machine, the others are 17,000-29,000 lines with 32-38 cases.
+- **For 40 of the 60, M1's cache already has a DKSH for the identical text** (another hash with the same text
+  compiled in the same run). So the crash is not a property of the text alone: uam crashed on the same input in
+  one process and not in another. `gta4_deko3d_runtime.py` looks DKSH up by the text, so the console package has
+  DKSH for 40 of them: **20 variants without DKSH** in all.
+- The rewrites, each tried on the 60 with the PC uam (`out/deko3d_tools`, 16 MB stack):
+
+  | Rewrite | Compile | Failures |
+  |---|---|---|
+  | as it is | 0 of 60 | 48 crash (0xC0000005), 10 "Error compiling program: -4", 2 over 300 s |
+  | outer `for (;;)` bounded to 65,536 iterations | **2 of 60** | 47 crash, 10 error -4, 1 timeout |
+  | `do { } while (true)` | 0 of 60 | 49 crash, 10 error -4, 1 timeout |
+  | `while (true)` | 0 of 60 | 46 crash, 10 error -4, 4 timeouts |
+  | every `for (;;)` bounded | 2 of 60 | 46 crash, 10 error -4, 2 timeouts |
+
+  The loop's form is not the cause: uam crashes (an access violation) or gives -4 inside, whatever the loop
+  looks like. The 2 saved are one text (26,632 lines, two hashes), both among the 20 without DKSH: their DKSH
+  (bounded loop: the same shader unless it runs 65,536 blocks) go into the package with
+  `gta4_deko3d_runtime.py --extra-dksh`: **18 variants without DKSH** now. Today's uam crashes on all 60 texts as
+  they are, also on those whose DKSH M1's cache holds: those 40 DKSH come from an earlier run of the chain (its
+  `--reuse`), and whether that uam was the same build is not known: **da verificare** (their draws on the console;
+  the cache can be rebuilt without `--reuse`). Next: the crash under a debugger on the PC tool (16 MB stack
+  already), or splitting the state machine's cases into functions.
+- Draws per frame with these shaders: not measured on the PC in this session (da verificare at the next PC run).
+  The console counts every draw it skips for a shader without DKSH (reason 14 in the report) and logs the first.
+- Until a fix: the console skips those draws with a log line.
+
+### B. The deko3d back end inside `gta4_native`
+
+**Where the boundary is.** `gta4_native`'s Vulkan class keeps its front end and its recorder in one
+38,000-line file, and its render worker creates Vulkan objects while it assembles a frame, so the boundary
+could not go through it without changing the Vulkan path (which stays as it is). The interface is therefore at the
+title commands, with the game's semantics shared: LRA already keeps those in `gta4_native/core/` ("game
+semantics only: no API handles": `core::DecodeFixedState` of the guest device, the shared constant layout, the
+vertex usage locations), and the new front end is built on it.
+
+- `gta4_native/native_recorder.h`: the thin interface, no graphics API in it: `RecorderDraw` (fixed state from
+  `core::DecodeFixedState`, the constants that changed since the previous draw of the device as runs of
+  registers, the shaders by hash, the vertex declaration, the streams and the index buffer as guest addresses, the
+  fetch constant and object of each sampled slot, the render targets and depth target as `SurfaceDescriptor`),
+  `RecorderClear`, `RecorderResolve`, `RecorderPresent`, `RecorderResourceEvent`, and `INativeRecorder` (Draw,
+  Clear, Resolve, Present, ResourceEvent, Report). Vulkan is the other implementation in principle; in practice
+  it keeps its own path (moving it behind this interface is later work).
+- `gta4_native/native_front_end.{h,cpp}`: the title commands read as `Gta4NativeGraphicsSystem`'s producer reads
+  them (`ValidateAndCopyCommand`, `CaptureSurfaceDescriptor`, the device layout of `core/draw_state.h`): at each
+  draw the device is decoded and the constants compared with the previous draw's; DrawPrimitiveUp vertices are
+  copied (the title rewrites them right after the call); vertex and index buffers and textures are read by the
+  recorder, which the title waits for (the completed-frame word).
+- `gta4_native/deko3d/` (Switch only): `dk_core` (device, queue, work slots, upload ring, image heap, code,
+  descriptors, swapchain: nfsmw-nx's `Nucleo`), `dk_compiler` (uam thread: 8 MB stack, priority 0x3B, core 2,
+  banjo flags 1471 as the PC), `dk_shader_package` (the SD package below), `dk_xenos.h` (tiled addresses,
+  NEON untiling, packed mips, byte swaps: nfsmw-nx's), `dk_png.h` (stored-deflate PNG), `dk_recorder` (the
+  recorder), `dk_graphics_system` (the `IGraphicsSystem` the title talks to: ABI 33, the front end on the
+  title's threads, one recorder thread, the completed-frame word after each recorded Present, at most two frames
+  queued, the null GPU kept inside for the Vd* services).
+- `tools/deko3d/gta4_deko3d_runtime.py`: the console's shader package `gta4_deko3d_runtime.bin` (format in the
+  script): per shader (by hash, early or late) its used texture mask and specialization mask from
+  `shader_cache.cpp`, its vertex inputs with their XenosRecomp and uam locations and numeric type (from the
+  `// gta4-dk vertex-inputs` map and the declarations), the texture type of each binding, its colour outputs, and
+  the PC's DKSH of each variant. Made from M1's output: 1,912 shaders, 12,120 variants, 6,285 DKSH, 99.6 MB; 18
+  variants without DKSH (E).
+
+The rules paid for by nfsmw-nx, where they are in the code: no pipeline state (`DkRecorder::Emitted`, each block
+emitted only when it changes); one vertex buffer per `dkCmdBufBindVtxBuffers`; 256 bytes of slack per command
+piece (`dk_core.cpp`); textures as handles; barriers only around copy-engine transfers (`BeforeTransfer`,
+`Before3D`); descriptors written with `dkCmdBufPushData` into the pre-list only; the flip as a viewport swizzle
+(identity: the game's viewports are D3D's, positive height).
+
+Stages (`nx_dk_stage`; the draws read it at every draw; 0 is run 35's build):
+
+| Stage | What | Target | State |
+|---|---|---|---|
+| B1 (1) | the output (the guest front buffer, a full-screen pass with `nx_dk_gamma`), PNG captures every `nx_dk_capture_s` s in `sdmc:/switch/theft4/captures`, clears, render targets as images (D3D formats A8R8G8B8, A16B16G16R16F, R32F, G16R16F, D24FS8 as ZF32_X24S8), resolves | the clears and resolves of the logo frames on screen; draws counted, not drawn | written, compiled; da verificare |
+| B2 (2) | resolves as copies (copy engine; a blit between formats; the resolve's clears), textures (fingerprint, NEON untiling, upload in the pre-list, checks every 1 to 32 frames, 256 MB then the unused ones go), samplers, the 2D draws (no depth test): vertex input from the declaration and the shader's map, big-endian conversion (32-bit words, 16-bit components, DEC3N, D3DCOLOR), rectangle lists as quads, indices, constants by differences (`dkCmdBufPushConstants`), the shared block | logo, loading screens and Bink videos right on the Switch | written, compiled; da verificare |
+| B3 (3) | the 3D draws with the PC's DKSH; a variant without DKSH compiled by the console's uam in the background, its draws skipped with a log line until it is ready | the city drawn | written (the same draw path); da verificare |
+| B4 (4) | depth bias (units as the Vulkan path's D32F, da verificare); ZCULL, deferred depth clears, shadows, reflections, texture read-back to guest memory: not yet | | partly |
+| B5 (5) | post-processing, FSR1, the final pass: not yet | | not started |
+
+What B does not do yet (counted or logged when the game asks for it): 1D, 2D-array and 3D textures (empty
+textures of the type), cubemaps of resolved faces, texture read-back (`TextureLock` answers without copying),
+occlusion queries, MSAA, the EDRAM aliasing of surfaces that share placement (LRA's `FindPlacementOwner`), the
+temporal path and the reflections registry, LRA's shader overrides, the environmental data (fog and the "modern
+effects" constants stay zero).
+
+ESISTENTE → NUOVO outside the new files:
+
+- `tools/switch-game/main.cpp`: ESISTENTE `nx_gpu = deko3d` = the null GPU plus `nx_deko3d::Start` (plume's test
+  pattern). NUOVO: cvars `nx_dk_stage` (0-5, default 2), `nx_dk_gamma` (1.0), `nx_dk_capture_s` (0); with
+  `nx_dk_stage >= 1` the null GPU is wrapped in `Deko3dGraphicsSystem` and the test pattern is not started;
+  `ExitGame` also stops the recorder thread (`g_dk_graphics->Stop()`); the console text is closed for both.
+- `tools/switch-game/CMakeLists.txt`: ESISTENTE `REXGLUE_SWITCH_DEKO3D` built plume and `nx_deko3d.cpp`.
+  NUOVO: the library `theft4-gta4-deko3d` (the front end and `gta4_native/deko3d`, C++23, linked with plume's
+  target for uam and libdeko3d), and **LRA's native hooks at the European addresses** (the PC build's
+  `THEFT4_GTA4_NATIVE` list from `out/gta4-native-eu/src`): without them the title never sends a command. They
+  reach guest memory with `base + address + REX_PHYS_HOST_OFFSET(address)` (aliased views); the Switch has none,
+  so `tools/switch-game/nx_lra_hooks_compat.h`, forced into those sources only, defines the offset so the sum is
+  `rex::memory::GuestToHost(address)` (LRA's files unchanged). Checked in the ELF: the 104 hooked functions
+  resolve to `gta4_native_hooks.cpp` (e.g. `sub_829D0CC8`), the generated ones stay as `__imp__`.
+- `native_recorder.h`: a vertex buffer whose object holds a fetch constant (type 1) and an address below
+  0x20000000 is read through the physical view; LRA reads every one through the virtual view (on the PC they are in
+  the physical windows, where both agree).
+
+### F. Run 36
+
+The build (`out/build/switch-game-dk`, commit in `out/console-runs/run36-build/COMMIT`): `theft4-dk-debug.nro`
+(libdeko3dd) and `theft4-dk.nro`, the ELFs, and `game-stage2.toml`, `game-stage3.toml`, `game-stage5.toml`.
+
+To copy to the card:
+
+- `sdmc:/switch/theft4/theft4-dk-debug.nro` and one of the tomls as `sdmc:/switch/theft4/game.toml`;
+- `sdmc:/switch/theft4/deko3d/gta4_deko3d_runtime.bin` (new, 99.6 MB) and `gta4_deko3d_glsl.bin` (as in run 35),
+  from `<private>/eu-private/deko3d-out/` (game data from the player's copy).
+
+The order: **stage 2 first** (3 minutes: the logo, the loading screens, the intro video), then stage 3 (4 minutes,
+into the game), stage 5 only if 3 draws. To copy back: `game.log`, `game-crash*.log`, `game-exit*.log` and
+`sdmc:/switch/theft4/captures/dk-f*.png` (one every 10 s). If a boot shows nothing or the log stops, the same toml
+with `nx_dk_stage = 1` says whether the output and the resolves work without any draw.
+
+What to read in `game.log`: `deko3d:` lines: the device, the core, the uam self-test, `shader package ...: 1912
+shaders, 6285 DKSH`, `recorder ready`, the first render targets and resolved textures (`render target`, `resolved
+texture`), `draws skipped: <why> (reason N)` (once per reason), and every 10 s the front end's counters and the
+recorder's two report lines (frames per second, draws per frame, drawn and skipped by reason, clears, resolves,
+presents with and without a source, textures, shaders from the PC and from the console's uam, command memory,
+upload, barriers, image and code memory, deko3d blocks, **libdeko3dd errors**); at the exit, the `teardown:` lines.
+

@@ -400,6 +400,23 @@ void RenderThread() {
   }
   Report(frames, cs, have_package ? package.variants : 0);
   queue->waitForCommandFence(fence.get());
+  // D (run 35: the debug library's "unfreed memory blocks" at dkDeviceDestroy ended the process with exit(1)):
+  // with the GPU idle, everything made on the device goes before it, users before what they use; the device's
+  // destructor then stops plume's compile thread and logs any block still alive.
+  fence.reset();
+  list.reset();
+  pipeline.reset();
+  layout.reset();
+  ps.reset();
+  vs.reset();
+  framebuffers.clear();
+  depth.reset();
+  swapchain.reset();
+  queue.reset();
+  Logf("deko3d: teardown: GPU idle, the device's objects destroyed; destroying the device");
+  device.reset();
+  iface.reset();
+  Logf("deko3d: teardown done");
 }
 
 }  // namespace

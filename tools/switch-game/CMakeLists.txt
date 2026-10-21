@@ -217,10 +217,50 @@ if(REXGLUE_SWITCH_DEKO3D)
         set(_deko3d_lib "${DEVKITPRO}/libnx/lib/libdeko3d.a")
     endif()
     target_link_libraries(theft4-plume-deko3d PUBLIC "${_uam_local}" "${_deko3d_lib}" nx)
+    # M3 B (16-deko3d-devlog.md): Liberty Recompiled's gta4_native on deko3d: the backend-neutral front end
+    # (native_front_end.cpp) and the deko3d recorder (gta4_native/deko3d), for nx_gpu = deko3d with nx_dk_stage >= 1.
+    set(_gta4_native "${THEFT4_ROOT}/glue/rexglue-sdk-main/src/graphics/gta4_native")
+    add_library(theft4-gta4-deko3d STATIC
+        "${_gta4_native}/native_front_end.cpp"
+        "${_gta4_native}/deko3d/dk_core.cpp"
+        "${_gta4_native}/deko3d/dk_compiler.cpp"
+        "${_gta4_native}/deko3d/dk_shader_package.cpp"
+        "${_gta4_native}/deko3d/dk_recorder.cpp"
+        "${_gta4_native}/deko3d/dk_graphics_system.cpp")
+    add_dependencies(theft4-gta4-deko3d switch-game-uam-local)
+    target_compile_features(theft4-gta4-deko3d PRIVATE cxx_std_23)
+    target_compile_options(theft4-gta4-deko3d PRIVATE -fno-strict-aliasing -fno-char8_t $<$<CONFIG:RELEASE>:-O3>)
+    target_include_directories(theft4-gta4-deko3d
+        PUBLIC "${_gta4_native}/deko3d"
+        PRIVATE "${_gta4_native}" "${THEFT4_ROOT}/thirdparty/uam" "${THEFT4_ROOT}/glue/rexglue-sdk-main/include")
+    # uam_local.o, libdeko3d(d) and libnx come with plume's target (one copy of the object in the link).
+    target_link_libraries(theft4-gta4-deko3d PRIVATE rexcore xxHash::xxhash fmt::fmt spdlog::spdlog
+        PUBLIC theft4-plume-deko3d)
+    # Liberty Recompiled's native hooks at the European addresses (tools/gta4_native_eu_translate.py, the PC build's
+    # THEFT4_GTA4_NATIVE list): they send the title commands to whatever graphics system answers their ABI. With
+    # nx_dk_stage 0 the null GPU answers 0 and every hook runs the game's own code.
+    set(THEFT4_GTA4_NATIVE_EU_SRC "${THEFT4_ROOT}/out/gta4-native-eu/src")
+    if(NOT EXISTS "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_native_hooks.cpp")
+        message(FATAL_ERROR "REXGLUE_SWITCH_DEKO3D needs the native hooks: run python tools/gta4_native_eu_translate.py")
+    endif()
+    set(_lra_hooks
+        "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_native_hooks.cpp"
+        "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_aspect_hooks.cpp"
+        "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_font_selection_trace.cpp"
+        "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_presentation_options.cpp"
+        "${THEFT4_GTA4_NATIVE_EU_SRC}/theft4_lra_app_stubs.cpp"
+        "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4eu_app_cvars.cpp"
+        "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4eu_unresolved_stubs.cpp")
+    target_sources(switch-game PRIVATE ${_lra_hooks})
+    set_source_files_properties(${_lra_hooks} PROPERTIES INCLUDE_DIRECTORIES
+        "${THEFT4_GTA4_NATIVE_EU_SRC};${THEFT4_ROOT}/glue/rexglue-sdk-main/src;${THEFT4_ROOT}/glue/rexglue-sdk-main/thirdparty/inja/third_party/include")
+    # Their guest pointers through GuestToHost (nx_lra_hooks_compat.h: no aliased views on the Switch).
+    set_source_files_properties(${_lra_hooks} PROPERTIES COMPILE_OPTIONS
+        "-include;${CMAKE_CURRENT_SOURCE_DIR}/nx_lra_hooks_compat.h")
     target_sources(switch-game PRIVATE nx_deko3d.cpp)
     set_property(SOURCE main.cpp APPEND PROPERTY COMPILE_DEFINITIONS
         "THEFT4_NX_DEKO3D=1;THEFT4_NX_DEKO3D_DEBUG=$<BOOL:${REXGLUE_SWITCH_DEKO3D_DEBUG}>")
-    target_link_libraries(switch-game PRIVATE theft4-plume-deko3d)
+    target_link_libraries(switch-game PRIVATE theft4-gta4-deko3d theft4-plume-deko3d)
 endif()
 
 # Every way out of the process goes through main.cpp's __wrap_* first, which

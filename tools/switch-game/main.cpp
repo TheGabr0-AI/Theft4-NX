@@ -120,6 +120,7 @@
 #include "nx_threads.h"
 #if THEFT4_NX_DEKO3D
 #include "nx_deko3d.h"
+#include "dk_graphics_system.h"  // glue/rexglue-sdk-main/src/graphics/gta4_native/deko3d
 #endif
 #include "theft4_build_commit.h"  // build dir, see build_commit.cmake
 
@@ -157,6 +158,21 @@ REXCVAR_DEFINE_STRING(nx_gpu, "vulkan", "Switch",
 REXCVAR_DEFINE_INT32(nx_dk_compile_s, 150, "Switch",
                      "nx_gpu = deko3d: seconds of background uam compiles of the game's shader "
                      "package (sdmc:/switch/theft4/deko3d), each compared with the PC's DKSH; 0 = none");
+REXCVAR_DEFINE_INT32(nx_dk_stage, 2, "Switch",
+                     "nx_gpu = deko3d (16-deko3d-devlog.md M3 B): 0 = run 35's build (the null GPU and "
+                     "plume's test pattern); 1-5 = Liberty Recompiled's title commands to the deko3d "
+                     "recorder (gta4_native/deko3d), up to that stage: 1 output, clears, targets and "
+                     "resolves, no draws; 2 + textures and the 2D draws (no depth test); 3 + the 3D draws; "
+                     "4 + depth bias and depth work; 5 + post-processing. The stage of the draws is read "
+                     "at every draw; 0 against 1-5 at start")
+    .range(0, 5);
+REXCVAR_DEFINE_DOUBLE(nx_dk_gamma, 1.0, "Switch",
+                      "nx_gpu = deko3d, nx_dk_stage >= 1: the output is the guest front buffer raised to "
+                      "1 / gamma (1 = as the game made it; LRA shows it as it is)");
+REXCVAR_DEFINE_INT32(nx_dk_capture_s, 0, "Switch",
+                     "nx_gpu = deko3d, nx_dk_stage >= 1: a PNG of the shown frame every N seconds in "
+                     "sdmc:/switch/theft4/captures (dk-fNNNNNN.png); 0 = none")
+    .range(0, 3600);
 REXCVAR_DEFINE_BOOL(nx_log_durable, false, "Switch",
                     "true: every log line is written to game.log at once (open, write, fsync, "
                     "close on the thread that logs: slow on the SD, for crash hunting); false: a "
@@ -395,6 +411,10 @@ namespace {
 // game.log.
 std::timed_mutex g_console_mutex;
 bool g_console_open = false;  // under g_console_mutex
+#if THEFT4_NX_DEKO3D
+// nx_gpu = deko3d, nx_dk_stage >= 1: the runtime owns it; ExitGame stops its recorder thread.
+rex::graphics::gta4_native::dk::Deko3dGraphicsSystem* g_dk_graphics = nullptr;
+#endif
 
 void ConsolePrint(const char* text) {
   if (!g_console_mutex.try_lock_for(std::chrono::milliseconds(200))) {
@@ -3208,6 +3228,9 @@ void StopNullAudioWorker() {
   LogExitState();
 #if THEFT4_NX_DEKO3D
   theft4::nx_deko3d::Stop();  // the render thread is joined, never detached
+  if (g_dk_graphics) {
+    g_dk_graphics->Stop();  // M3: the recorder thread drains, tears down in order and is joined
+  }
 #endif
   if (mode == 'D') {
     StopFileIo();
@@ -3617,6 +3640,23 @@ void StartupSummary() {
           g_console_open = false;
         }
       }
+    }
+    if (REXCVAR_GET(nx_gpu) == "deko3d" && REXCVAR_GET(nx_dk_stage) >= 1) {
+      // M3 B: Liberty Recompiled's title commands to the deko3d recorder; the null GPU stays inside for the
+      // guest GPU services (16-deko3d-devlog.md).
+      rex::graphics::gta4_native::dk::GraphicsSystemOptions dk;
+      dk.stage = [] { return int(REXCVAR_GET(nx_dk_stage)); };
+      dk.gamma = [] { return float(REXCVAR_GET(nx_dk_gamma)); };
+      dk.capture_seconds = REXCVAR_GET(nx_dk_capture_s);
+      auto system = std::make_unique<rex::graphics::gta4_native::dk::Deko3dGraphicsSystem>(
+          std::move(config.graphics), dk);
+      g_dk_graphics = system.get();
+      config.graphics = std::move(system);
+      GAME_INFO("graphics: nx_gpu = deko3d (%s deko3d library), nx_dk_stage %d: gta4_native's front end and the "
+                "deko3d recorder draw the game; gamma %.2f, captures every %d s (console closed)",
+                THEFT4_NX_DEKO3D_DEBUG ? "debug" : "release", int(REXCVAR_GET(nx_dk_stage)),
+                double(REXCVAR_GET(nx_dk_gamma)), dk.capture_seconds);
+    } else if (REXCVAR_GET(nx_gpu) == "deko3d") {
       theft4::nx_deko3d::Options dk;
       dk.compile_seconds = REXCVAR_GET(nx_dk_compile_s);
       GAME_INFO("graphics: nx_gpu = deko3d (%s deko3d library): the null GPU keeps the game in step and "

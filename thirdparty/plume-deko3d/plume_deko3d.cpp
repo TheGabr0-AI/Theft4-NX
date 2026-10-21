@@ -792,6 +792,9 @@ namespace plume {
 
     // ---- Deko3DDevice
 
+    // Theft4: memory blocks made and not yet destroyed (the teardown logs them before dkDeviceDestroy).
+    static std::atomic<uint32_t> g_liveBlocks{0};
+
     static void debugCallback(void *, const char *context, DkResult result, const char *message) {
         logf("deko3d says (%s, result %d): %s", context ? context : "", int(result), message ? message : "");
     }
@@ -911,10 +914,16 @@ namespace plume {
             destroyBlock(c.first);
         if (pushBlock)
             destroyBlock(pushBlock);
+        if (texSizeBlock)
+            destroyBlock(texSizeBlock);
         if (zeroBlock)
             destroyBlock(zeroBlock);
         if (queue)
             dkQueueDestroy(queue);
+        // Theft4 (run 35): the debug library ends the process (an error box, then exit(1)) when a block is left at
+        // dkDeviceDestroy; texSizeBlock was one. The blocks still alive are logged first.
+        if (const uint32_t alive = g_liveBlocks.load())
+            logf("device: %u memory blocks still alive at dkDeviceDestroy", alive);
         if (dk)
             dkDeviceDestroy(dk);
     }
@@ -948,9 +957,14 @@ namespace plume {
             std::lock_guard<std::mutex> lock(guardMutex);
             guarded.push_back({block, storage, m.size, what});
         }
+        if (block)
+            g_liveBlocks.fetch_add(1);
         return block;
 #else
-        return dkMemBlockCreate(&m);
+        DkMemBlock block = dkMemBlockCreate(&m);
+        if (block)
+            g_liveBlocks.fetch_add(1);
+        return block;
 #endif
     }
 
@@ -958,6 +972,7 @@ namespace plume {
         if (!block)
             return;
         dkMemBlockDestroy(block);
+        g_liveBlocks.fetch_sub(1);
 #if defined(PLUME_DEKO3D_GUARDS)
         std::lock_guard<std::mutex> lock(guardMutex);
         for (size_t i = 0; i < guarded.size(); i++) {
