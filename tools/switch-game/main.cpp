@@ -118,14 +118,19 @@
 #include "nx_profiler.h"
 #include "nx_perf_csv.h"
 #include "nx_threads.h"
+#if THEFT4_NX_DEKO3D
+#include "nx_deko3d.h"
+#endif
 #include "theft4_build_commit.h"  // build dir, see build_commit.cmake
 
-#if THEFT4_NX_VULKAN
+// Header-only tuning switches and counters, used with or without the Vulkan backend
+// (the build without it had stopped compiling; 16-deko3d-devlog.md, M2).
 #include <rex/graphics/nx_ab.h>
 #include <rex/thread/nx_sync_tuning.h>
 #include <rex/graphics/nx_gpu_counters.h>
 #include <rex/graphics/nx_frame_budget.h>
 #include <rex/graphics/nx_guest_gpu_progress.h>
+#if THEFT4_NX_VULKAN
 #include <rex/graphics/vulkan/graphics_system.h>
 #include <rex/ui/vulkan/gpu_only_allocation.h>
 #include <rex/ui/vulkan/provider.h>
@@ -146,7 +151,12 @@ REXCVAR_DEFINE_STRING(nx_gpu, "vulkan", "Switch",
                       "closed (only in a build with THEFT4_SWITCH_GAME_VULKAN; 06 section 24); "
                       "native = ReXGlue's Vulkan backend with native render targets (no EDRAM "
                       "emulation, no ownership transfers, resolves straight from the render "
-                      "target: src/graphics/native, cvar native_render_targets)");
+                      "target: src/graphics/native, cvar native_render_targets); deko3d = the null "
+                      "GPU with plume's deko3d back end presenting a test pattern and checking uam "
+                      "(only in a build with REXGLUE_SWITCH_DEKO3D; 16-deko3d-devlog.md M2)");
+REXCVAR_DEFINE_INT32(nx_dk_compile_s, 150, "Switch",
+                     "nx_gpu = deko3d: seconds of background uam compiles of the game's shader "
+                     "package (sdmc:/switch/theft4/deko3d), each compared with the PC's DKSH; 0 = none");
 REXCVAR_DEFINE_BOOL(nx_log_durable, false, "Switch",
                     "true: every log line is written to game.log at once (open, write, fsync, "
                     "close on the thread that logs: slow on the SD, for crash hunting); false: a "
@@ -3196,6 +3206,9 @@ void StopNullAudioWorker() {
     LogExitSummary();
   }
   LogExitState();
+#if THEFT4_NX_DEKO3D
+  theft4::nx_deko3d::Stop();  // the render thread is joined, never detached
+#endif
   if (mode == 'D') {
     StopFileIo();
     StopNullAudioWorker();
@@ -3529,6 +3542,7 @@ void StartupSummary() {
   // is this loop (PumpFromUIThread), the window the default NWindow, which
   // the console gives up first.
   const bool want_native = REXCVAR_GET(nx_gpu) == "native";
+#if THEFT4_NX_VULKAN  // the native render targets' cvars live in the Vulkan backend
   if (want_native) {
     // N3: native render targets in ReXGlue's Vulkan backend (N2 on the PC).
     REXCVAR_SET(native_render_targets, true);
@@ -3543,6 +3557,7 @@ void StartupSummary() {
               "per packet; PM4 reader observing %d frames (cvar native_observe_frames)",
               int(REXCVAR_GET(native_transfer_mask)), int(REXCVAR_GET(native_observe_frames)));
   }
+#endif
   const bool want_vulkan = REXCVAR_GET(nx_gpu) == "vulkan" || want_native;
 #if THEFT4_NX_VULKAN
   if (want_vulkan) {
@@ -3592,6 +3607,27 @@ void StartupSummary() {
   if (REXCVAR_GET(nx_null_gpu)) {
     config.graphics = rex::system::CreateNullGraphicsSystem();
     GAME_INFO("graphics: null GPU (cvar nx_null_gpu)");
+#if THEFT4_NX_DEKO3D
+    if (REXCVAR_GET(nx_gpu) == "deko3d") {
+      // The console text shares the default NWindow: deko3d's swapchain takes it.
+      {
+        std::lock_guard<std::timed_mutex> lock(g_console_mutex);
+        if (g_console_open) {
+          consoleExit(nullptr);
+          g_console_open = false;
+        }
+      }
+      theft4::nx_deko3d::Options dk;
+      dk.compile_seconds = REXCVAR_GET(nx_dk_compile_s);
+      GAME_INFO("graphics: nx_gpu = deko3d (%s deko3d library): the null GPU keeps the game in step and "
+                "skips its draws; plume's deko3d back end presents a %d s test pattern and compiles the "
+                "game's shader package in the background for %d s (console closed)",
+                THEFT4_NX_DEKO3D_DEBUG ? "debug" : "release", dk.test_pattern_seconds, dk.compile_seconds);
+      theft4::nx_deko3d::Start(
+          [](const char* text) { GAME_INFO("%s", text); },
+          []() -> uint64_t { return rex::system::GetNullGpuStats().draws; }, dk);
+    }
+#endif
   } else {
     GAME_INFO("graphics: none (nx_null_gpu = false): the run stops at the first Vd* export "
               "that needs a GPU");

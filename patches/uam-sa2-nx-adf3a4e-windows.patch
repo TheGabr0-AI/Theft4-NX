@@ -1,0 +1,122 @@
+diff --git a/refs/sa2-nx/app/thirdparty/uam/CMakeLists.txt b/Theft4-NX-clean/thirdparty/uam/CMakeLists.txt
+index 05a6e4e..dd3489c 100644
+--- a/refs/sa2-nx/app/thirdparty/uam/CMakeLists.txt
++++ b/Theft4-NX-clean/thirdparty/uam/CMakeLists.txt
+@@ -14,6 +14,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+ endif()
+ 
+ set(UAM_DIR ${CMAKE_CURRENT_SOURCE_DIR})
++if(MSVC)
++  # Theft4 (16-deko3d-devlog.md, M1): the PC tool with clang-cl. windows.h without min/max macros.
++  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS strtok_r=strtok_s)
++endif()
+ set(UAM_MESA ${UAM_DIR}/mesa-imported)
+ set(UAM_GEN ${UAM_DIR}/generated)
+ 
+diff --git a/refs/sa2-nx/app/thirdparty/uam/mesa-imported/c11/threads.h b/Theft4-NX-clean/thirdparty/uam/mesa-imported/c11/threads.h
+index 25be488..f7f9ecb 100644
+--- a/refs/sa2-nx/app/thirdparty/uam/mesa-imported/c11/threads.h
++++ b/Theft4-NX-clean/thirdparty/uam/mesa-imported/c11/threads.h
+@@ -4,6 +4,24 @@
+ // (every lock a no-op), which let two threads build Mesa's built-in GLSL function library at the
+ // same time and damage the ralloc heap. uam stays NOT reentrant (static gl_context in
+ // glsl_frontend.cpp): this only keeps Mesa's global tables consistent; compile on one thread.
++#if defined(_WIN32) && !defined(__MINGW32__)
++// Theft4 (docs/switch-port/16-deko3d-devlog.md, M1): the PC tool built with clang-cl has no
++// pthreads. Only plain mutexes are used (static _MTX_INITIALIZER_NP, mtx_init plain): SRW locks.
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#include <windows.h>
++typedef SRWLOCK mtx_t;
++enum { mtx_plain = 0, mtx_recursive = 1, mtx_timed = 2 };
++static inline int mtx_init(mtx_t *m, int type) { (void)type; InitializeSRWLock(m); return 0; }
++static inline void mtx_destroy(mtx_t *m) { (void)m; }
++static inline int mtx_lock(mtx_t *m) { AcquireSRWLockExclusive(m); return 0; }
++static inline int mtx_unlock(mtx_t *m) { ReleaseSRWLockExclusive(m); return 0; }
++#define _MTX_INITIALIZER_NP SRWLOCK_INIT
++#else
+ #include <pthread.h>
+ 
+ typedef pthread_mutex_t mtx_t;
+@@ -23,3 +41,4 @@ static inline int mtx_lock(mtx_t *m) { return pthread_mutex_lock(m); }
+ static inline int mtx_unlock(mtx_t *m) { return pthread_mutex_unlock(m); }
+ 
+ #define _MTX_INITIALIZER_NP PTHREAD_MUTEX_INITIALIZER
++#endif
+diff --git a/refs/sa2-nx/app/thirdparty/uam/mesa-imported/c99_math.h b/Theft4-NX-clean/thirdparty/uam/mesa-imported/c99_math.h
+index e906c26..a78b5e8 100644
+--- a/refs/sa2-nx/app/thirdparty/uam/mesa-imported/c99_math.h
++++ b/Theft4-NX-clean/thirdparty/uam/mesa-imported/c99_math.h
+@@ -119,7 +119,7 @@ exp2(double d)
+ /*
+  * signbit() is a macro on Linux.  Not available on Windows.
+  */
+-#ifndef signbit
++#if !defined(signbit) && !defined(_MSC_VER)  /* Theft4: MSVC has std::signbit (cmath) */
+ #define signbit(x) ((x) < 0.0f)
+ #endif
+ 
+diff --git a/refs/sa2-nx/app/thirdparty/uam/mesa-imported/tgsi/tgsi_ureg.c b/Theft4-NX-clean/thirdparty/uam/mesa-imported/tgsi/tgsi_ureg.c
+index c1c8851..fcd7c7d 100644
+--- a/refs/sa2-nx/app/thirdparty/uam/mesa-imported/tgsi/tgsi_ureg.c
++++ b/Theft4-NX-clean/thirdparty/uam/mesa-imported/tgsi/tgsi_ureg.c
+@@ -476,7 +476,7 @@ out:
+ 
+ struct ureg_dst
+ ureg_DECL_output_masked(struct ureg_program *ureg,
+-                        unsigned name,
++                        enum tgsi_semantic name,  /* Theft4: the header's type (MSVC enums are int) */
+                         unsigned index,
+                         unsigned usage_mask,
+                         unsigned array_id,
+diff --git a/refs/sa2-nx/app/thirdparty/uam/source/main.cpp b/Theft4-NX-clean/thirdparty/uam/source/main.cpp
+index 52dad28..8c2c91c 100644
+--- a/refs/sa2-nx/app/thirdparty/uam/source/main.cpp
++++ b/Theft4-NX-clean/thirdparty/uam/source/main.cpp
+@@ -1,5 +1,7 @@
+ #include "compiler_iface.h"
++#ifndef _MSC_VER
+ #include <getopt.h>
++#endif
+ 
+ static int usage(const char* prog)
+ {
+@@ -26,6 +28,9 @@ int main(int argc, char* argv[])
+ 	if (const char* flags = getenv("UAM_BANJO_FLAGS"))
+ 		nv50_ir_set_banjo_flags((unsigned)strtoul(flags, nullptr, 0));
+ 
++#ifdef _MSC_VER
++	static const void* long_options = nullptr;
++#else
+ 	static struct option long_options[] =
+ 	{
+ 		{ "out",     required_argument, NULL, 'o' },
+@@ -36,7 +41,23 @@ int main(int argc, char* argv[])
+ 		{ "version", no_argument,       NULL, 'v' },
+ 		{ NULL, 0, NULL, 0 }
+ 	};
+-
++#endif
++
++#ifdef _MSC_VER
++	// Theft4 (16-deko3d-devlog.md, M1): no getopt with clang-cl; the short options only.
++	int optind = 1;
++	const char* optarg = nullptr;
++	auto getopt_long = [&](int, char**, const char*, const void*, int*) -> int {
++		if (optind >= argc || argv[optind][0] != '-' || !argv[optind][1]) return -1;
++		const char c = argv[optind][1];
++		++optind;
++		if (c == 'o' || c == 'r' || c == 't' || c == 's') {
++			if (optind >= argc) return 0;
++			optarg = argv[optind++];
++		}
++		return c;
++	};
++#endif
+ 	int opt, optidx = 0;
+ 	while ((opt = getopt_long(argc, argv, "o:r:t:s:?v", long_options, &optidx)) != -1)
+ 	{

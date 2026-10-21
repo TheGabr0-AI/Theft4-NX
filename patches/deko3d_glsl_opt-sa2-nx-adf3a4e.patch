@@ -1,0 +1,48 @@
+diff --git a/refs/sa2-nx/tools/deko3d_glsl_opt.py b/Theft4-NX-clean/tools/deko3d/deko3d_glsl_opt.py
+index f70295b..a20feca 100755
+--- a/refs/sa2-nx/tools/deko3d_glsl_opt.py
++++ b/Theft4-NX-clean/tools/deko3d/deko3d_glsl_opt.py
+@@ -2035,8 +2035,9 @@ def optimise(text, passes=DEFAULT, stage=None, name=None):
+     return text
+ 
+ 
+-UAM = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'out', 'deko3d_tools', 'uam-build',
+-                   'uam.exe')
++# Theft4: this copy lives in tools/deko3d (one folder deeper than banjo-nx's tools/); --uam may name the tool.
++UAM = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'out',
++                   'deko3d_tools', 'uam-build', 'uam.exe')
+ 
+ 
+ def check_one(item):
+@@ -2049,6 +2050,10 @@ def check_one(item):
+     if 'SPIRV_CROSS_CONSTANT_ID_903' in text:
+         nl = text.find('\n') + 1
+         variants += [text[:nl] + f'#define SPIRV_CROSS_CONSTANT_ID_903 {f}u\n' + text[nl:] for f in (7, 8)]
++    # Theft4: GTA IV's alpha test is bit 1 of SPIRV_CROSS_CONSTANT_ID_0, its function in bits 8-10.
++    if 'SPIRV_CROSS_CONSTANT_ID_0' in text:
++        nl = text.find('\n') + 1
++        variants += [text[:nl] + f'#define SPIRV_CROSS_CONSTANT_ID_0 {v}u\n' + text[nl:] for v in (0x702, 0x703)]
+     with tempfile.TemporaryDirectory() as tmp:
+         for k, v in enumerate(variants):
+             src = os.path.join(tmp, f'v{k}.glsl')
+@@ -2070,7 +2075,11 @@ def main():
+     ap.add_argument('--check', action='store_true',
+                     help='compile each output with uam; a shader that fails keeps its text as it came in')
+     ap.add_argument('--jobs', type=int, default=max(1, (os.cpu_count() or 4) - 2))
++    ap.add_argument('--uam', help='the PC uam tool (Theft4)')
+     a = ap.parse_args()
++    if a.uam:
++        global UAM
++        UAM = a.uam
+     if a.list:
+         for name, fn in PASSES:
+             print(f'{name}: {fn.__doc__.split(".")[0].strip()}')
+@@ -2079,7 +2088,7 @@ def main():
+     sources = {}
+     texts = {}
+     for name in sorted(os.listdir(a.src)):
+-        if not re.fullmatch(r'(vs|ps)_[0-9A-F]{16}\.glsl', name):
++        if not re.fullmatch(r'(vs|ps)_[0-9A-F]{16}(_late)?\.glsl', name):  # Theft4: also the late alpha-test sources
+             continue
+         sources[name] = open(os.path.join(a.src, name), encoding='utf-8').read()
+         texts[name] = optimise(sources[name], a.passes, 'frag' if name.startswith('ps_') else 'vert', name[3:19])

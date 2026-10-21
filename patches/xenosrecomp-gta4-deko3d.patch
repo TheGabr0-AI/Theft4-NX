@@ -1,0 +1,464 @@
+diff --git a/XenosRecomp/dxc_compiler.cpp b/XenosRecomp/dxc_compiler.cpp
+index a466d3b..32011a4 100644
+--- a/XenosRecomp/dxc_compiler.cpp
++++ b/XenosRecomp/dxc_compiler.cpp
+@@ -11,7 +11,7 @@ DxcCompiler::~DxcCompiler()
+     dxcCompiler->Release();
+ }
+ 
+-IDxcBlob* DxcCompiler::compile(const std::string& shaderSource, bool compilePixelShader, bool compileLibrary, bool compileSpirv)
++IDxcBlob* DxcCompiler::compile(const std::string& shaderSource, bool compilePixelShader, bool compileLibrary, bool compileSpirv, bool deko3d)
+ {
+     DxcBuffer source{};
+     source.Ptr = shaderSource.c_str();
+@@ -51,7 +51,9 @@ IDxcBlob* DxcCompiler::compile(const std::string& shaderSource, bool compilePixe
+         args[argCount++] = L"-spirv";
+         args[argCount++] = L"-fvk-use-dx-layout";
+ 
+-        if (!compilePixelShader)
++        if (deko3d)
++            args[argCount++] = L"-DGTA4_DEKO3D";
++        else if (!compilePixelShader)
+             args[argCount++] = L"-fvk-invert-y";
+     }
+     else
+diff --git a/XenosRecomp/dxc_compiler.h b/XenosRecomp/dxc_compiler.h
+index d49bd32..9a93a50 100644
+--- a/XenosRecomp/dxc_compiler.h
++++ b/XenosRecomp/dxc_compiler.h
+@@ -7,5 +7,8 @@ struct DxcCompiler
+     DxcCompiler();
+     ~DxcCompiler();
+ 
+-    IDxcBlob* compile(const std::string& shaderSource, bool compilePixelShader, bool compileLibrary, bool compileSpirv);
++    // deko3d: SPIR-V for the deko3d chain (GTA4_DEKO3D in shader_common.h: constants in uniform
++    // buffers, textures at fixed slots, no push constants and no 64-bit integers), in Direct3D's clip
++    // space (deko3d's y points up, so no -fvk-invert-y).
++    IDxcBlob* compile(const std::string& shaderSource, bool compilePixelShader, bool compileLibrary, bool compileSpirv, bool deko3d = false);
+ };
+diff --git a/XenosRecomp/main.cpp b/XenosRecomp/main.cpp
+index 9e7c5f3..f7a9e83 100644
+--- a/XenosRecomp/main.cpp
++++ b/XenosRecomp/main.cpp
+@@ -35,6 +35,7 @@ static void writeAllBytes(const char* filePath, const void* data, size_t dataSiz
+ struct RecompiledShader
+ {
+     uint8_t* data = nullptr;
++    uint64_t hash = 0;  // Theft4: the container's XXH3, for the deko3d file names
+     IDxcBlob* dxil = nullptr;
+     std::vector<uint8_t> spirv;
+     std::vector<uint8_t> lateSpirv;
+@@ -46,6 +47,40 @@ struct RecompiledShader
+     std::string recoveredLate;
+ };
+ 
++// Theft4 (docs/switch-port/16-deko3d-devlog.md, M1): with XENOS_RECOMP_DEKO3D_SPIRV_DIR, the same
++// HLSL is also compiled with -DGTA4_DEKO3D (constants in uniform buffers, textures at fixed slots,
++// Direct3D clip space) to <dir>/<vs|ps>_<hash>.spv, and the late alpha-test source to
++// <dir>/ps_<hash>_late.spv. A shader DXC rejects is listed in <dir>/failed.txt with the reason
++// (the Vulkan cache is not affected). The HLSL goes next to it (<stem>.hlsl) for the report.
++static void writeDeko3dSpirv(DxcCompiler& compiler, std::mutex& compilerMutex, const std::string& source,
++                             bool isPixelShader, uint64_t hash, const char* suffix)
++{
++    static const char* directory = std::getenv("XENOS_RECOMP_DEKO3D_SPIRV_DIR");
++    if (!directory || !*directory)
++        return;
++    const auto stem = fmt::format("{}/{}_{:016X}{}", directory, isPixelShader ? "ps" : "vs", hash, suffix);
++    writeAllBytes((stem + ".hlsl").c_str(), source.data(), source.size());
++    IDxcBlob* spirv;
++    {
++        std::lock_guard lock(compilerMutex);
++        spirv = compiler.compile(source, isPixelShader, false, true, true);
++    }
++    static std::mutex listMutex;
++    if (!spirv)
++    {
++        std::lock_guard lock(listMutex);
++        FILE* list = fopen(fmt::format("{}/failed.txt", directory).c_str(), "ab");
++        if (list)
++        {
++            fmt::println(list, "{}_{:016X}{}\tDXC", isPixelShader ? "ps" : "vs", hash, suffix);
++            fclose(list);
++        }
++        return;
++    }
++    writeAllBytes((stem + ".spv").c_str(), spirv->GetBufferPointer(), spirv->GetBufferSize());
++    spirv->Release();
++}
++
+ void recompileShader(RecompiledShader& shader, const std::string_view include, std::atomic<uint32_t>& progress, uint32_t numShaders)
+ {
+     static DxcCompiler dxcCompiler;
+@@ -101,6 +136,7 @@ void recompileShader(RecompiledShader& shader, const std::string_view include, s
+     assert(result);
+ 
+     spirv->Release();
++    writeDeko3dSpirv(dxcCompiler, dxcCompilerMutex, earlySource, isPixelShader, shader.hash, "");
+ 
+     if (recovered ? !shader.recoveredLate.empty() :
+         (isPixelShader && (shader.specConstantsMask & SPEC_CONSTANT_ALPHA_TEST_CAPABILITY_MASK) == SPEC_CONSTANT_ALPHA_TEST_CAPABILITY_MASK))
+@@ -124,6 +160,8 @@ void recompileShader(RecompiledShader& shader, const std::string_view include, s
+         assert(result);
+ 
+         spirv->Release();
++        writeDeko3dSpirv(dxcCompiler, dxcCompilerMutex, recovered ? shader.recoveredLate : recompiler.out, true,
++                         shader.hash, "_late");
+     }
+ 
+     size_t currentProgress = ++progress;
+@@ -315,8 +353,9 @@ int main(int argc, char** argv)
+ 
+         std::mutex shaderQueueMutex;
+         std::deque<XXH64_hash_t> shaderQueue;
+-        for (const auto& [hash, _] : shaders)
++        for (auto& [hash, shader] : shaders)
+         {
++            shader.hash = hash;
+             shaderQueue.emplace_back(hash);
+         }
+ 
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index 34fd011..c1bc965 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -26,6 +26,36 @@
+ 
+ #ifdef __spirv__
+ 
++#ifdef GTA4_DEKO3D
++// Theft4 (docs/switch-port/16-deko3d-devlog.md, M1): the deko3d build. uam's GLSL front end has
++// no buffer references, push constants as addresses or 64-bit integers, so the three constant
++// blocks the Vulkan build reads by address are uniform buffers: vertex constants at binding 0,
++// pixel constants at 1, the shared words at 2 (the byte offsets are the Vulkan build's). Every
++// offset below is a constant, so no word is picked from a vec4 by a dynamic index (uam loses
++// those: nfsmw-nx HowToDeko3d 6.12).
++[[vk::binding(0, 2)]] cbuffer GTA4DkVertexConstants { float4 g_DkVertexConstants[256]; };
++[[vk::binding(1, 2)]] cbuffer GTA4DkPixelConstants { float4 g_DkPixelConstants[224]; };
++[[vk::binding(2, 2)]] cbuffer GTA4DkSharedConstants { uint4 g_DkShared[64]; };
++#define GTA4_DK_UINT(B) g_DkShared[(B) / 16][((B) % 16) / 4]
++#define GTA4_DK_FLOAT(B) asfloat(GTA4_DK_UINT(B))
++#define GetTextureLodBias(SLOT)     GTA4_DK_FLOAT(752 + (SLOT) * 4)
++#define g_Booleans                  GTA4_DK_UINT(528)
++#define g_SwappedTexcoords          GTA4_DK_UINT(532)
++#define g_SwappedNormals            GTA4_DK_UINT(536)
++#define g_SwappedBinormals          GTA4_DK_UINT(540)
++#define g_SwappedTangents           GTA4_DK_UINT(544)
++#define g_SwappedBlendWeights       GTA4_DK_UINT(548)
++#define g_HalfPixelOffset           float2(GTA4_DK_FLOAT(552), GTA4_DK_FLOAT(556))
++#define g_ClipPlane                 float4(GTA4_DK_FLOAT(560), GTA4_DK_FLOAT(564), GTA4_DK_FLOAT(568), GTA4_DK_FLOAT(572))
++#define g_ClipPlaneEnabled          (GTA4_DK_UINT(576) != 0u)
++#define g_AlphaThreshold            GTA4_DK_FLOAT(580)
++#define g_conditionalSurveyIndex    GTA4_DK_UINT(584)
++#define g_conditionalRenderingIndex GTA4_DK_UINT(588)
++#define g_AlphaToMask               GTA4_DK_UINT(736)
++#define g_AlphaToMaskSampleCount    GTA4_DK_UINT(740)
++#define g_FragmentCoordinateScale   float2(GTA4_DK_FLOAT(744), GTA4_DK_FLOAT(748))
++#else
++
+ struct PushConstants
+ {
+     uint64_t VertexShaderConstants;
+@@ -66,6 +96,7 @@ struct PushConstants
+ #define g_conditionalSurveyIndex    vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 376)
+ #define g_conditionalRenderingIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 380)
+ #endif
++#endif  // GTA4_DEKO3D
+ 
+ [[vk::constant_id(0)]] const uint g_SpecConstants = 0;
+ 
+@@ -458,6 +489,100 @@ float3 getWeights3D(constant Texture3DDescriptorHeap* textureHeap,
+                   0.0, isnan(texCoord));
+ }
+ 
++#elif defined(GTA4_DEKO3D)
++
++// Theft4 (M1): each fetch slot is one texture object at binding = slot and its sampler
++// (XenosRecomp's deko3d block declares them); the helpers take the objects themselves.
++uint2 getTexture2DDimensions(Texture2D<float4> texture)
++{
++    uint2 dimensions;
++    texture.GetDimensions(dimensions.x, dimensions.y);
++    return dimensions;
++}
++
++uint3 getTexture2DArrayDimensions(Texture2DArray<float4> texture)
++{
++    uint4 dimensions;
++    texture.GetDimensions(0, dimensions.x, dimensions.y, dimensions.z, dimensions.w);
++    return dimensions.xyz;
++}
++
++uint3 getTexture3DDimensions(Texture3D<float4> texture)
++{
++    uint3 dimensions;
++    texture.GetDimensions(dimensions.x, dimensions.y, dimensions.z);
++    return dimensions;
++}
++
++float4 tfetch2D(Texture2D<float4> texture, SamplerState samplerState, float2 texCoord, float2 offset, float lodBias = 0.0)
++{
++#ifdef XENOS_RECOMP_PIXEL_SHADER
++    return texture.SampleBias(samplerState, texCoord + offset / getTexture2DDimensions(texture), lodBias);
++#else
++    return texture.SampleLevel(samplerState, texCoord + offset / getTexture2DDimensions(texture), lodBias);
++#endif
++}
++
++float4 tfetch2DArray(Texture2DArray<float4> texture, SamplerState samplerState, float3 texCoord, float3 offset, float lodBias = 0.0)
++{
++    uint3 dimensions = getTexture2DArrayDimensions(texture);
++#ifdef XENOS_RECOMP_PIXEL_SHADER
++    return texture.SampleBias(samplerState, float3(texCoord.xy + offset.xy / dimensions.xy, texCoord.z * dimensions.z), lodBias);
++#else
++    return texture.SampleLevel(samplerState, float3(texCoord.xy + offset.xy / dimensions.xy, texCoord.z * dimensions.z), lodBias);
++#endif
++}
++
++float4 tfetch3D(Texture3D<float4> texture, SamplerState samplerState, float3 texCoord, float3 offset, float lodBias = 0.0)
++{
++    uint3 dimensions = getTexture3DDimensions(texture);
++#ifdef XENOS_RECOMP_PIXEL_SHADER
++    return texture.SampleBias(samplerState, texCoord + offset / dimensions, lodBias);
++#else
++    return texture.SampleLevel(samplerState, texCoord + offset / dimensions, lodBias);
++#endif
++}
++
++float4 tfetchCube(TextureCube<float4> texture, SamplerState samplerState, float3 texCoord, float lodBias = 0.0)
++{
++    float3 dir = cubeDir(texCoord);
++#ifdef XENOS_RECOMP_PIXEL_SHADER
++    return texture.SampleBias(samplerState, dir, lodBias);
++#else
++    return texture.SampleLevel(samplerState, dir, lodBias);
++#endif
++}
++
++float4 tfetch2DLod(Texture2D<float4> texture, SamplerState samplerState, float2 texCoord, float2 offset, float lod)
++{
++    return texture.SampleLevel(samplerState, texCoord + offset / getTexture2DDimensions(texture), lod);
++}
++
++float4 tfetch3DLod(Texture3D<float4> texture, SamplerState samplerState, float3 texCoord, float3 offset, float lod)
++{
++    return texture.SampleLevel(samplerState, texCoord + offset / getTexture3DDimensions(texture), lod);
++}
++
++float4 tfetchCubeLod(TextureCube<float4> texture, SamplerState samplerState, float3 texCoord, float lod)
++{
++    return texture.SampleLevel(samplerState, cubeDir(texCoord), lod);
++}
++
++float2 getWeights2D(Texture2D<float4> texture, SamplerState samplerState, float2 texCoord, float2 offset)
++{
++    return select(isnan(texCoord), 0.0, frac(texCoord * getTexture2DDimensions(texture) + offset - 0.5));
++}
++
++float3 getWeights2DArray(Texture2DArray<float4> texture, SamplerState samplerState, float3 texCoord, float3 offset)
++{
++    return select(isnan(texCoord), 0.0, frac(texCoord * getTexture2DArrayDimensions(texture) + offset - 0.5));
++}
++
++float3 getWeights3D(Texture3D<float4> texture, SamplerState samplerState, float3 texCoord, float3 offset)
++{
++    return select(isnan(texCoord), 0.0, frac(texCoord * getTexture3DDimensions(texture) + offset - 0.5));
++}
++
+ #else
+ 
+ Texture2D<float4> g_Texture2DDescriptorHeap[] : register(t0, space0);
+@@ -749,7 +874,7 @@ float4 tfetch2DBicubic(constant Texture2DDescriptorHeap* textureHeap,
+     return r;
+ }
+ 
+-#else
++#elif !defined(GTA4_DEKO3D)
+ 
+ float4 tfetch2DBicubic(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float2 texCoord, float2 offset)
+ {
+@@ -807,7 +932,11 @@ float4 tfetchR11G11B10(uint4 value)
+ 
+ float4 swapFloats(uint swappedFloats, float4 value, uint semanticIndex)
+ {
++#ifdef GTA4_DEKO3D
++    return (swappedFloats & (1u << semanticIndex)) != 0 ? value.yxwz : value;
++#else
+     return (swappedFloats & (1ull << semanticIndex)) != 0 ? value.yxwz : value;
++#endif
+ }
+ 
+ float4 dst(float4 src0, float4 src1)
+@@ -835,7 +964,7 @@ float2 getPixelCoord(constant Texture2DDescriptorHeap* textureHeap,
+     return (float2)getTexture2DDimensions(texture) * texCoord;
+ }
+ 
+-#else
++#elif !defined(GTA4_DEKO3D)
+ 
+ float2 getPixelCoord(uint resourceDescriptorIndex, float2 texCoord)
+ {
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 07cca3c..3ba8920 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -407,6 +407,11 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, bool bicu
+ 
+     out += dimension;
+ #ifdef GTA4_RECOMP
++    for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
++    {
++        if (TEXTURE_DIMENSIONS[j] == dimension)
++            deko3dTextureDimensions[instr.constIndex] |= 1u << j;
++    }
+     if (instr.opcode == FetchOpcode::TextureFetch && !useComputedLod)
+         out += "Lod";
+ #endif
+@@ -1368,6 +1373,96 @@ uint32_t NativeBooleanMask(uint32_t microcodeAddress)
+ } // namespace
+ #endif
+ 
++#ifdef GTA4_RECOMP
++// Theft4 (docs/switch-port/16-deko3d-devlog.md, M1), after nfsmw-nx's printDeko3dConstants
++// (StevensND, GPL-3.0): the constants of the GTA4_DEKO3D build. uam takes GLSL without
++// buffer references, push constants or 64-bit integers, and deko3d has no descriptor heaps:
++// the float constants come from two uniform buffers (vertex binding 0, pixel binding 1, as the
++// arrays g_DkVertexConstants / g_DkPixelConstants of shader_common.h), the shared words from
++// a third (binding 2), and each fetch slot is one texture at binding = slot with its sampler
++// (the renderer binds dkMakeTextureHandle(image, sampler) there).
++static constexpr const char* kDeko3dTextureMarker = "//@GTA4_DK_TEXTURES@\n";
++
++void ShaderRecompiler::printDeko3dConstants(const ConstantTableContainer* constantTableContainer,
++                                            const std::unordered_set<uint32_t>& referencedSlots)
++{
++    std::unordered_set<uint32_t> slots;
++    for (uint32_t i = 0; i < constantTableContainer->constantTable.constants; i++)
++    {
++        const auto constantInfo = reinterpret_cast<const ConstantInfo*>(
++            constantTableData + constantTableContainer->constantTable.constantInfo + i * sizeof(ConstantInfo));
++        const char* constantName = reinterpret_cast<const char*>(constantTableData + constantInfo->name);
++
++        switch (constantInfo->registerSet)
++        {
++        case RegisterSet::Float4:
++        {
++            const char* arrayName = isPixelShader ? "g_DkPixelConstants" : "g_DkVertexConstants";
++            if (constantInfo->registerCount > 1)
++            {
++                uint32_t tailCount = (isPixelShader ? 224 : 256) - constantInfo->registerIndex;
++                println("#define {}(INDEX) selectWrapper((INDEX) < {}, {}[{} + min(INDEX, {})], 0.0)",
++                    constantName, tailCount, arrayName, constantInfo->registerIndex.get(), tailCount - 1);
++            }
++            else
++            {
++                println("#define {} {}[{}]", constantName, arrayName, constantInfo->registerIndex.get());
++            }
++            break;
++        }
++        case RegisterSet::Sampler:
++        {
++            slots.insert(constantInfo->registerIndex);
++            for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
++                println("#define {}_Texture{}DescriptorIndex g_DkTexture{}_{}", constantName, TEXTURE_DIMENSIONS[j],
++                    TEXTURE_DIMENSIONS[j], constantInfo->registerIndex.get());
++            println("#define {}_SamplerDescriptorIndex g_DkSampler_{}", constantName, constantInfo->registerIndex.get());
++            break;
++        }
++        default:
++            break;
++        }
++    }
++    for (uint32_t slot : referencedSlots)
++    {
++        if (slots.count(slot) || samplers.find(slot) != samplers.end())
++            continue;
++        for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
++            println("#define s{}_Texture{}DescriptorIndex g_DkTexture{}_{}", slot, TEXTURE_DIMENSIONS[j],
++                TEXTURE_DIMENSIONS[j], slot);
++        println("#define s{}_SamplerDescriptorIndex g_DkSampler_{}", slot, slot);
++    }
++    out += kDeko3dTextureMarker;
++}
++
++void ShaderRecompiler::finishDeko3dTextures()
++{
++    const size_t at = out.find(kDeko3dTextureMarker);
++    if (at == std::string::npos)
++        return;
++    std::string declarations;
++    for (const auto& [slot, dimensions] : deko3dTextureDimensions)
++    {
++        if (slot >= 32 || (dimensions & (dimensions - 1)) != 0)
++        {
++            // deko3d has 32 texture bindings per stage, one type each: a slot sampled with two
++            // dimensions has no fixed binding. Fail the deko3d compile with the reason.
++            declarations += fmt::format("#error \"GTA4_DEKO3D: fetch slot {} sampled as dimensions mask {}\"\n",
++                slot, dimensions);
++            continue;
++        }
++        for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
++        {
++            if (dimensions & (1u << j))
++                declarations += fmt::format("[[vk::binding({0}, 0)]] Texture{1}<float4> g_DkTexture{1}_{0};\n",
++                    slot, TEXTURE_DIMENSIONS[j]);
++        }
++        declarations += fmt::format("[[vk::binding({0}, 1)]] SamplerState g_DkSampler_{0};\n", slot);
++    }
++    out.replace(at, std::char_traits<char>::length(kDeko3dTextureMarker), declarations);
++}
++#endif
++
+ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_view& include, bool useEarlyFragmentTests)
+ {
+     const auto shaderContainer = reinterpret_cast<const ShaderContainer*>(shaderData);
+@@ -1499,6 +1594,9 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     }
+ 
+     out += "#ifdef __spirv__\n\n";
++#ifdef GTA4_RECOMP
++    out += "#ifndef GTA4_DEKO3D\n\n";
++#endif
+ 
+ #ifdef UNLEASHED_RECOMP
+     bool isMetaInstancer = false;
+@@ -1593,6 +1691,12 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+             slot, textureDescriptorByteOffset(std::size(TEXTURE_DIMENSIONS), slot));
+     }
+ 
++#ifdef GTA4_RECOMP
++    out += "\n#else\n\n";
++    printDeko3dConstants(constantTableContainer, referencedTfetchSlots);
++    out += "\n#endif\n";
++#endif
++
+     out += "\n#elif defined(__air__)\n\n";
+ 
+     for (uint32_t i = 0; i < constantTableContainer->constantTable.constants; i++)
+@@ -2708,4 +2812,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ #endif
+ 
+     out += "}";
++#ifdef GTA4_RECOMP
++    finishDeko3dTextures();
++#endif
+ }
+diff --git a/XenosRecomp/shader_recompiler.h b/XenosRecomp/shader_recompiler.h
+index 7f616e8..6c64ba9 100644
+--- a/XenosRecomp/shader_recompiler.h
++++ b/XenosRecomp/shader_recompiler.h
+@@ -34,6 +34,16 @@ struct ShaderRecompiler : StringBuffer
+     std::unordered_map<uint32_t, uint32_t> ifEndLabels;
+     uint32_t specConstantsMask = 0;
+     uint32_t usedTextureMask = 0;
++#ifdef GTA4_RECOMP
++    // GTA4_DEKO3D (Theft4, docs/switch-port/16-deko3d-devlog.md): the texture dimensions each
++    // fetch slot is sampled with (bit 0 2D, 1 2DArray, 2 3D, 3 Cube), so the deko3d block
++    // declares one texture per used slot at binding = slot (written at kDeko3dTextureMarker
++    // when the body is done).
++    std::map<uint32_t, uint32_t> deko3dTextureDimensions;
++    void printDeko3dConstants(const struct ConstantTableContainer* constantTableContainer,
++                              const std::unordered_set<uint32_t>& referencedSlots);
++    void finishDeko3dTextures();
++#endif
+ 
+ #ifdef UNLEASHED_RECOMP
+     bool hasMtxProjection = false;

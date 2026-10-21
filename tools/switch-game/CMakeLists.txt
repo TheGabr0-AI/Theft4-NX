@@ -41,6 +41,16 @@ set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)
 # backend (rexgpu-xenos-nx) and NVK linked in; the cvar nx_gpu picks it at run
 # time. Native Vulkan is the default; configure with
 # -DTHEFT4_SWITCH_GAME_VULKAN=OFF only for a headless diagnostic build.
+# M2 (docs/switch-port/16-deko3d-devlog.md): sa2-nx's switch names. REXGLUE_SWITCH_NO_NVK leaves Mesa's
+# driver and the Vulkan backend out (THEFT4_SWITCH_GAME_VULKAN off); REXGLUE_SWITCH_DEKO3D links plume's
+# deko3d back end (thirdparty/plume-deko3d, banjo-nx's, MIT) and uam (thirdparty/uam) for nx_gpu = deko3d;
+# REXGLUE_SWITCH_DEKO3D_DEBUG links libdeko3dd, which checks every deko3d call (the first run's NRO).
+option(REXGLUE_SWITCH_NO_NVK "Do not link Mesa's NVK driver nor the Vulkan backend" OFF)
+option(REXGLUE_SWITCH_DEKO3D "nx_gpu = deko3d: plume's deko3d back end and uam" OFF)
+option(REXGLUE_SWITCH_DEKO3D_DEBUG "Link the debug deko3d library (libdeko3dd)" OFF)
+if(REXGLUE_SWITCH_NO_NVK)
+    set(THEFT4_SWITCH_GAME_VULKAN OFF CACHE BOOL "" FORCE)
+endif()
 option(THEFT4_SWITCH_GAME_VULKAN "Link ReXGlue's Vulkan backend and NVK (cvar nx_gpu)" ON)
 set(THEFT4_SWITCH_VULKAN_LIBRARIES "vulkan;expat;zstd;z;nx" CACHE STRING
     "Static Vulkan driver and dependencies; use vulkan;nx for a bundled NVK archive")
@@ -169,6 +179,50 @@ if(THEFT4_SWITCH_GAME_VULKAN)
         "-Wl,--wrap=sub_829CFE80,--wrap=__imp__sub_829CFE80"
         "-Wl,--wrap=nvFenceWait,--wrap=nvGpuChannelKickoff,--wrap=nvMapCreate,--wrap=nvMapClose,--wrap=nvioctlNvhostAsGpu_MapBufferEx,--wrap=nvGpuChannelGetErrorNotification")
 endif()
+if(REXGLUE_SWITCH_DEKO3D)
+    # uam as a static library for the Switch (its CMake builds uamlib when NX_ROOT is set), linked as
+    # one object whose strong symbols are local except uam::* (plume_uam_localize.cmake: uam's Mesa 19
+    # and NVK's newer Mesa define functions of the same names; harmless without NVK).
+    if(NOT TARGET uamlib)
+        set(NX_ROOT "${DEVKITPRO}/libnx")
+        add_subdirectory("${THEFT4_ROOT}/thirdparty/uam" uam)
+    endif()
+    set(_plume "${THEFT4_ROOT}/thirdparty/plume-deko3d")
+    set(_uam_local "${CMAKE_CURRENT_BINARY_DIR}/uam_local.o")
+    set(_dk_bin "${DEVKITPRO}/devkitA64/bin")
+    set(_host_exe "")
+    if(CMAKE_HOST_WIN32)
+        set(_host_exe ".exe")
+    endif()
+    add_custom_command(
+        OUTPUT "${_uam_local}"
+        COMMAND "${CMAKE_COMMAND}" "-DLD=${_dk_bin}/aarch64-none-elf-ld${_host_exe}"
+                "-DNM=${_dk_bin}/aarch64-none-elf-nm${_host_exe}"
+                "-DOBJCOPY=${_dk_bin}/aarch64-none-elf-objcopy${_host_exe}"
+                "-DARCHIVE=$<TARGET_FILE:uamlib>" "-DOUT=${_uam_local}"
+                -P "${_plume}/plume_uam_localize.cmake"
+        DEPENDS uamlib "${_plume}/plume_uam_localize.cmake"
+        COMMENT "uam with its strong symbols local but its API (uam_local.o)"
+        VERBATIM)
+    add_custom_target(switch-game-uam-local DEPENDS "${_uam_local}")
+    add_library(theft4-plume-deko3d STATIC "${_plume}/plume_deko3d.cpp" "${_plume}/plume_deko3d_commands.cpp")
+    add_dependencies(theft4-plume-deko3d switch-game-uam-local)
+    target_compile_features(theft4-plume-deko3d PRIVATE cxx_std_20)
+    target_include_directories(theft4-plume-deko3d PUBLIC "${_plume}" PRIVATE "${THEFT4_ROOT}/thirdparty/uam")
+    target_compile_definitions(theft4-plume-deko3d PUBLIC PLUME_DEKO3D=1)
+    if(REXGLUE_SWITCH_DEKO3D_DEBUG)
+        set(_deko3d_lib "${DEVKITPRO}/libnx/lib/libdeko3dd.a")
+        target_compile_definitions(theft4-plume-deko3d PRIVATE PLUME_DEKO3D_GUARDS=1)
+    else()
+        set(_deko3d_lib "${DEVKITPRO}/libnx/lib/libdeko3d.a")
+    endif()
+    target_link_libraries(theft4-plume-deko3d PUBLIC "${_uam_local}" "${_deko3d_lib}" nx)
+    target_sources(switch-game PRIVATE nx_deko3d.cpp)
+    set_property(SOURCE main.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+        "THEFT4_NX_DEKO3D=1;THEFT4_NX_DEKO3D_DEBUG=$<BOOL:${REXGLUE_SWITCH_DEKO3D_DEBUG}>")
+    target_link_libraries(switch-game PRIVATE theft4-plume-deko3d)
+endif()
+
 # Every way out of the process goes through main.cpp's __wrap_* first, which
 # logs the code and the caller before the real function runs.
 # Run 22: libnx's fatalThrow, diagAbortWithResult and svcBreak too (crash log

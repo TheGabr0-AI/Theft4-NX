@@ -232,3 +232,130 @@ Runs: `out/pc-runs/m0-xenos-720`, `m0-lra-720`, `m0-lra-fsr360`, `m0-lra-fsr360-
 differ by 2.4 FPS with the same settings (run-to-run spread on this PC; the cache merge does not
 change the frame work). On this PC the frame is CPU-bound (iGPU, the game's own threads); the GPU
 resolution matters little once the game draws 4,000+ times a frame.
+
+## 2026-10-21: M1, the deko3d shader chain (PC)
+
+### The chain
+
+```
+EU containers (pc_shader_dump_dir, 1,274)        game data: <private>/eu-private
+  -> XenosRecomp fb32631 + LRA's patch + our deko3d mode (patches/)
+       Vulkan SPIR-V (the cache, M0) and, with XENOS_RECOMP_DEKO3D_SPIRV_DIR,
+       DXC -DGTA4_DEKO3D, no -fvk-invert-y -> <vs|ps>_<HASH>[_late].spv
+  -> SPIRV-Cross (GLSL 460, no Vulkan semantics, combined samplers take the texture's binding)
+  -> text checks (no buffer references / int64 / nonuniform, UBO < 16, textures < 32,
+     no dynamic component index into a uniform vec4)
+  -> banjo-nx's passes (tools/deko3d/deko3d_glsl_opt.py), one shader at a time, 60 s limit;
+     a shader whose optimised text uam refuses keeps its input (banjo-nx's --check)
+  -> uam (thirdparty/uam, PC build) for every variant
+  -> DKSH cache gta4_deko3d_shaders.bin ("GDK1", key = FNV-1a 64 of the exact text compiled)
+```
+
+Driver: `tools/deko3d/gta4_deko3d_shaders.py`; PC tools built by clang-cl into `out/deko3d_tools`
+(`spirv-cross.exe` from SPIRV-Cross `vulkan-sdk-1.4.304.0`, `uam.exe` from `thirdparty/uam` with the
+Windows changes of `patches/uam-sa2-nx-adf3a4e-windows.patch`).
+
+**The deko3d mode of XenosRecomp** (`GTA4_DEKO3D`, `patches/xenosrecomp-gta4-deko3d.patch`):
+
+- `shader_common.h`: no `PushConstants` and no `uint64_t`; the vertex constants are
+  `g_DkVertexConstants[256]` (uniform buffer binding 0), the pixel constants `g_DkPixelConstants[224]`
+  (binding 1), the shared words `g_DkShared[64]` (binding 2) read at the Vulkan build's byte offsets
+  (`g_Booleans` 528, half-pixel offset 552, clip plane 560, alpha threshold 580, alpha-to-mask 736/740,
+  fragment coordinate scale 744, texture LOD bias 752 + 4 × slot), always with constant offsets;
+  `swapFloats` with `1u` instead of `1ull`; the texture helpers (`tfetch2D/2DArray/3D/Cube`, the `Lod`
+  ones, `getWeights*`, the dimension queries) take the texture and sampler objects.
+- `shader_recompiler.cpp`: the Vulkan constants block under `#ifndef GTA4_DEKO3D` (byte-identical
+  without the define), then `printDeko3dConstants`: float constants from the arrays, every fetch slot's
+  `*_DescriptorIndex` macros naming `g_DkTexture<dim>_<slot>` / `g_DkSampler_<slot>`; after the body, one
+  texture declaration per (slot, dimension) the shader fetches, at binding = slot (set 0) with its
+  sampler (set 1), and a `#error` when a slot is fetched with two dimensions (no fixed binding).
+- `dxc_compiler.cpp`: `-DGTA4_DEKO3D` and no `-fvk-invert-y` (deko3d's clip-space y points up).
+- `main.cpp`: `XENOS_RECOMP_DEKO3D_SPIRV_DIR` writes the deko3d SPIR-V (and the late alpha-test one)
+  next to the Vulkan cache, and the HLSL; DXC failures listed in `failed.txt`.
+
+Variants: GTA IV's specialization constant has two features (the cache's masks): bit 0, R11G11B10
+normals, and the alpha test (0x702: bit 1 on, the function in bits 8-10). A shader with mask 0 has one
+variant; one with the alpha test nine (off, and the eight functions); twice that when bit 0 is in the mask.
+
+### What plume calls LRA's renderer would need that deko3d lacks
+
+LRA's renderer calls Vulkan, not plume (above), so the question is asked of its Vulkan use (93
+functions) against deko3d 0.5.0 and how banjo-nx's plume back end (`thirdparty/plume-deko3d/plume_deko3d*`)
+covers each:
+
+| LRA uses | deko3d | banjo-nx's back end |
+|---|---|---|
+| bindless descriptor heaps (runtime arrays, descriptor indexing) | image and sampler descriptor tables, handles (`dkMakeTextureHandle`) bound per slot (32 per stage) | `descriptorIndexing = true`: its GLSL converter turns heap accesses into `sampler2D(dkh(t, s))` handles, or fixed bindings when the words are plain shared-constant reads |
+| buffer device addresses (`vkGetBufferDeviceAddress`, `RawBufferLoad` push constants) | no buffer references in uam's GLSL | one storage buffer (binding 15) over a 4 GB GPU window, offsets from the low 32 bits; push constants a UBO (binding 5) updated with `dkCmdBufPushConstants`. Our deko3d mode removes both instead |
+| pipelines, pipeline cache, dynamic rendering | none: shaders and state structs, `dkCmdBufBindRenderTargets` | pipelines are state bundles; framebuffers bind targets |
+| compute (`vkCmdDispatch`: FSR, SMAA's helpers) | `DkStage_Compute`, `dkCmdBufDispatchCompute` | supported |
+| geometry shaders | `DkStage_Geometry` | `geometryShader = true` |
+| MSAA 2/4/8 (LRA also lists 16 and 32 samples) | `DkMsMode_1x..8x` only | 2/4/8; 16 and 32 not available |
+| `vkCmdResolveImage`, `vkCmdBlitImage` | `dkCmdBufResolveImage`, `dkCmdBufBlitImage` (2D engine: no depth, no compressed, no RGB32 formats) | the 2D engine for colour; `resolveRegion = false` (whole images only) |
+| occlusion and timestamp queries; `VK_KHR_performance_query` | `dkCmdBufReportCounter` (samples passed, timestamps ×1.627); no performance counters | query pools as report buffers; no performance query |
+| `vkCmdWriteBufferMarkerAMD` | `dkCmdBufReportValue` | not exposed |
+| timeline semaphores (LRA's second queue) | one queue, fences | one queue: semaphores are no-ops |
+| formats: BC1-3, ASTC, D24S8, D32S8, R11G11B10, 10-10-10-2, 16/32-bit | all present (`DkImageFormat_*`) | 124 plume formats mapped; a format without a deko3d one is refused and logged |
+
+## 2026-10-21: M2, the console build (what it is, and what it is not)
+
+**Decision, with the reason.** LRA's renderer calls Vulkan directly (first entry): plume's deko3d back
+end cannot be put under it, and making it draw through deko3d means a deko3d recorder for its
+`Record*` functions (primitives, clears, resolves, present: 587 Vulkan call sites in 43,000 lines),
+which cannot be tried anywhere but the console (no deko3d on the PC, no emulator here). Writing that
+blind for the single console run would almost certainly fail on its first frame and say little.
+So this build is nfsmw-nx's P0/P1 step (their `dk_prueba` and "the game with an empty renderer"):
+everything deko3d needs is exercised on the console, with the game running behind it on the null
+GPU. **The game's frames (logo, loading, the intro) are not drawn in this build**; the draws the null
+GPU skips are counted as rejected. What brings LRA's renderer onto deko3d is the open decision below.
+
+What the NRO does with `nx_gpu = "deko3d"` (`tools/switch-game/nx_deko3d.{h,cpp}`):
+
+1. plume's deko3d back end (`thirdparty/plume-deko3d`) makes the device (`DkDeviceFlags_OriginUpperLeft |
+   DepthZeroToOne`), the queue, a 3-image RGBA8 swapchain on the default NWindow (the console text is
+   closed first) and a D32 depth target. uam runs on plume's compile thread, core 2, priority 0x3B, with
+   uam's default flags (1471, as the PC tool compiled).
+2. **5 s test pattern**, our own GLSL (`tools/switch-game/deko3d/test_pattern.{vert,frag}`): the corners
+   **red top left, green top right, blue bottom left, white bottom right** on dark grey; in the middle a
+   **yellow** square at depth 0.25 drawn first and a **magenta** one at depth 0.75 drawn after over its
+   upper right part: **the overlap must stay yellow** (depth test LESS). Positions from `gl_VertexID`,
+   no vertex buffers; the viewport has a positive height (deko3d's clip-space y points up).
+3. **DKSH check**: the two test shaders compiled again on the console by plume's uam and compared byte
+   for byte with the PC uam's DKSH (`deko3d/test_shaders.h`, `gen_test_shaders.py`): log line
+   `DKSH console == PC for the test pattern: yes|NO`.
+4. **The game's shaders in the background**, when `sdmc:/switch/theft4/deko3d/` holds
+   `gta4_deko3d_glsl.bin` (`tools/deko3d/gta4_deko3d_package.py`) and `gta4_deko3d_shaders.bin` (M1's
+   cache), both made on the PC from the player's copy: every variant compiled by the console's uam for
+   up to `nx_dk_compile_s` (150 s), each compared with the PC's DKSH (identical / different / not in the
+   PC cache / failed) with uam's time per variant (mean, p50, p90, p99, max).
+5. After the pattern, a dark blue screen ten times a second, and every 10 s a `deko3d:` line: frames,
+   errors, command memory, image/buffer/code memory, uam compiles and total ms, draws, Full and Fragments
+   barriers, **rejected draws** (the game's draws the null GPU skipped).
+
+Build switches (`tools/switch-game/CMakeLists.txt`, sa2-nx's names): `REXGLUE_SWITCH_NO_NVK` (no Mesa, no
+Vulkan backend: forces `THEFT4_SWITCH_GAME_VULKAN` off), `REXGLUE_SWITCH_DEKO3D` (plume's back end, uam
+localised as in sa2-nx, `nx_deko3d.cpp`), `REXGLUE_SWITCH_DEKO3D_DEBUG` (`libdeko3dd` and plume's
+guard bytes). `nx_gpu`'s default stays `vulkan`. The NVK build is unchanged and still configures as
+before (`out/build/switch-game`).
+
+ESISTENTE → NUOVO outside the new files:
+
+- `tools/switch-game/main.cpp`: the five header-only `nx_*` includes were under `#if THEFT4_NX_VULKAN`
+  but used everywhere, so the build without Vulkan no longer compiled: they are outside the guard now
+  (only `vulkan/graphics_system.h` and the UI headers stay inside). New: `nx_gpu = deko3d` (with the null
+  GPU), cvar `nx_dk_compile_s`, `nx_deko3d::Stop()` (join) in `ExitGame`.
+- `tools/switch-game/CMakeLists.txt`: the three options above; `REXGLUE_SWITCH_NO_NVK` sets
+  `THEFT4_SWITCH_GAME_VULKAN` off before its `option()`.
+
+### Open decision: how LRA's renderer reaches deko3d
+
+| Way | What | For | Against |
+|---|---|---|---|
+| A. a recorder boundary inside `gta4_native` (nfsmw-nx's way, HowToDeko3d 5.1) | move the Vulkan calls of `RecordPrimitive/IndexedPrimitive/PrimitiveUp/Clear/Resolve/Present/NativeFrame` and the resources behind an interface ("record this draw with this state"), first with no behaviour change on the PC, then a deko3d implementation with the DKSH of M1 | the PC keeps checking every frontend change; deko3d gets state structs, not fake pipelines | the boundary goes through a 38,000-line file; the post-effects (SMAA, FSR1 compute, sun shafts, split post-fx) and the LRA overrides need their own deko3d shaders |
+| B. `gta4_native` onto plume, then plume's deko3d back end | rewrite its 587 Vulkan call sites against plume's `RenderInterface` | banjo-nx's back end is console-proven (sa2-nx 1.0.3 ships it) | a full rewrite of the renderer's backend half; plume's descriptor and pipeline model differ from LRA's (bindless heaps, dynamic rendering, BDA) |
+
+Recommendation: A, in two console runs: first the draws of the logo, loading screens and Bink videos
+(2D quads, the Bink shaders, clears, the present), counting every draw it does not handle as
+rejected; then the 3D scene. Both start from this run's answers: whether uam's DKSH match the PC's on
+the console, how long uam takes per variant, and whether the device, swapchain and memory hold for
+four minutes beside the game.
