@@ -14,3 +14,10 @@
 "0x82177920" = {}   # +0x10 inside sub_82177910: vtable target of the adjustor thunk at 82177910 (b 0x82177920); indirect call from the audio thread after XMACreateContext (PC run 17, null audio)
 "0x827D5200" = {}   # gap 827D5200-827D5220 after 827D51E0: indirect call from the main thread after the boot screens (PC run 17c, null audio)
 "0x82586A60" = {}   # gap 82586A60-82586AD0 after 82586A08: indirect call from the main thread while loading the city (PC run 17d, at 275 s)
+"0x82596BC0" = {}   # gap 82596BC0-82596BD0 after 82596BB0 (the bulk entry 0x82596BB0 declared 32 B, emitted 16 B): script command handler registered by sub_82596BD0 (bl 0x827D6C40 at 0x82597434, name at 0x82037290); main thread (Switch run 47, at 481 s); generated code patched by hand in run 48
+"0x82548078" = {}   # run 50: script command handler registered by sub_825485F8 (name at 0x8202C13C), in the gap after 82548058
+"0x82548098" = {}   # run 50: script command handler registered by sub_825485F8 (name at 0x8202C118)
+"0x82560930" = {}   # run 50: script command handler registered by sub_82564CE0 (name at 0x8202F488)
+"0x82572EB0" = {}   # run 50: script command handler registered by sub_82576068 (name at 0x8203242C)
+"0x82588EF0" = {}   # run 50: script command handler registered by sub_82590368 (name at 0x82034E20)
+"0x82590190" = {}   # run 50: script command handler registered by sub_82590368 (name at 0x82033DEC)

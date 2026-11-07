@@ -85,6 +85,9 @@
 
 #include <rex/chrono/clock.h>
 #include <rex/cvar.h>
+namespace theft4::nx_audio_mixer {
+uint64_t Calls();  // nx_audio_mixer.cpp
+}
 #include <rex/diagnostics/export_stubs.h>
 #include <rex/diagnostics/missing_function.h>
 #include <rex/diagnostics/policy.h>
@@ -121,6 +124,12 @@
 #if THEFT4_NX_DEKO3D
 #include "nx_deko3d.h"
 #include "dk_graphics_system.h"  // glue/rexglue-sdk-main/src/graphics/gta4_native/deko3d
+#endif
+#if THEFT4_NX_LRA
+#include "graphics_system.h"  // glue/rexglue-sdk-main/src/graphics/gta4_native (Liberty Recompiled's renderer)
+namespace theft4::nx_lra {
+uint64_t FramesPublished();  // nx_lra_platform.cpp
+}
 #endif
 #include "theft4_build_commit.h"  // build dir, see build_commit.cmake
 
@@ -173,6 +182,68 @@ REXCVAR_DEFINE_INT32(nx_dk_capture_s, 0, "Switch",
                      "nx_gpu = deko3d, nx_dk_stage >= 1: a PNG of the shown frame every N seconds in "
                      "sdmc:/switch/theft4/captures (dk-fNNNNNN.png); 0 = none")
     .range(0, 3600);
+REXCVAR_DEFINE_BOOL(nx_dk_skip_state_commands, true, "Switch",
+                    "nx_gpu = deko3d, nx_dk_stage >= 1 (run 45): the title hooks do not send SetRenderState, "
+                    "SetTexture, SetRenderTarget and SetDepthStencil, which the deko3d front end never reads (it "
+                    "reads the guest device at each draw); false = sent and dropped as through run 44");
+REXCVAR_DEFINE_BOOL(nx_dk_blend_alpha_fix, true, "Switch",
+                    "nx_gpu = deko3d (run 48): after each blend state bind the alpha destination factor is written "
+                    "again (deko3d 0.5.0 writes the colour one there); false = as through run 47");
+REXCVAR_DEFINE_BOOL(nx_dk_mixup_from_memory, true, "Switch",
+                    "nx_gpu = deko3d (run 48): a colour fetch found only by the address of a resolved depth (run 47: "
+                    "the 32x32 texture 40079DA0) reads guest memory, as LRA does; false = it gets the depth, as "
+                    "through run 47");
+REXCVAR_DEFINE_BOOL(nx_dk_texture_lock_readback, true, "Switch",
+                    "nx_gpu = deko3d (run 54): a title lock of a GPU-produced texture waits until the recorder has copied it "
+                    "back into guest memory (the exposure's luminance among them); false = the guest copy as it is, as "
+                    "through run 53");
+REXCVAR_DEFINE_INT32(nx_dk_skin_diff, 4, "Switch",
+                     "nx_gpu = deko3d (run 54): skinned vertex shaders whose GPU values are read back once into "
+                     "sdmc:/switch/theft4/probe for tools/deko3d/probe_compare.py; 0 = none. Run 55: meshes of 200 "
+                     "vertices or more, with every vertex's position; only with nx_dk_diagnostics");
+REXCVAR_DEFINE_BOOL(nx_dk_diagnostics, false, "Switch",
+                    "nx_gpu = deko3d (run 55): the diagnostic mode: the GPU read-backs of nx_dk_skin_diff. Off = the "
+                    "normal mode, which pays for none of them (the counters and the sampled checks stay)");
+REXCVAR_DEFINE_BOOL(nx_dk_depth_bias, true, "Switch",
+                    "nx_gpu = deko3d (run 55): the title's depth bias at every stage, scaled as the Vulkan path "
+                    "(constant x 2^24, slope x 1/16); false = as through run 54 (off below nx_dk_stage 4)");
+REXCVAR_DEFINE_BOOL(nx_dk_depth_only, true, "Switch",
+                    "nx_gpu = deko3d (run 55, banjo-nx's depth-only draws): a draw that writes no colour, without alpha "
+                    "test or alpha to coverage, whose pixel shader neither discards nor writes depth, is drawn without "
+                    "its pixel shader (needs a package with shader flags, run 55's); false = as through run 54");
+REXCVAR_DEFINE_BOOL(nx_dk_vs_prune, true, "Switch",
+                    "nx_gpu = deko3d (run 56, masseffect-nx S6): vertex shaders that write only what is read: the "
+                    "position-only variant for draws without a pixel shader, the live-outputs one when the pixel shader "
+                    "declares none of the constant-zero outputs (needs run 56's package); false = the full variant");
+REXCVAR_DEFINE_BOOL(nx_dk_placement, true, "Switch",
+                    "nx_gpu = deko3d (run 57, the Vulkan path's EDRAM placement owners): a colour surface used while "
+                    "another surface of the same EDRAM range holds the content gets it first (GTA IV's exposure chain "
+                    "resolves surfaces nothing draws into); false = as through run 56");
+REXCVAR_DEFINE_BOOL(nx_dk_keep_targets, true, "Switch",
+                    "nx_gpu = deko3d (run 57): a draw that writes no colour keeps the title's colour targets of the "
+                    "depth's size bound, colour writes masked (the deferred lights' stencil and light passes share one "
+                    "binding); false = as through run 56");
+REXCVAR_DEFINE_BOOL(nx_dk_ab, false, "Switch",
+                    "nx_gpu = deko3d (run 58, dk_ab.h): once gameplay is on screen, phases of three 10 s windows switch "
+                    "one thing at a time (keep targets off, placement off, geometry store bypassed, culling off) and the "
+                    "log compares each with the baseline of the same session; one capture per phase");
+REXCVAR_DEFINE_INT32(nx_dk_ab_phases, 0, "Switch",
+                     "nx_gpu = deko3d (run 59, dk_ab.h AbPhaseBit): the A/B phases to run, a mask (1 baseline, 2 keep "
+                     "targets off, 4 placement off, 8 store off, 16 copies off, 32 cull off, 64 pages off, 128 pages only); "
+                     "0 = run 58's six (1-32)");
+REXCVAR_DEFINE_BOOL(nx_dk_anatomy, false, "Switch",
+                    "nx_gpu = deko3d (run 56): with nx_dk_capture_s, every resolve of the captured frame is saved as a "
+                    "PNG too (sdmc:/switch/theft4/captures/dk-f<frame>-r<n>-<source>-<destination>.png)");
+REXCVAR_DEFINE_BOOL(nx_dk_geometry_trust, true, "Switch",
+                    "nx_gpu = deko3d (run 53): the geometry store trusts a range checked once until the next work, frame "
+                    "or non-draw command (nfsmw-nx's epoch); false = every lookup hashes the whole range, as run 52");
+REXCVAR_DEFINE_INT32(nx_dk_geometry_mb, 96, "Switch",
+                     "nx_gpu = deko3d (run 52): MiB of the geometry store (nfsmw-nx's): vertex ranges seen before with "
+                     "the same bytes are bound from it, not copied and swapped again; 0 = off, as through run 51");
+REXCVAR_DEFINE_BOOL(nx_dk_constant_versions, true, "Switch",
+                    "nx_gpu = deko3d (run 50): a draw whose shader constants changed gets its own copy of the banks, "
+                    "never written again (the Vulkan path's versions); false = one block per work updated inline, as "
+                    "through run 49");
 REXCVAR_DEFINE_BOOL(nx_log_durable, false, "Switch",
                     "true: every log line is written to game.log at once (open, write, fsync, "
                     "close on the thread that logs: slow on the SD, for crash hunting); false: a "
@@ -318,6 +389,11 @@ REXCVAR_DEFINE_INT32(nx_ownership_transfer_skip, 0, "Switch",
 REXCVAR_DEFINE_BOOL(nx_sync_lock_free_release, true, "Switch",
                     "Semaphore releases and event signals without the object mutex when nobody waits")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(nx_sync_futex, true, "Switch",
+                    "Run 56: single-object waits sleep on Horizon's address arbiter (svcWaitForAddress), so a "
+                    "semaphore release or event signal wakes them without the object mutex; false = the condition "
+                    "variable, as through run 55")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(nx_ab_stencil_modes, false, "Switch",
                     "A/B: GPU work on; phases cycle the stencil transfer mode 0, 1, 2")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -332,6 +408,9 @@ REXCVAR_DEFINE_BOOL(nx_profile, false, "Switch",
                     "Sample the busy threads once a millisecond (pause, read pc/lr/frames, "
                     "resume) and log a histogram every 10 s; where.py --profile sums it per "
                     "function (nx_profiler.h). Costs a few % of one core");
+REXCVAR_DEFINE_INT32(nx_profile_start_s, 0, "Switch",
+                     "Run 56: with nx_profile, sampling starts this many seconds after start, so the stretch before "
+                     "it is an unprofiled benchmark and the rest a profile of the same session (where.py --stacks)");
 REXCVAR_DEFINE_BOOL(nx_nv_wrap, true, "Switch",
                     "Count NVK's nvdrv calls (fence waits and queries, kickoffs, nvmaps) in the "
                     "link-time wrappers (run 21). false: the wrappers only call the real "
@@ -861,6 +940,23 @@ bool CrashFinalHandler(rex::arch::Exception* ex, void* /*data*/) {
   CrashHex("sp         ", tc->sp);
   CrashYesNo("sp inside the stack: ", tc->sp >= lo && tc->sp <= hi);
   CrashYesNo("x29 inside the stack: ", tc->x[29] >= lo && tc->x[29] <= hi);
+  // Run 51: the callers. Run 50's fault (XFile::IsIoTraceEnabled at 35 s) had only pc and lr, and lr was inside the
+  // faulting function, so the code that called it was unknown. The frame records (x29 -> {previous x29, lr}) are
+  // followed while they stay inside this thread's stack and go up; addresses as ELF addresses (minus the base).
+  {
+    uint64_t fp = tc->x[29];
+    for (int depth = 0; depth < 32 && fp >= lo && fp + 16 <= hi && !(fp & 7); ++depth) {
+      const uint64_t* frame = reinterpret_cast<const uint64_t*>(fp);
+      const uint64_t caller_lr = frame[1];
+      char label[40];
+      std::snprintf(label, sizeof(label), "caller %2d: lr - base ", depth);
+      CrashHex(label, caller_lr - g_module_base);
+      if (frame[0] <= fp) {
+        break;
+      }
+      fp = frame[0];
+    }
+  }
   CrashDec("faults resumed on this thread ", rec->handled);
   if (rec->handled) {
     CrashDec("ms since the last one ", armTicksToNs(armGetSystemTick() - rec->last_tick) / 1'000'000);
@@ -1027,6 +1123,9 @@ Result __wrap_svcBreak(u32 reason, uintptr_t arg1, uintptr_t arg2) {
 }
 }
 
+// Set by the deko3d graphics system's recorder thread (dk_graphics_system.cpp); weak: the other builds do not have it.
+extern "C" unsigned int g_theft4_dk_recorder_thread __attribute__((weak));
+
 namespace {
 
 void OnTerminate() {
@@ -1149,6 +1248,10 @@ void StartLogging() {
   {
 #if THEFT4_NX_VULKAN
     constexpr const char* kNroKind = "Vulkan";
+#elif THEFT4_NX_DEKO3D
+    // Run 36's log said "null GPU only" for the deko3d build; the library is the difference between
+    // theft4-dk.nro and theft4-dk-debug.nro.
+    constexpr const char* kNroKind = THEFT4_NX_DEKO3D_DEBUG ? "deko3d (debug library libdeko3dd)" : "deko3d (release library)";
 #else
     constexpr const char* kNroKind = "null GPU only";
 #endif
@@ -1616,6 +1719,14 @@ void LogCpu(std::vector<std::pair<Handle, u64>>* last, u64 window_ticks) {
   ui.handle = g_main_thread_handle;
   ui.kind = "ui";
   rows.push_back(ui);
+  if (&g_theft4_dk_recorder_thread && g_theft4_dk_recorder_thread) {
+    // Run 44: the deko3d recorder thread (a plain std::thread, not an XThread): its own row.
+    CpuRow rec;
+    rec.handle = g_theft4_dk_recorder_thread;
+    rec.kind = "recorder";
+    theft4::nx_threads::SetName(rec.handle, "deko3d recorder");
+    rows.push_back(rec);
+  }
   if (g_log_writer_ready) {
     CpuRow w;
     w.handle = g_log_writer.handle;
@@ -1671,6 +1782,54 @@ void LogCpu(std::vector<std::pair<Handle, u64>>* last, u64 window_ticks) {
   GAME_INFO("cpu (100%% = one core): guest threads %.1f%%, host XThreads %.1f%%, ui + log "
             "%.1f%%; busiest:%s",
             guest, host, other, top.c_str());
+
+  // Run 45, read-only: where the threads ran. Per core, the ticks of every row on that core (ThreadTickCount with
+  // a core id) give each core's load from this process; the busiest six get their core mask and their split. Run
+  // 44 had the title's render thread inside SubmitTitleCommand 85-94 % of the time at 57 % CPU: this says whether
+  // it shares a core with the recorder and the other busy guest threads.
+  static std::vector<std::pair<Handle, std::array<u64, 4>>> s_last_core;
+  std::vector<std::pair<Handle, std::array<u64, 4>>> now_core;
+  const u32 tick_type = hosversionAtLeast(13, 0, 0) ? InfoType_ThreadTickCount
+                                                    : InfoType_ThreadTickCountDeprecated;
+  double core_load[4] = {};
+  std::string split;
+  for (size_t i = 0; i < rows.size(); ++i) {
+    std::array<u64, 4> ticks{};
+    for (u64 c = 0; c < 4; ++c) {
+      if (R_FAILED(svcGetInfo(&ticks[c], tick_type, rows[i].handle, c))) {
+        ticks[c] = 0;
+      }
+    }
+    std::array<u64, 4> before{};
+    for (const auto& [h, t] : s_last_core) {
+      if (h == rows[i].handle) before = t;
+    }
+    now_core.emplace_back(rows[i].handle, ticks);
+    double share[4];
+    for (int c = 0; c < 4; ++c) {
+      const u64 delta = ticks[c] > before[c] ? ticks[c] - before[c] : 0;
+      share[c] = window_ticks ? 100.0 * double(delta) / double(window_ticks) : 0;
+      core_load[c] += share[c];
+    }
+    if (i < 6) {
+      s32 ideal = -9;
+      u64 mask = 0;
+      svcGetThreadCoreMask(&ideal, &mask, rows[i].handle);
+      char item[112];
+      if (rows[i].id) {
+        std::snprintf(item, sizeof(item), " id %u %s ideal %d mask %" PRIx64 " = %.0f/%.0f/%.0f/%.0f;", rows[i].id,
+                      rows[i].kind, int(ideal), mask, share[0], share[1], share[2], share[3]);
+      } else {
+        std::snprintf(item, sizeof(item), " %s ideal %d mask %" PRIx64 " = %.0f/%.0f/%.0f/%.0f;", rows[i].kind,
+                      int(ideal), mask, share[0], share[1], share[2], share[3]);
+      }
+      split += item;
+    }
+  }
+  s_last_core.swap(now_core);
+  GAME_INFO("cpu by core (this process's listed threads, %% of the window on cores 0/1/2/3): %.1f/%.1f/%.1f/%.1f; "
+            "busiest:%s",
+            core_load[0], core_load[1], core_load[2], core_load[3], split.c_str());
 }
 
 // Horizon's thread count against the process limit, and the host threads of
@@ -3001,6 +3160,16 @@ struct Heartbeat {
             },
             [](uint32_t count) { GAME_INFO("input reads: %u changes lost (ring full)", count); });
       }
+#if THEFT4_NX_LRA
+      if (REXCVAR_GET(nx_gpu) == "lra") {
+        static uint64_t last_lra_frames = 0;
+        const uint64_t lra_frames = theft4::nx_lra::FramesPublished();
+        GAME_INFO("lra: %" PRIu64 " frames published in the window (%.1f fps); since start %" PRIu64,
+                  lra_frames - last_lra_frames,
+                  window_s > 0 ? double(lra_frames - last_lra_frames) / window_s : 0.0, lra_frames);
+        last_lra_frames = lra_frames;
+      }
+#endif
       if (REXCVAR_GET(nx_audio)) {
         // Run 2's sound came in bursts: real time is 187.5 frames of 256
         // samples a second. "Ran dry" counts frames that found nothing queued
@@ -3014,10 +3183,11 @@ struct Heartbeat {
         const double real_time = window_s > 0 ? window_s * 187.5 : 1.0;
         GAME_INFO("audio: %" PRIu64 " frames in the window (%.0f%% of real time), output ran dry "
                   "%" PRIu64 " times, %" PRIu64 " frames dropped, %.0f ms waiting for a free "
-                  "buffer; since start %" PRIu64 " frames",
+                  "buffer; since start %" PRIu64 " frames; NEON mixer voice loops %" PRIu64
+                  " (run 51, cvar nx_audio_neon_mixer)",
                   frames - last_frames, 100.0 * double(frames - last_frames) / real_time,
                   starved - last_starved, dropped - last_dropped,
-                  double(wait_ns - last_wait_ns) / 1e6, frames);
+                  double(wait_ns - last_wait_ns) / 1e6, frames, theft4::nx_audio_mixer::Calls());
         last_frames = frames;
         last_starved = starved;
         last_dropped = dropped;
@@ -3480,6 +3650,9 @@ void StartupSummary() {
             int(REXCVAR_GET(nx_sync_lock_free_release)));
   rex::thread::nx_sync::SubscribedMultiWait().store(REXCVAR_GET(nx_sync_multi_wait));
   GAME_INFO("C2 multi-object waits by subscription: %d", int(REXCVAR_GET(nx_sync_multi_wait)));
+  // Run 56: before the first guest thread waits, never changed afterwards (rex/thread/nx_sync_tuning.h).
+  rex::thread::nx_sync::FutexWaits().store(REXCVAR_GET(nx_sync_futex));
+  GAME_INFO("run 56 single-object waits on the address arbiter (nx_sync_futex): %d", int(REXCVAR_GET(nx_sync_futex)));
   rex::graphics::nx_ab::OwnershipTransferSkip().store(REXCVAR_GET(nx_ownership_transfer_skip));
   rex::graphics::nx_ab::StencilTransferMode().store(REXCVAR_GET(nx_stencil_transfer_mode));
   GAME_INFO("C6 stencil transfer mode %d; A/B stencil modes %d",
@@ -3504,9 +3677,11 @@ void StartupSummary() {
                                 REXCVAR_GET(nx_emc_mhz));
   theft4::nx_clocks::Start(REXCVAR_GET(nx_apm_clock), ClockLog);
   if (REXCVAR_GET(nx_profile)) {
-    theft4::nx_profiler::Start(g_module_base, g_module_text_size, ProfileLog);
-    GAME_INFO("profile: %s (cvar nx_profile): busy threads sampled once a millisecond",
-              theft4::nx_profiler::Running() ? "on" : "the sampling thread did NOT start");
+    const uint32_t start_after_s = uint32_t(std::max(0, int(REXCVAR_GET(nx_profile_start_s))));
+    theft4::nx_profiler::Start(g_module_base, g_module_text_size, ProfileLog, start_after_s);
+    GAME_INFO("profile: %s (cvar nx_profile): busy threads sampled once a millisecond from %u s after start "
+              "(nx_profile_start_s)",
+              theft4::nx_profiler::Running() ? "on" : "the sampling thread did NOT start", start_after_s);
   }
   // What the exit needs, made now while allocating is safe (ExitGame).
   g_exit_xthreads.reserve(kMaxExitThreads);
@@ -3581,7 +3756,9 @@ void StartupSummary() {
               int(REXCVAR_GET(native_transfer_mask)), int(REXCVAR_GET(native_observe_frames)));
   }
 #endif
-  const bool want_vulkan = REXCVAR_GET(nx_gpu) == "vulkan" || want_native;
+  // Run 51: Liberty Recompiled's own Vulkan renderer on NVK (CMakeLists.txt THEFT4_SWITCH_LRA).
+  const bool want_lra = REXCVAR_GET(nx_gpu) == "lra";
+  const bool want_vulkan = REXCVAR_GET(nx_gpu) == "vulkan" || want_native || want_lra;
 #if THEFT4_NX_VULKAN
   if (want_vulkan) {
     {
@@ -3609,10 +3786,24 @@ void StartupSummary() {
               __nx_nv_transfermem_size >> 20);
     g_ui_context = std::make_unique<rex::ui::NxWindowedAppContext>();
     runtime->set_app_context(g_ui_context.get());
-    auto vulkan = std::make_unique<rex::graphics::vulkan::VulkanGraphicsSystem>();
-    g_vulkan_graphics = vulkan.get();
-    config.graphics = std::move(vulkan);
-    GAME_INFO("graphics: ReXGlue's Vulkan backend on NVK (cvar nx_gpu = vulkan); console closed");
+#if THEFT4_NX_LRA
+    if (want_lra) {
+      config.graphics = std::make_unique<rex::graphics::gta4_native::Gta4NativeGraphicsSystem>();
+      GAME_INFO("graphics: nx_gpu = lra: Liberty Recompiled's Vulkan renderer (gta4_native, with kabba536's Switch "
+                "changes) on NVK; heartbeat line 'lra:'; console closed");
+    } else
+#else
+    if (want_lra) {
+      GAME_ERROR("nx_gpu = lra, but this NRO has no Liberty Recompiled renderer (THEFT4_SWITCH_LRA off): ReXGlue's "
+                 "Vulkan backend instead");
+    }
+#endif
+    {
+      auto vulkan = std::make_unique<rex::graphics::vulkan::VulkanGraphicsSystem>();
+      g_vulkan_graphics = vulkan.get();
+      config.graphics = std::move(vulkan);
+      GAME_INFO("graphics: ReXGlue's Vulkan backend on NVK (cvar nx_gpu = vulkan); console closed");
+    }
   } else if (GAME_INFO("graphics: this NRO has the Vulkan backend, but nx_gpu = %s: put "
                        "nx_gpu = \"vulkan\" in %s",
                        REXCVAR_GET(nx_gpu).c_str(), kConfigPath),
@@ -3648,6 +3839,23 @@ void StartupSummary() {
       dk.stage = [] { return int(REXCVAR_GET(nx_dk_stage)); };
       dk.gamma = [] { return float(REXCVAR_GET(nx_dk_gamma)); };
       dk.capture_seconds = REXCVAR_GET(nx_dk_capture_s);
+      dk.skip_state_commands = REXCVAR_GET(nx_dk_skip_state_commands);
+      dk.blend_alpha_fix = REXCVAR_GET(nx_dk_blend_alpha_fix);
+      dk.mixup_from_memory = REXCVAR_GET(nx_dk_mixup_from_memory);
+      dk.constant_versions = REXCVAR_GET(nx_dk_constant_versions);
+      dk.geometry_mb = uint32_t(std::max(0, int(REXCVAR_GET(nx_dk_geometry_mb))));
+      dk.geometry_trust = REXCVAR_GET(nx_dk_geometry_trust);
+      dk.texture_lock_readback = REXCVAR_GET(nx_dk_texture_lock_readback);
+      // Run 55: the read-backs only in the diagnostic mode (nx_dk_diagnostics); the normal mode pays for none of them.
+      dk.skin_diff = REXCVAR_GET(nx_dk_diagnostics) ? uint32_t(std::max(0, int(REXCVAR_GET(nx_dk_skin_diff)))) : 0;
+      dk.depth_bias = REXCVAR_GET(nx_dk_depth_bias);
+      dk.depth_only = REXCVAR_GET(nx_dk_depth_only);
+      dk.vs_prune = REXCVAR_GET(nx_dk_vs_prune);
+      dk.anatomy = REXCVAR_GET(nx_dk_anatomy);
+      dk.placement = REXCVAR_GET(nx_dk_placement);
+      dk.keep_targets = REXCVAR_GET(nx_dk_keep_targets);
+      dk.ab_phases = REXCVAR_GET(nx_dk_ab);
+      dk.ab_phase_mask = uint32_t(REXCVAR_GET(nx_dk_ab_phases));
       auto system = std::make_unique<rex::graphics::gta4_native::dk::Deko3dGraphicsSystem>(
           std::move(config.graphics), dk);
       g_dk_graphics = system.get();

@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
 #include <optional>
 #include <type_traits>
 
@@ -300,6 +301,16 @@ class NativePipelineRecipe {
     info.layout = layout;
     if (g_capture_pipeline_statistics.load(std::memory_order_relaxed))
       info.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
+#if defined(__SWITCH__)
+    // Which shaders reach the driver's compiler, so a compiler crash
+    // (NVK/NAK on the console) names the culprit in rex_stderr.log.
+    std::fprintf(stderr, "[pipeline] vs %016llx/%016llx v%u ps %016llx/%016llx v%u spec %08x\n",
+                 (unsigned long long)data.shaders[0].title_hash,
+                 (unsigned long long)data.shaders[0].code_hash, data.shaders[0].variant,
+                 (unsigned long long)data.shaders[1].title_hash,
+                 (unsigned long long)data.shaders[1].code_hash, data.shaders[1].variant,
+                 data.specialization);
+#endif
     return create(device, cache, 1, &info, nullptr, pipeline);
   }
 

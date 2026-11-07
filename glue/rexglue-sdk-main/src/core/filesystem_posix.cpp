@@ -33,6 +33,8 @@
 #include <libgen.h>
 #include <pwd.h>
 
+#include "host_file_share.h"
+
 #if REX_PLATFORM_NX
 #include <errno.h>
 
@@ -215,14 +217,24 @@ bool CreateEmptyFile(const std::filesystem::path& path) {
   return false;
 }
 
+void CloseHostFd(int fd) { close(fd); }
+
+#if REX_PLATFORM_NX
+// The descriptors open per path: a file open for writing is locked on Horizon (host_file_share.h).
+SharedHostFdTable& NxOpenFds() {
+  static SharedHostFdTable table;
+  return table;
+}
+std::atomic<uint32_t> g_nx_shared_opens{0};
+std::atomic<uint32_t> g_nx_fstat_answers{0};
+#endif
+
 class PosixFileHandle : public FileHandle {
  public:
-  PosixFileHandle(std::filesystem::path path, int handle)
-      : FileHandle(std::move(path)), handle_(handle) {}
-  ~PosixFileHandle() override {
-    close(handle_);
-    handle_ = -1;
-  }
+  PosixFileHandle(std::filesystem::path path, std::shared_ptr<SharedHostFd> fd)
+      : FileHandle(std::move(path)), fd_(std::move(fd)), handle_(fd_->fd) {}
+  // The descriptor is closed with the last handle that shares it.
+  ~PosixFileHandle() override = default;
   // A transfer shorter than asked is repeated for the rest until the whole
   // length is done, end of file (0) or an error; on NX each repeat counts as
   // a short read or write (GetNxShortTransfers).
@@ -287,6 +299,7 @@ class PosixFileHandle : public FileHandle {
     errno = error;
   }
 
+  std::shared_ptr<SharedHostFd> fd_;
   int handle_ = -1;
 };
 
@@ -324,13 +337,36 @@ std::unique_ptr<FileHandle> FileHandle::OpenExisting(const std::filesystem::path
   const bool want_write =
       desired_access & (FileAccess::kGenericWrite | FileAccess::kGenericAll |
                         FileAccess::kFileWriteData | FileAccess::kFileAppendData);
+  const bool append = desired_access & FileAccess::kFileAppendData;
   int open_access = want_write ? (want_read ? O_RDWR : O_WRONLY) : O_RDONLY;
-  if (desired_access & FileAccess::kFileAppendData) {
+  if (append) {
     open_access |= O_APPEND;
   }
-  int handle = open(path.c_str(), open_access);
+  bool can_read = !want_write || want_read;
+  int handle = -1;
+#if REX_PLATFORM_NX
+  // A handle that only writes is opened for reading too, so that it can serve a later guest handle that reads the
+  // file while this one keeps it locked (run 49: the save, written and then opened again).
+  if (open_access == O_WRONLY) {
+    handle = open(path.c_str(), O_RDWR);
+    can_read = handle != -1;
+  }
+#endif
+  if (handle == -1) {
+    handle = open(path.c_str(), open_access);
+  }
   if (handle == -1) {
 #if REX_PLATFORM_NX
+    // Locked by a handle of ours that is still open: share its descriptor.
+    if (errno != ENOENT && !append) {
+      if (auto shared = NxOpenFds().Find(path.string(), want_read, want_write)) {
+        if (g_nx_shared_opens.fetch_add(1, std::memory_order_relaxed) < 16) {
+          REXFS_INFO("host open of a locked file shares the open descriptor {}: '{}' (access 0x{:08X})",
+                     shared->fd, path.string(), desired_access);
+        }
+        return std::make_unique<PosixFileHandle>(path, std::move(shared));
+      }
+    }
     // libnx's open() goes through fsFsOpenFile, which refuses directories, so
     // a guest NtOpenFile of a folder ("game:\" before NtQueryDirectoryFile,
     // run 13) failed with NO_SUCH_FILE. Linux and Windows open folders; here
@@ -343,12 +379,31 @@ std::unique_ptr<FileHandle> FileHandle::OpenExisting(const std::filesystem::path
     // TODO(benvanik): pick correct response.
     return nullptr;
   }
-  return std::make_unique<PosixFileHandle>(path, handle);
+#if REX_PLATFORM_NX
+  if (!append) {
+    return std::make_unique<PosixFileHandle>(
+        path, NxOpenFds().Add(path.string(), handle, can_read, want_write, CloseHostFd));
+  }
+#endif
+  return std::make_unique<PosixFileHandle>(
+      path, std::make_shared<SharedHostFd>(handle, can_read, want_write, CloseHostFd));
 }
 
 bool GetInfo(const std::filesystem::path& path, FileInfo* out_info) {
   struct stat st;
-  if (stat(path.c_str(), &st) == 0) {
+  bool ok = stat(path.c_str(), &st) == 0;
+#if REX_PLATFORM_NX
+  // A file of ours open for writing is locked and its stat fails: ask its descriptor.
+  if (!ok && errno != ENOENT) {
+    if (auto shared = NxOpenFds().Find(path.string(), false, false)) {
+      ok = fstat(shared->fd, &st) == 0;
+      if (ok && g_nx_fstat_answers.fetch_add(1, std::memory_order_relaxed) < 16) {
+        REXFS_INFO("host stat of a locked file answered by its open descriptor: '{}'", path.string());
+      }
+    }
+  }
+#endif
+  if (ok) {
     if (S_ISDIR(st.st_mode)) {
       out_info->type = FileInfo::Type::kDirectory;
       out_info->total_size = 0;

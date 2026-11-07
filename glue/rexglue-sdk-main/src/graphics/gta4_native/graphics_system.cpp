@@ -1,3 +1,7 @@
+#include <rex/platform.h>
+#if REX_PLATFORM_SWITCH
+#include "native_switch_platform.h"  // Theft4: kabba's src/core/threading_switch.h, which our SDK does not have
+#endif
 #include <rex/graphics/gta4_native/fusion_tone_lut.h>
 #include <rex/graphics/gta4_native/modern_effect_constants.h>
 #include "core/font_atlas.h"
@@ -6,6 +10,30 @@
 #if defined(__ANDROID__)
 #include <android/log.h>
 #include <pthread.h>
+#elif REX_PLATFORM_SWITCH
+// Switch: the Android pipeline report below (every 120 frames: sync waits,
+// resolve kinds, resolve-swap rejects, skips per frame) goes to stderr, which
+// switch_log writes to logs/rex/rex_stderr.log. It tells which resolves the
+// GPU time goes to (sd_logs34 capture: resolves 19 ms of a 76 ms GPU frame).
+#include <cstdarg>
+#include <cstdio>
+#define ANDROID_LOG_WARN 5
+// stderr is unbuffered: one formatted line, one write (three fprintf/fputc calls
+// were three synchronous SD writes from the assembler thread per line).
+static inline void RexSwitchReportLine(int, const char* tag, const char* format, ...) {
+  char line[1536];
+  int length = std::snprintf(line, sizeof(line) - 1, "[%s] ", tag);
+  if (length < 0) return;
+  va_list arguments;
+  va_start(arguments, format);
+  const int body = std::vsnprintf(line + length, sizeof(line) - 1 - size_t(length), format, arguments);
+  va_end(arguments);
+  if (body > 0) length += body;
+  if (length > int(sizeof(line)) - 2) length = int(sizeof(line)) - 2;
+  line[length++] = '\n';
+  std::fwrite(line, 1, size_t(length), stderr);
+}
+#define __android_log_print(prio, tag, ...) RexSwitchReportLine(prio, tag, __VA_ARGS__)
 #endif
 #include "native_pipeline_stats.h"
 #include "native_gpu_counters.h"
@@ -33,6 +61,7 @@
 #include "../gta4_metal/temporal/projection.h"
 
 #include <algorithm>
+#include <new>
 #include <bit>
 #include <cmath>
 #include <cstdio>
@@ -155,10 +184,18 @@ REXCVAR_DEFINE_BOOL(gta4_native_batched_worker_wake, true, "GTA IV/Graphics/Nati
                     "Wake the render worker per command batch and frame instead of per command");
 REXCVAR_DEFINE_BOOL(gta4_native_pipeline_serialize, false, "GTA IV/Diagnostics",
                     "Wait for each pipelined frame to finish recording before assembling the next");
-REXCVAR_DEFINE_UINT32(gta4_native_max_queued_frames, 2, "GTA IV/Graphics/Native Renderer",
+// Switch: 3, as the Android release (default_args.txt). With the title allowed one
+// frame further ahead (gta4_extra_frames_in_flight) a queue of 2 would only move
+// the wait from the title to the producer.
+REXCVAR_DEFINE_UINT32(gta4_native_max_queued_frames, REX_PLATFORM_SWITCH ? 3u : 2u,
+                      "GTA IV/Graphics/Native Renderer",
                       "Title frames the producer may run ahead of the recorder")
     .range(1, 4);
-REXCVAR_DEFINE_UINT32(gta4_native_frame_complete_signal, 0, "GTA IV/Graphics/Native Renderer",
+// Switch: with 0 the title waited for the recorder to finish and submit each
+// frame before starting the next, so producer (~45 ms) and recorder (~45 ms)
+// ran one after the other (~11 fps in the city, sd_logs32-34). At Present
+// capture every byte of the frame has already been copied.
+REXCVAR_DEFINE_UINT32(gta4_native_frame_complete_signal, REX_PLATFORM_SWITCH ? 2u : 0u, "GTA IV/Graphics/Native Renderer",
                       "When the title sees a frame as complete: 0 after GPU submission, 1 at recorder handoff, 2 at Present capture")
     .range(0, 2);
 REXCVAR_DEFINE_BOOL(gta4_native_sparse_capacity_plan, true, "GTA IV/Graphics/Native Renderer",
@@ -259,6 +296,37 @@ REXCVAR_DEFINE_BOOL(gta4_native_fold_depth_clears, true, "GTA IV/Graphics/Native
 REXCVAR_DEFINE_BOOL(gta4_native_drop_inert_blending, true, "GTA IV/Graphics/Native Renderer",
                     "Disable blending on targets where it cannot change the result (no channel "
                     "written, or source*1 + destination*0), so Turnip keeps LRZ on");
+// Switch: NVK reports view swizzle support, so textures took the guest-swizzle
+// branch below, unlike Android. The native renderer and its shader overrides
+// are tuned against identity views; the guest swizzle swaps red and blue in
+// GTA IV's ARGB textures (yellow taxis and skin rendered blue on Switch).
+REXCVAR_DEFINE_BOOL(gta4_native_identity_texture_views, REX_PLATFORM_SWITCH ? true : false,
+                    "GTA IV/Graphics/Native Renderer",
+                    "Use identity component swizzles for ordinary texture views (as on Android)");
+// Switch: every guest thread runs at Horizon priority 59, where threads of the
+// same priority share a core in ~10 ms slices. The recorder and the assembler
+// are the renderer's critical path (sd_logs36: recorder 45 % CPU while the
+// assembler waited 11 % of its time for it), yet they queued behind guest job
+// threads. Both block whenever they have no work, so a higher priority only
+// makes them run as soon as they have some. 0 keeps the default.
+REXCVAR_DEFINE_UINT32(gta4_native_renderer_thread_priority, REX_PLATFORM_SWITCH ? 45u : 0u,
+                      "GTA IV/Graphics/Native Renderer",
+                      "Horizon priority of the render assembler and recorder threads (28-59, 0 = default)");
+// Switch: the title's render thread (the guest thread that submits the draws) is
+// the critical path once the recorder and the assembler run at 45. sd_logs40, 5-13
+// fps, its 1 ms samples: running 58 % of the time, ready but not running another
+// ~19 % (it sat at 59 behind the renderer, audio and decoder threads, and every
+// batch it handed to the assembler woke a higher-priority thread that took its
+// core), and 15 % blocked on locks. The main game thread waits on it. Raised to
+// 44 it is no longer preempted by the threads it feeds; it is kept off core 3
+// (the XAudio2 thread runs there at the same priority, and equal priorities
+// other than 59 are not time-sliced), and its yields become short sleeps
+// (RexSwitchMarkRaisedGuestThread). It is found by behaviour: the first thread
+// that submits 1000 draws within one second. 0 keeps it at 59.
+REXCVAR_DEFINE_UINT32(gta4_native_producer_thread_priority, REX_PLATFORM_SWITCH ? 44u : 0u,
+                      "GTA IV/Graphics/Native Renderer",
+                      "Horizon priority of the title's render thread, the one that submits the "
+                      "draws (28-59, 0 = leave it in the guest band)");
 REXCVAR_DEFINE_BOOL(gta4_native_resolve_kind_report, false, "GTA IV/Diagnostics",
                     "Count resolves and surface materializations by kind and log them with the "
                     "pipeline report");
@@ -545,11 +613,12 @@ REXCVAR_DEFINE_UINT32(gta4_profile_native_gpu_query_budget, 512, "GTA IV/Diagnos
 REXCVAR_DEFINE_UINT32(gta4_profile_native_interval, 1, "GTA IV/Diagnostics",
                       "Capture one native-renderer profile after this many submitted frames")
     .range(1, 3600);
-REXCVAR_DEFINE_UINT32(gta4_profile_native_samples, 600, "GTA IV/Diagnostics",
+REXCVAR_DEFINE_UINT32(gta4_profile_native_samples, REX_PLATFORM_SWITCH ? 300u : 600u, "GTA IV/Diagnostics",
                       "Export the native-renderer numeric profile after this many samples")
     .range(1, rex::graphics::gta4_native::performance::kFrameSampleCapacity);
+// Switch: no capture of the intro; switch_perf.cpp arms one where the GPU is the limit.
 REXCVAR_DEFINE_BOOL(
-    gta4_profile_native_autostart, true, "GTA IV/Diagnostics",
+    gta4_profile_native_autostart, !REX_PLATFORM_SWITCH, "GTA IV/Diagnostics",
     "Start native profiling with the first rendered frame; disable to arm it later from LLDB");
 REXCVAR_DEFINE_UINT32(gta4_profile_native_memory_interval_ms, 1000, "GTA IV/Diagnostics",
                       "Wall-clock interval between native-renderer memory samples in milliseconds")
@@ -572,9 +641,87 @@ REXCVAR_DEFINE_UINT32(
     rex::graphics::gta4_native::kNativeTextureBudgetPollFrames, "GTA IV/Graphics/Native Renderer",
     "Frames between native texture memory-budget pressure checks (0 checks every frame)")
     .range(0, 3600);
+#if defined(__SWITCH__)
+// Switch: GPU memory is the same 4 GB the CPU heap lives in, and the driver
+// budget covers all of it, so without a cap the cache never felt pressure and
+// the heap ran out (std::bad_alloc after a few minutes of driving).
+#define REX_GTA4_TEXTURE_LIMIT_DEFAULT_MB 448
+#else
+#define REX_GTA4_TEXTURE_LIMIT_DEFAULT_MB 0
+#endif
 REXCVAR_DEFINE_UINT32(
-    gta4_native_texture_memory_limit_mb, 0, "GTA IV/Graphics/Native Renderer",
+    gta4_native_texture_memory_limit_mb, REX_GTA4_TEXTURE_LIMIT_DEFAULT_MB,
+    "GTA IV/Graphics/Native Renderer",
     "Optional native texture heap budget cap in MiB (0 uses the Vulkan driver budget)");
+#if defined(__SWITCH__)
+// Renderer memory, for the Switch profile report (switch_perf.cpp): where the
+// heap goes. Written by the render thread's periodic housekeeping, read racily.
+std::atomic<uint64_t> g_rex_switch_gfx_stats[6];
+extern "C" void RexSwitchGfxStats(uint64_t out[6]) {
+  for (int i = 0; i < 6; ++i) out[i] = g_rex_switch_gfx_stats[i].load(std::memory_order_relaxed);
+}
+#endif
+// Dirty vertex/index buffer captures on the producer, cumulative: [0] full shadow
+// compares, [1] of them unchanged, [2] bytes compared, [3] compares skipped
+// (buffer changed on its last dirty captures), [4] new captures, [5] bytes
+// captured. One writer (the producer), so plain load+store, no LL/SC loop.
+std::atomic<uint64_t> g_rex_buffer_capture_stats[6];
+static inline void BumpBufferCaptureStat(int index, uint64_t amount = 1) {
+  auto& counter = g_rex_buffer_capture_stats[index];
+  counter.store(counter.load(std::memory_order_relaxed) + amount, std::memory_order_relaxed);
+}
+extern "C" void RexSwitchBufferCaptureStats(uint64_t out[6]) {
+  for (int i = 0; i < 6; ++i) out[i] = g_rex_buffer_capture_stats[i].load(std::memory_order_relaxed);
+}
+// Two image resources share device memory only when they are bound to the
+// same allocation at the same offset: sub-allocated textures share blocks
+// (native_texture_memory_arena.h) without aliasing each other.
+template <typename Resource>
+static bool SharesNativeImageMemory(const Resource& a, const Resource& b) {
+  return a.memory == b.memory && a.memory_offset == b.memory_offset;
+}
+// Switch: resolves that copy a render target into a texture of the same format
+// ran on the copy engine (vkCmdCopyImage), which serializes with the 3D engine on
+// every switch; the earlier move of 8-bit targets to a draw took "resolve" from
+// the biggest GPU cost of the frame. A capture with the remaining formats still on
+// the copy engine had ~19 ms of resolves in a 76 ms GPU frame (sd_logs34, x1.627).
+// Formats a texelFetch -> fragment output round trip reproduces bit for bit:
+// unorm (k / (2^n - 1) converts back to k) and float. Not integer formats (the
+// conversion shader writes floats) and not snorm (-128 and -127 both read -1.0).
+static bool IsExactDrawResolveFormat(VkFormat format) {
+  switch (format) {
+    case VK_FORMAT_R8_UNORM:
+    case VK_FORMAT_R8G8_UNORM:
+    case VK_FORMAT_R8G8B8A8_UNORM:
+    case VK_FORMAT_B8G8R8A8_UNORM:
+    case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+    case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
+    case VK_FORMAT_R16_UNORM:
+    case VK_FORMAT_R16G16_UNORM:
+    case VK_FORMAT_R16G16B16A16_UNORM:
+    case VK_FORMAT_R16_SFLOAT:
+    case VK_FORMAT_R16G16_SFLOAT:
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+    case VK_FORMAT_R32_SFLOAT:
+    case VK_FORMAT_R32G32_SFLOAT:
+    case VK_FORMAT_R32G32B32A32_SFLOAT:
+    case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+      return true;
+    default:
+      return false;
+  }
+}
+REXCVAR_DEFINE_BOOL(gta4_native_resolve_draw_all_formats, REX_PLATFORM_SWITCH ? true : false,
+                    "GTA IV/Graphics/Native Renderer",
+                    "Resolve same-format colour targets of every format with a draw on the 3D "
+                    "engine instead of a copy-engine image copy");
+REXCVAR_DEFINE_BOOL(gta4_native_texture_suballocation, REX_PLATFORM_SWITCH ? true : false,
+                    "GTA IV/Graphics/Native Renderer",
+                    "Place texture images in shared 32 MB memory blocks instead of one dedicated "
+                    "allocation each (each allocation is several driver calls on the Switch)");
+REXCVAR_DEFINE_BOOL(gta4_native_buffer_change_streak, true, "GTA IV/Graphics/Native Renderer",
+                    "Skip the full shadow compare of a dirty vertex/index buffer whose last two "
+                    "dirty captures both found new bytes (one in eight still compares)");
 
 namespace rex::graphics::gta4_native {
 
@@ -590,6 +737,16 @@ extern "C" __attribute__((visibility("default"))) int rex_gta4_native_profile_st
   g_native_profile_capture_requested.store(true, std::memory_order_release);
   return 1;
 }
+
+#if defined(__SWITCH__)
+// Switch, with logs/rex/perfil_gpu.flag: the native GPU/CPU pass profile is
+// captured on request (switch_perf.cpp arms it in the middle of the session)
+// instead of on the first frames, which are the intro.
+extern "C" void RexSwitchGpuProfilePrepare(void) {
+  REXCVAR_SET(gta4_profile_native_autostart, false);
+  REXCVAR_SET(gta4_profile_native_samples, 300u);
+}
+#endif
 
 extern "C" __attribute__((visibility("default"))) int rex_gta4_native_memory_profile_start() {
   g_native_memory_profile_start_requested.store(true, std::memory_order_release);
@@ -748,9 +905,46 @@ bool IsNativeFlightVerboseLoggingEnabled() {
          CachedDiagnosticsEnabled(rex::diagnostics::Category::kVulkan);
 }
 
-bool IsDeferredLightShaderFilename(std::string_view filename) {
+// v20: the recorder classifies shaders by substring searches on their filename for every
+// draw (sd_logs41: memchr + string_view::find ~2 % of the recorder thread). The answer depends
+// only on the filename, so each thread keeps a small cache keyed by the string's address and
+// size, confirmed by comparing the content (a freed and reused address with another name is a
+// miss, never a wrong answer).
+template <typename T, size_t kSlots = 64>
+struct NativeFilenameMemo {
+  struct Entry {
+    const char* data = nullptr;
+    size_t size = 0;
+    std::string copy;
+    T value{};
+  };
+  std::array<Entry, kSlots> entries{};
+  template <typename Compute>
+  T Get(std::string_view filename, Compute&& compute) {
+    const size_t slot =
+        ((reinterpret_cast<uintptr_t>(filename.data()) >> 4) ^ filename.size()) % kSlots;
+    Entry& entry = entries[slot];
+    if (entry.data == filename.data() && entry.size == filename.size() &&
+        std::string_view(entry.copy) == filename) {
+      return entry.value;
+    }
+    T value = compute(filename);
+    entry.data = filename.data();
+    entry.size = filename.size();
+    entry.copy.assign(filename);
+    entry.value = value;
+    return value;
+  }
+};
+
+bool IsDeferredLightShaderFilenameUncached(std::string_view filename) {
   return filename.find("/deferred_lighting/") != std::string_view::npos ||
          filename.find("deferred_lighting_") != std::string_view::npos;
+}
+
+bool IsDeferredLightShaderFilename(std::string_view filename) {
+  thread_local NativeFilenameMemo<bool> memo;
+  return memo.Get(filename, IsDeferredLightShaderFilenameUncached);
 }
 
 bool IsArtificialLightRenderPhase(RenderPhase phase) {
@@ -2013,6 +2207,34 @@ bool WriteNativeCacheAtomically(const std::filesystem::path& path, std::span<con
       return false;
     }
   }
+#if defined(__SWITCH__)
+  // Horizon's file system does not rename onto an existing file: only the
+  // first save ever succeeded, so the pipeline cache on the SD stayed at its
+  // first 30 seconds (6 of 163 pipelines) and every session compiled the rest
+  // again, which is the stutter at the start of each cutscene. Move the old one
+  // aside, put the new one in place, then drop the old one.
+  {
+    std::filesystem::path previous = path;
+    previous += ".old";
+    std::error_code ignored;
+    std::filesystem::remove(previous, ignored);
+    const bool had_previous = std::filesystem::exists(path, ignored);
+    if (had_previous) {
+      std::filesystem::rename(path, previous, error);
+      if (error) {
+        std::filesystem::remove(path, error);
+      }
+    }
+    std::filesystem::rename(temporary, path, error);
+    if (error) {
+      if (had_previous) std::filesystem::rename(previous, path, ignored);
+      std::filesystem::remove(temporary, ignored);
+      return false;
+    }
+    std::filesystem::remove(previous, ignored);
+    return true;
+  }
+#endif
   std::filesystem::rename(temporary, path, error);
   if (error) {
     std::filesystem::remove(temporary, error);
@@ -2236,7 +2458,14 @@ bool ShouldTraceVectorFonts() {
          REXCVAR_GET(gta4_trace_vector_fonts);
 }
 
+std::string_view ClassifyTranslucentDiagnosticShaderUncached(std::string_view filename);
 std::string_view ClassifyTranslucentDiagnosticShader(std::string_view filename) {
+  // Results are string literals, so the cached views stay valid.
+  thread_local NativeFilenameMemo<std::string_view> memo;
+  return memo.Get(filename, ClassifyTranslucentDiagnosticShaderUncached);
+}
+
+std::string_view ClassifyTranslucentDiagnosticShaderUncached(std::string_view filename) {
   if (filename.find("/gta_grass/") != std::string_view::npos) {
     return "grass-card";
   }
@@ -2728,7 +2957,13 @@ uint32_t LoadGuestWord(const std::vector<uint8_t>& bytes, size_t offset) {
   return LoadGuestWord(std::span<const uint8_t>(bytes), offset);
 }
 
+std::optional<uint32_t> DeferredLocalLightConstantBaseUncached(std::string_view vertex_shader_filename);
 std::optional<uint32_t> DeferredLocalLightConstantBase(std::string_view vertex_shader_filename) {
+  thread_local NativeFilenameMemo<std::optional<uint32_t>> memo;
+  return memo.Get(vertex_shader_filename, DeferredLocalLightConstantBaseUncached);
+}
+
+std::optional<uint32_t> DeferredLocalLightConstantBaseUncached(std::string_view vertex_shader_filename) {
   if (vertex_shader_filename.find("deferred_lighting_vs1.bin") != std::string_view::npos ||
       vertex_shader_filename.find("deferred_lighting_vs3.bin") != std::string_view::npos ||
       vertex_shader_filename.find("deferred_lighting_vs4.bin") != std::string_view::npos) {
@@ -3820,6 +4055,29 @@ X_STATUS Gta4NativeGraphicsSystem::SetupPresentation(ui::WindowedAppContext* app
   if (!provider_) {
     return X_STATUS_UNSUCCESSFUL;
   }
+  if (const auto* check_device =
+          static_cast<ui::vulkan::VulkanProvider*>(provider_.get())->vulkan_device()) {
+    // The uniform constant banks bind 64-byte-aligned dynamic offsets (Adreno's
+    // minUniformBufferOffsetAlignment). A device that needs more cannot take
+    // them: NVK on the Switch's GM20B reports 256, and the misaligned binding
+    // raised a graphics engine exception on SET_CONSTANT_BUFFER_SELECTOR_C
+    // (device lost on the first frames, seen on console). Such a device reads
+    // the constant banks through buffer device addresses instead, the path
+    // the banks had before the uniform-buffer one. Checked here, before any
+    // shader is registered: RegisterShader rewrites SPIR-V for the banks.
+    VkPhysicalDeviceProperties physical_properties{};
+    check_device->vulkan_instance()->functions().vkGetPhysicalDeviceProperties(
+        check_device->physical_device(), &physical_properties);
+    const VkDeviceSize ubo_alignment = physical_properties.limits.minUniformBufferOffsetAlignment;
+    if (ubo_alignment > NativeConstantArenaAlignment() &&
+        (REXCVAR_GET(gta4_native_ubo_constants) || REXCVAR_GET(gta4_native_ubo_layout))) {
+      REXLOG_WARN("gta4-native: minUniformBufferOffsetAlignment={} exceeds the constant bank "
+                  "alignment {}; uniform constant banks disabled",
+                  uint64_t(ubo_alignment), uint64_t(NativeConstantArenaAlignment()));
+      REXCVAR_SET(gta4_native_ubo_constants, false);
+      REXCVAR_SET(gta4_native_ubo_layout, false);
+    }
+  }
 
   app_context_ = app_context;
   auto create_presenter = [this]() { presenter_ = provider_->CreatePresenter(); };
@@ -3861,7 +4119,39 @@ uint32_t Gta4NativeGraphicsSystem::GetTitleCommandAbi(uint32_t title_id) const {
   return title_id == kTitleId ? kTitleCommandAbi : 0;
 }
 
+#if REX_PLATFORM_SWITCH
+namespace {
+// See gta4_native_producer_thread_priority. Runs on every submitted draw until
+// the render thread has been raised; after that it is one relaxed load.
+void RaiseTitleRenderThreadOnce() {
+  static std::atomic<bool> raised{false};
+  thread_local uint64_t window_start = 0;
+  thread_local uint32_t window_draws = 0;
+  if (raised.load(std::memory_order_relaxed)) return;
+  const uint64_t now = rex::chrono::Clock::QueryHostTickCount();
+  const uint64_t frequency = rex::chrono::Clock::QueryHostTickFrequency();
+  if (!window_start || now - window_start > frequency) {
+    window_start = now;
+    window_draws = 0;
+  }
+  if (++window_draws < 1000) return;
+  if (raised.exchange(true)) return;
+  const uint32_t priority = REXCVAR_GET(gta4_native_producer_thread_priority);
+  if (priority < 28 || priority > 59) return;
+  const bool off_core3 = RexSwitchExcludeCurrentThreadFromCore(3);
+  const bool ok = RexSwitchSetCurrentThreadPriorityOk(int(priority));
+  if (ok) RexSwitchMarkRaisedGuestThread();
+  REXLOG_WARN("gta4-native: title render thread (draw producer) priority {} ({}), core 3 {}",
+              priority, ok ? "set" : "refused", off_core3 ? "excluded" : "unchanged");
+}
+}  // namespace
+#endif
+
 void Gta4NativeGraphicsSystem::PublishStagedDrawCommandsLocked() {
+  // Every command about to enter render_queue_ (the staged batch and the command
+  // being queued after it) has its texture retains moved into the queue index
+  // first, so the worker never releases a generation that was not retained.
+  FlushProducerTextureProtectionLocked();
   for (auto& staged : staged_draw_commands_) {
     staged->diagnostic_submit_sequence = ++diagnostic_submit_sequence_;
     staged->diagnostic_producer_epoch = diagnostic_producer_epoch_;
@@ -3907,6 +4197,16 @@ bool Gta4NativeGraphicsSystem::SubmitTitleCommand(uint32_t title_id, uint32_t ab
     return false;
   }
 
+#if REX_PLATFORM_SWITCH
+  if (title_command_size >= sizeof(CommandHeader)) {
+    CommandHeader peek{};
+    std::memcpy(&peek, title_command, sizeof(peek));
+    if (peek.type == CommandType::kDrawIndexedPrimitive || peek.type == CommandType::kDrawPrimitive ||
+        peek.type == CommandType::kDrawPrimitiveUp) {
+      RaiseTitleRenderThreadOnce();
+    }
+  }
+#endif
   // Capture and queue are one producer transaction. This guarantees that a
   // later partial delta can never overtake the bootstrap snapshot it depends
   // on when title command submission happens from multiple host threads.
@@ -3955,7 +4255,10 @@ bool Gta4NativeGraphicsSystem::SubmitTitleCommand(uint32_t title_id, uint32_t ab
   std::memcpy(&title_header, title_command, sizeof(title_header));
   // Batch asynchronous commands on the producer side; anything published
   // immediately publishes the batch first, keeping the queue order identical.
-  constexpr size_t kStagedDrawBatch = 32;
+  // Switch: ~6000 commands per city frame made 32-command batches ~190 lock
+  // handoffs per frame on each side; the producer spent ~15 % of its time
+  // blocked on render_mutex_ (sd_logs33). Larger batches, same order.
+  constexpr size_t kStagedDrawBatch = REX_PLATFORM_SWITCH ? 128 : 32;
   // The worker sleeps only on an empty queue; wake it per batch and at frame
   // boundaries rather than per command (a futex round trip each).
   constexpr size_t kWorkerWakeBatch = 32;
@@ -3972,7 +4275,11 @@ bool Gta4NativeGraphicsSystem::SubmitTitleCommand(uint32_t title_id, uint32_t ab
   if (!producer_pending_state_.empty()) native_command.pending_state.swap(producer_pending_state_);
   producer_pending_state_.clear();
   CollectTextureProtection(native_command);
-  QueueTextureProtection(native_command, true);
+  // Retained into the producer's own list (an uncontended lock) and moved into
+  // the queue index once per published batch: taking queued_protection_mutex_
+  // for every command collided with the worker releasing whole batches under
+  // it (sd_logs40: the producer blocked on locks 15 % of its time).
+  StageProducerTextureProtection(native_command);
   if (stageable && !phone_envelope && !tv_envelope && !fire_envelope && !profile_transport &&
       REXCVAR_GET(gta4_native_stage_draw_commands)) {
     staged_draw_commands_.push_back(std::move(native_command_owner));
@@ -4802,7 +5109,7 @@ bool Gta4NativeGraphicsSystem::ValidateAndCopyCommand(const void* command, size_
       const auto half_scene = texture_resources_.find(producer_postfx_half_scene_);
       if (half_scene != texture_resources_.end()) native_command.postfx_half_scene = half_scene->second;
     }
-    const std::string state_transport = REXCVAR_GET(gta4_native_state_transport);
+    const std::string& state_transport = REXCVAR_GET(gta4_native_state_transport);
     const bool compare_transport = state_transport == "compare";
     const bool diagnostic_snapshot =
         CachedDiagnosticsEnabled(rex::diagnostics::Category::kNativeTrace) ||
@@ -5296,8 +5603,30 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
   // full validation. Compare against the immutable capture before allocating a
   // temporary payload and hashing it; unchanged bytes need neither operation.
   // Keep this separate from the sampled clean path and its mismatch safeguard.
-  if (!can_reuse_clean_capture && matching_cache_entry &&
-      NativeBufferShadowPayloadMatches(data, matching_cache_entry->payload.data(), data_size)) {
+  // sd_logs37: memcmp was ~13 % of the producer while driving, most of it here.
+  // A buffer the title rewrites on every unlock (traffic, particles) failed this
+  // compare each time and then paid the copy and hash anyway; once its last two
+  // dirty captures both changed, go straight to the copy. One in eight still
+  // compares, so a buffer that stops changing is noticed within a few unlocks
+  // (and the hash compare below catches unchanged bytes regardless).
+  if (cache_slot.streak_handle != handle) {
+    cache_slot.streak_handle = handle;
+    cache_slot.changed_streak = 0;
+  }
+  const bool skip_dirty_compare =
+      !can_reuse_clean_capture && matching_cache_entry && cache_slot.changed_streak >= 2 &&
+      (++cache_slot.skip_phase & 7) != 0 && REXCVAR_GET(gta4_native_buffer_change_streak);
+  if (skip_dirty_compare) BumpBufferCaptureStat(3);
+  bool dirty_compare_matched = false;
+  if (!can_reuse_clean_capture && matching_cache_entry && !skip_dirty_compare) {
+    BumpBufferCaptureStat(0);
+    BumpBufferCaptureStat(2, data_size);
+    dirty_compare_matched =
+        NativeBufferShadowPayloadMatches(data, matching_cache_entry->payload.data(), data_size);
+    if (dirty_compare_matched) BumpBufferCaptureStat(1);
+  }
+  if (dirty_compare_matched) {
+    cache_slot.changed_streak = 0;
     std::lock_guard lock(buffer_resource_mutex_);
     const auto existing = buffer_resources_.find(handle);
     if (existing != buffer_resources_.end() && existing->second == matching_cache_entry) {
@@ -5351,6 +5680,7 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
     if (resource && resource->flags == flags && resource->guest_address == data_address &&
         resource->guest_size == data_size && resource->content_hash == content_hash &&
         resource->payload == payload) {
+      cache_slot.changed_streak = 0;
       dirty_buffer_handles_.erase(handle);
       resource->last_used_frame.store(
           g_native_memory_profile_event_frame.load(std::memory_order_relaxed),
@@ -5360,6 +5690,9 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
     }
   }
 
+  if (matching_cache_entry && cache_slot.changed_streak < 255) ++cache_slot.changed_streak;
+  BumpBufferCaptureStat(4);
+  BumpBufferCaptureStat(5, data_size);
   auto resource = std::make_shared<NativeBufferResource>();
   resource->handle = handle;
   resource->flags = flags;
@@ -6243,7 +6576,23 @@ void Gta4NativeGraphicsSystem::TraceModernShaderDraw(
     modern_diagnostics_.Cloud(ps->hash, fusion_cloud_ready_, target.width, target.height);
 }
 
+
+namespace {
+void ApplyNativeRendererThreadPriority(const char* name) {
+#if REX_PLATFORM_SWITCH
+  const uint32_t priority = REXCVAR_GET(gta4_native_renderer_thread_priority);
+  if (priority >= 28 && priority <= 59) {
+    const bool ok = RexSwitchSetCurrentThreadPriorityOk(int(priority));
+    REXLOG_INFO("gta4-native: {} thread priority {} ({})", name, priority, ok ? "set" : "refused");
+  }
+#else
+  (void)name;
+#endif
+}
+}  // namespace
+
 void Gta4NativeGraphicsSystem::RenderWorkerMain() {
+  ApplyNativeRendererThreadPriority("render assembler");
   std::vector<std::pair<RenderPhase, uint32_t>> render_phase_stack;
   uint64_t startup_texture_lock_count = 0;
   bool startup_present_follows_texture_lock_flush = false;
@@ -6346,7 +6695,7 @@ void Gta4NativeGraphicsSystem::RenderWorkerMain() {
     }
   };
   size_t queued_after_batch = 0;
-  worker_command_batch_.reserve(32);
+  worker_command_batch_.reserve(REX_PLATFORM_SWITCH ? 256 : 32);
   pipelined_recording_ = REXCVAR_GET(gta4_native_pipelined_recording);
   if (pipelined_recording_) {
     {
@@ -6468,7 +6817,7 @@ void Gta4NativeGraphicsSystem::RenderWorkerMain() {
         if (!render_worker_running_) break;
         continue;
       }
-      const size_t count = std::min<size_t>(32, render_queue_.size());
+      const size_t count = std::min<size_t>(REX_PLATFORM_SWITCH ? 256 : 32, render_queue_.size());
       {
         std::lock_guard protection_lock(worker_protection_mutex_);
         for (size_t i = 0; i < count; ++i) worker_command_batch_.push_back(render_queue_.TakeFront());
@@ -6914,7 +7263,7 @@ void Gta4NativeGraphicsSystem::RenderWorkerMain() {
           recording_environmental_data_by_device_ = environmental_data_by_device_;
           assembly_modern_frame_pending_ = false;
           log_frame_batch("present", command, present.submitted_frame, queued_after_pop);
-#if REX_PLATFORM_ANDROID
+#if REX_PLATFORM_ANDROID || REX_PLATFORM_SWITCH
           // TEMP: pipeline stall telemetry (perf investigation).
           if (++pipeline_report_frames_ == 120) {
             const double ms_per_tick = 1000.0 / double(rex::chrono::Clock::QueryHostTickFrequency());
@@ -7372,6 +7721,7 @@ void Gta4NativeGraphicsSystem::SignalGuestFrameComplete(uint32_t device, uint32_
 }
 
 void Gta4NativeGraphicsSystem::FrameRecorderMain() {
+  ApplyNativeRendererThreadPriority("frame recorder");
 #if REX_PLATFORM_ANDROID
   pthread_setname_np(pthread_self(), "GtaRecorder");
 #endif
@@ -18225,8 +18575,15 @@ void Gta4NativeGraphicsSystem::DestroyNativeTextureImage(NativeTextureImage& ima
     image.resource.image = VK_NULL_HANDLE;
   }
   if (image.resource.memory) {
-    profile::CpuCall(profile::CpuOp::kDriverDestruction, [&] { return dfn.vkFreeMemory(device, image.resource.memory, nullptr); });
+    if (image.resource.suballocated) {
+      if (texture_memory_arena_) texture_memory_arena_->Free(vulkan_device, image.resource.memory,
+                                                             image.resource.memory_offset);
+    } else {
+      profile::CpuCall(profile::CpuOp::kDriverDestruction, [&] { return dfn.vkFreeMemory(device, image.resource.memory, nullptr); });
+    }
     image.resource.memory = VK_NULL_HANDLE;
+    image.resource.memory_offset = 0;
+    image.resource.suballocated = false;
   }
   if (image.memory_accounted && image.memory_heap < accounted_texture_bytes_.size()) {
     auto& bytes = accounted_texture_bytes_[image.memory_heap];
@@ -18300,7 +18657,12 @@ void Gta4NativeGraphicsSystem::TrimTextureAllocationPool(bool all) {
         destroy_view(allocation.packed_stencil_view);
         destroy_view(allocation.resource.view);
         profile::CpuCall(profile::CpuOp::kDriverDestruction, [&] { return device->functions().vkDestroyImage(device->device(),allocation.resource.image,nullptr); });
-        profile::CpuCall(profile::CpuOp::kDriverDestruction, [&] { return device->functions().vkFreeMemory(device->device(),allocation.resource.memory,nullptr); });
+        if (allocation.resource.suballocated) {
+          if (texture_memory_arena_) texture_memory_arena_->Free(device, allocation.resource.memory,
+                                                                 allocation.resource.memory_offset);
+        } else {
+          profile::CpuCall(profile::CpuOp::kDriverDestruction, [&] { return device->functions().vkFreeMemory(device->device(),allocation.resource.memory,nullptr); });
+        }
       });
 }
 
@@ -18318,7 +18680,7 @@ bool Gta4NativeGraphicsSystem::AllocateNativeTextureImage(const VkImageCreateInf
     // Only detached, GPU-complete handles reach this worker. It is joined
     // before any device teardown, and its retained bytes remain budgeted.
     texture_reclaimer_ = std::make_unique<NativeResourceReclaimer<ReusableNativeImage>>(
-        67108864, 256, [vulkan_device](ReusableNativeImage& allocation) {
+        67108864, 256, [vulkan_device, arena = texture_memory_arena_](ReusableNativeImage& allocation) {
           const auto destroy = [&] {
             const auto& functions = vulkan_device->functions();
             const VkDevice device = vulkan_device->device();
@@ -18328,7 +18690,12 @@ bool Gta4NativeGraphicsSystem::AllocateNativeTextureImage(const VkImageCreateInf
               functions.vkDestroyImageView(device, allocation.packed_stencil_view, nullptr);
             if (allocation.resource.view) functions.vkDestroyImageView(device, allocation.resource.view, nullptr);
             if (allocation.resource.image) functions.vkDestroyImage(device, allocation.resource.image, nullptr);
-            if (allocation.resource.memory) functions.vkFreeMemory(device, allocation.resource.memory, nullptr);
+            if (allocation.resource.suballocated) {
+              if (arena) arena->Free(vulkan_device, allocation.resource.memory,
+                                     allocation.resource.memory_offset);
+            } else if (allocation.resource.memory) {
+              functions.vkFreeMemory(device, allocation.resource.memory, nullptr);
+            }
           };
 #if defined(__APPLE__)
           WithNativeAutoreleasePool(destroy);
@@ -18364,10 +18731,47 @@ bool Gta4NativeGraphicsSystem::AllocateNativeTextureImage(const VkImageCreateInf
     return true;
   }
   for (uint32_t attempt = 0;; ++attempt) {
+    if (image.allocation_pool_compatible && texture_memory_arena_ &&
+        REXCVAR_GET(gta4_native_texture_suballocation)) {
+      const auto& dfn = vulkan_device->functions();
+      VkImage new_image = VK_NULL_HANDLE;
+      if (dfn.vkCreateImage(vulkan_device->device(), &image_info, nullptr, &new_image) ==
+          VK_SUCCESS) {
+        VkMemoryRequirements requirements{};
+        dfn.vkGetImageMemoryRequirements(vulkan_device->device(), new_image, &requirements);
+        const uint32_t memory_type = ui::vulkan::util::ChooseMemoryType(
+            vulkan_device->memory_types(), requirements.memoryTypeBits,
+            ui::vulkan::util::MemoryPurpose::kDeviceLocal);
+        NativeTextureMemoryArena::Allocation placed{};
+        if (texture_memory_arena_->Allocate(vulkan_device, memory_type, requirements.size,
+                                            requirements.alignment, placed)) {
+          if (dfn.vkBindImageMemory(vulkan_device->device(), new_image, placed.memory,
+                                    placed.offset) == VK_SUCCESS) {
+            image.resource.image = new_image;
+            image.resource.memory = placed.memory;
+            image.resource.memory_offset = placed.offset;
+            image.resource.suballocated = true;
+            image.memory_type = memory_type;
+            image.allocation_size = requirements.size;
+            VkPhysicalDeviceMemoryProperties memory_properties{};
+            vulkan_device->vulkan_instance()->functions().vkGetPhysicalDeviceMemoryProperties(
+                vulkan_device->physical_device(), &memory_properties);
+            image.memory_heap = image.memory_type < memory_properties.memoryTypeCount
+                                    ? memory_properties.memoryTypes[image.memory_type].heapIndex
+                                    : UINT32_MAX;
+            return true;
+          }
+          texture_memory_arena_->Free(vulkan_device, placed.memory, placed.offset);
+        }
+        dfn.vkDestroyImage(vulkan_device->device(), new_image, nullptr);
+      }
+    }
     if (ui::vulkan::util::CreateDedicatedAllocationImage(
             vulkan_device, image_info, ui::vulkan::util::MemoryPurpose::kDeviceLocal,
             image.resource.image, image.resource.memory, &image.memory_type,
             &image.allocation_size)) {
+      image.resource.memory_offset = 0;
+      image.resource.suballocated = false;
       VkPhysicalDeviceMemoryProperties memory_properties{};
       vulkan_device->vulkan_instance()->functions().vkGetPhysicalDeviceMemoryProperties(
           vulkan_device->physical_device(), &memory_properties);
@@ -18644,7 +19048,8 @@ Gta4NativeGraphicsSystem::NativeTextureImage* Gta4NativeGraphicsSystem::GetOrCre
     view_info.components.b = VK_COMPONENT_SWIZZLE_ONE;
     view_info.components.a = VK_COMPONENT_SWIZZLE_R;
   } else if (vulkan_device->properties().portabilitySubset ||
-             !vulkan_device->properties().imageViewFormatSwizzle || REX_PLATFORM_ANDROID) {
+             !vulkan_device->properties().imageViewFormatSwizzle || REX_PLATFORM_ANDROID ||
+             REXCVAR_GET(gta4_native_identity_texture_views)) {
     // Ordinary native portability views deliberately retain the established
     // identity policy even when font-only swizzle support is enabled.
     // Android follows the same policy: the native renderer and its shader
@@ -20194,6 +20599,33 @@ void Gta4NativeGraphicsSystem::QueueTextureProtection(const NativeCommand& comma
   QueueTextureProtectionLocked(command, retain);
 }
 
+void Gta4NativeGraphicsSystem::StageProducerTextureProtection(const NativeCommand& command) {
+  if (!command.protected_generations_collected) CollectTextureProtection(command);
+  std::lock_guard lock(producer_protection_mutex_);
+  if (command.protected_generations_overflow) {
+    VisitProtectedTextureGenerations(command, [this](uint64_t generation) {
+      if (generation) producer_pending_protection_.push_back(generation);
+    });
+    return;
+  }
+  for (uint32_t i = 0; i < command.protected_generation_count; ++i) {
+    if (command.protected_generations[i])
+      producer_pending_protection_.push_back(command.protected_generations[i]);
+  }
+}
+
+void Gta4NativeGraphicsSystem::FlushProducerTextureProtectionLocked() {
+  // Lock order: render_mutex_ (held by the caller), queued_protection_mutex_,
+  // producer_protection_mutex_ - the same as AppendQueuedTextureProtection.
+  std::lock_guard queued_lock(queued_protection_mutex_);
+  std::lock_guard producer_lock(producer_protection_mutex_);
+  for (const uint64_t generation : producer_pending_protection_) {
+    if (!queued_texture_protection_.Retain(generation))
+      REXLOG_ERROR("gta4-native-protection: queue reference invariant failed generation={} retain=true; using scan fallback", generation);
+  }
+  producer_pending_protection_.clear();
+}
+
 void Gta4NativeGraphicsSystem::QueueTextureProtectionLocked(const NativeCommand& command,
                                                             bool retain) {
   auto apply = [&](uint64_t generation) {
@@ -20230,6 +20662,9 @@ void Gta4NativeGraphicsSystem::AppendQueuedTextureProtection(std::unordered_set<
   std::lock_guard lock(queued_protection_mutex_);
   if (queued_texture_protection_.valid()) queued_texture_protection_.AppendTo(generations);
   else for (const auto& command : render_queue_) AddProtectedTextureGenerations(command, generations);
+  // Commands still staged on the producer (not yet in render_queue_).
+  std::lock_guard producer_lock(producer_protection_mutex_);
+  generations.insert(producer_pending_protection_.begin(), producer_pending_protection_.end());
 }
 
 bool Gta4NativeGraphicsSystem::ResetImmutableBindings(NativeFrameConstantArena& arena) {
@@ -20296,8 +20731,17 @@ void Gta4NativeGraphicsSystem::EvictNativeTextureImages(uint32_t submitted_frame
     texture_budget_snapshot_ = QueryNativeTextureHeapBudgets();
   NativeTextureHeapBudgets budgets = texture_budget_snapshot_;
   constexpr uint64_t kBytesPerMiB = 1048576ull;
+#if defined(__SWITCH__)
+  // A saved config may still carry the old default (0 = driver budget, which
+  // on Switch is the whole shared memory): never run uncapped there.
+  const uint64_t configured_limit_bytes =
+      uint64_t(REXCVAR_GET(gta4_native_texture_memory_limit_mb)
+                   ? REXCVAR_GET(gta4_native_texture_memory_limit_mb)
+                   : REX_GTA4_TEXTURE_LIMIT_DEFAULT_MB) * kBytesPerMiB;
+#else
   const uint64_t configured_limit_bytes =
       uint64_t(REXCVAR_GET(gta4_native_texture_memory_limit_mb)) * kBytesPerMiB;
+#endif
   auto native_texture_usage = accounted_texture_bytes_;
   if (texture_reclaimer_) {
     const auto pending = texture_reclaimer_->usage();
@@ -20599,6 +21043,25 @@ void Gta4NativeGraphicsSystem::ReleaseUnusedBufferResources(uint32_t submitted_f
       }
     }
   }
+#if defined(__SWITCH__)
+  {
+    g_rex_switch_gfx_stats[0].store(cache_bytes, std::memory_order_relaxed);
+    g_rex_switch_gfx_stats[1].store(candidates.capacity(), std::memory_order_relaxed);
+    uint64_t texture_payload = 0;
+    uint64_t texture_count = 0;
+    {
+      std::lock_guard lock(texture_resource_mutex_);
+      texture_count = texture_resources_.size();
+      for (const auto& [handle, resource] : texture_resources_) {
+        if (resource) texture_payload += resource->payload.capacity();
+      }
+    }
+    g_rex_switch_gfx_stats[2].store(texture_payload, std::memory_order_relaxed);
+    g_rex_switch_gfx_stats[3].store(texture_count, std::memory_order_relaxed);
+    g_rex_switch_gfx_stats[4].store(texture_heap_usage_, std::memory_order_relaxed);
+    g_rex_switch_gfx_stats[5].store(native_texture_images_.size(), std::memory_order_relaxed);
+  }
+#endif
   // Under budget every eligible aged entry is reclaimed regardless of order.
   // Only pressure eviction needs oldest-first ordering to choose which younger
   // entries to discard before the byte budget is satisfied.
@@ -22582,7 +23045,16 @@ VkPipeline Gta4NativeGraphicsSystem::GetOrCreatePipeline(
 bool Gta4NativeGraphicsSystem::UploadBufferResource(
     const std::shared_ptr<const NativeBufferResource>& resource, VkCommandBuffer command_buffer,
     bool index_buffer, bool index32, const NativePipelineState* vertex_state,
-    uint32_t vertex_stream, NativeFrameResources& resources, NativeUploadAllocation& allocation) {
+    uint32_t vertex_stream, NativeFrameResources& resources, NativeUploadAllocation& allocation)
+#if defined(__SWITCH__)
+    // Switch (sd_logs22): std::bad_alloc from the host-copy resize below, with
+    // the heap almost full after ~9 min in the city, reached std::terminate and
+    // closed the game. The resizes have the strong guarantee, so on failure
+    // nothing changed: skip this draw (the caller treats false as a failed
+    // upload) and ask housekeeping to reclaim the buffer cache right away.
+    try
+#endif
+{
   const profile::CpuScope profile_scope(profile::CpuOp::kBufferUpload);
 
   if (!resource || resource->payload.empty()) {
@@ -22756,6 +23228,19 @@ bool Gta4NativeGraphicsSystem::UploadBufferResource(
   if (!uploads.Insert(persistent_key, allocation)) return false;
   return true;
 }
+#if defined(__SWITCH__)
+catch (const std::bad_alloc&) {
+  static std::atomic<uint32_t> out_of_memory_count{0};
+  const uint32_t count = out_of_memory_count.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (count <= 16 || (count % 1000) == 0) {
+    REXLOG_ERROR("gta4-native-oom: buffer upload skipped (std::bad_alloc) count={} size={}",
+                 count, resource ? resource->payload.size() : size_t(0));
+  }
+  buffer_cache_reclamation_pending_ = true;
+  allocation = {};
+  return false;
+}
+#endif
 
 void Gta4NativeGraphicsSystem::ObserveNativeGpuProfileDraw(
     const NativeCommand& command, VkPipeline pipeline, VkSampleCountFlagBits samples,
@@ -25559,9 +26044,9 @@ bool Gta4NativeGraphicsSystem::RecordResolveConversion(
             source.resource.image != destination.resource.image &&
             source.resource.image != hdr_mirror->resource.image &&
             destination.resource.image != hdr_mirror->resource.image &&
-            source.resource.memory != destination.resource.memory &&
-            source.resource.memory != hdr_mirror->resource.memory &&
-            destination.resource.memory != hdr_mirror->resource.memory,
+            !SharesNativeImageMemory(source.resource, destination.resource) &&
+            !SharesNativeImageMemory(source.resource, hdr_mirror->resource) &&
+            !SharesNativeImageMemory(destination.resource, hdr_mirror->resource),
         destination_level == 0};
     if (!CanFuseNativeColorResolve(fusion)) {
       return false;
@@ -25893,7 +26378,7 @@ Gta4NativeGraphicsSystem::PrepareProducerDepthResolve(
   NativeTextureImage& destination = *destination_entry->second;
   for (const NativeSurfaceImage* color : target.color_surfaces) {
     if (color && (color->resource.image == destination.resource.image ||
-                  color->resource.memory == destination.resource.memory)) {
+                  SharesNativeImageMemory(color->resource, destination.resource))) {
       return result;
     }
   }
@@ -25908,7 +26393,7 @@ Gta4NativeGraphicsSystem::PrepareProducerDepthResolve(
           texture->generation == resolve_command.resolve_destination->generation ||
           (image != native_texture_images_.end() && image->second &&
            (image->second->resource.image == destination.resource.image ||
-            image->second->resource.memory == destination.resource.memory))) {
+            SharesNativeImageMemory(image->second->resource, destination.resource)))) {
         return result;
       }
     }
@@ -25993,7 +26478,7 @@ Gta4NativeGraphicsSystem::PrepareProducerDepthResolve(
           !destination.source->info.is_stacked,
       source->resource.image && destination.resource.image &&
           source->resource.image != destination.resource.image &&
-          source->resource.memory != destination.resource.memory,
+          !SharesNativeImageMemory(source->resource, destination.resource),
       true};
   if (!CanAttachNativeProducerDepthResolve(eligibility)) { return result; }
   const VkImageView destination_view = GetOrCreateTextureMipView(destination, 0);
@@ -28182,6 +28667,28 @@ bool Gta4NativeGraphicsSystem::RecordResolve(VkCommandBuffer command_buffer,
     operation = ResolveOperation::kConvert;
   } else if (programmable_color_resolve && conversion_supported) {
     operation = ResolveOperation::kConvert;
+#if defined(__SWITCH__)
+  } else if (!depth && conversion_supported && content_source->format == destination->format &&
+             (destination->format == VK_FORMAT_R8G8B8A8_UNORM ||
+              destination->format == VK_FORMAT_B8G8R8A8_UNORM ||
+              (REXCVAR_GET(gta4_native_resolve_draw_all_formats) &&
+               IsExactDrawResolveFormat(destination->format)))) {
+    // Switch (NVK on Maxwell): vkCmdCopyImage/vkCmdBlitImage of a render target
+    // run on the copy engine, which serializes with the 3D engine on every
+    // switch. With ~21 resolves per frame, "resolve" was the biggest GPU cost
+    // of the frame (11 ms of 33 at 720p). The conversion path is a full-screen
+    // draw on the 3D engine, the same one already used for the scaled and
+    // multisampled resolves.
+    // At first only plain 8-bit colour, because the blue-tinted characters and
+    // missing shadows of sd_logs20 were suspected here. Both had other causes
+    // (the guest component swizzle, fixed by gta4_native_identity_texture_views,
+    // and the shadow update interval). Here the draw reaches this branch only
+    // with no exponent, no scaling and one sample: texelFetch written to the same
+    // format, which round-trips unorm, 10:10:10:2 and float texels exactly (the
+    // float16 pack only replaces NaN and clamps beyond +-65504). So every format
+    // now stays on the 3D engine (gta4_native_resolve_draw_all_formats).
+    operation = ResolveOperation::kConvert;
+#endif
   } else if (!color_resolve_exponent && !scale_conversion && transfer_supported &&
              content_source->samples == VK_SAMPLE_COUNT_1_BIT && matching_aspects &&
              content_source->format == destination->format) {
@@ -28234,7 +28741,7 @@ bool Gta4NativeGraphicsSystem::RecordResolve(VkCommandBuffer command_buffer,
   if (REXCVAR_GET(gta4_native_lossless_resolve_optimization) && color_resolve &&
       !high_precision_destination && !resolve.parameters_valid &&
       destination->mip_levels == 1 && resolve.destination_level == 0 &&
-      content_source->resource.memory != destination->resource.memory &&
+      !SharesNativeImageMemory(content_source->resource, destination->resource) &&
       content_source->aspect_content.color.initialized) {
     resolve_reuse_key = {
         .recording = resolve_recording_epoch_,
@@ -37005,10 +37512,18 @@ bool Gta4NativeGraphicsSystem::RecordNativeFrame(
   return recorded_draw;
 }
 
+#if defined(__SWITCH__)
+extern "C" void RexSwitchPerfCount(unsigned id);
+#endif
 bool Gta4NativeGraphicsSystem::PublishFrame(
     const PresentCommand& present,
     const std::shared_ptr<const NativeTextureResource>& present_source,
     const std::shared_ptr<const EnvironmentalDataV2>& environmental_data) {
+#if defined(__SWITCH__)
+  // One per published frame: the FPS the console overlays (SaltyNX, sys-monitor)
+  // and the profile report show (switch_perf.cpp counter 0).
+  RexSwitchPerfCount(0);
+#endif
   native_flight_enabled_.store(gpu_flight::IsEnabled(), std::memory_order_relaxed);
   const bool detail_requested = CachedDiagnosticsEnabled(rex::diagnostics::Category::kNativeProfiler) &&
       !native_gpu_profile_state_.capture_complete && !native_gpu_profile_state_.export_started &&
@@ -38225,6 +38740,10 @@ void Gta4NativeGraphicsSystem::DestroyNativeRendererObjects() {
   native_descriptor_capacity_ = 0;
   native_sampler_descriptor_capacity_ = 0;
   null_images_initialized_ = false;
+  if (texture_memory_arena_) {
+    auto* arena_provider = static_cast<ui::vulkan::VulkanProvider*>(provider_.get());
+    texture_memory_arena_->Destroy(arena_provider ? arena_provider->vulkan_device() : nullptr);
+  }
   FinalizeNativeMemoryProfile(diagnostic_submitted_frame_);
 }
 

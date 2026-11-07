@@ -26,7 +26,7 @@ namespace {
 constexpr size_t kMaxBusy = 32;
 constexpr size_t kMaxSamples = 1 << 15;  // > 10 s at 1 kHz
 constexpr int kFrames = 10;              // lr, then the x29 chain (C2: 4 -> 10)
-constexpr size_t kTopStacks = 5;         // C2: whole stacks per thread
+constexpr size_t kTopStacks = 12;        // C2: whole stacks per thread (run 56: 5 -> 12, where.py --stacks)
 constexpr size_t kMinSamplesForStacks = 50;
 constexpr uint64_t kSampleIntervalNs = 1'000'000ull;
 constexpr uint64_t kReportNs = 10'000'000'000ull;
@@ -178,7 +178,19 @@ void TakeSample(uint32_t handle) {
   svcSetThreadActivity(handle, ThreadActivity_Runnable);
 }
 
+uint32_t g_start_after_s = 0;
+
 void ProfilerMain(void*) {
+  if (g_start_after_s) {
+    // Run 56: the benchmark stretch first, unsampled.
+    svcSleepThread(int64_t(g_start_after_s) * 1'000'000'000ll);
+    char text[160];
+    std::snprintf(text, sizeof(text),
+                  "profile: sampling starts now, %u s after start (nx_profile_start_s): the windows before this line "
+                  "are unprofiled (the benchmark), the ones after it are profiled",
+                  g_start_after_s);
+    g_log(text);
+  }
   BusyThread local[kMaxBusy];
   size_t local_count = 0, next = 0;
   uint64_t last_copy = 0;
@@ -204,10 +216,11 @@ void ProfilerMain(void*) {
 
 }  // namespace
 
-void Start(uint64_t module_base, uint64_t module_text_size, LogFn log) {
+void Start(uint64_t module_base, uint64_t module_text_size, LogFn log, uint32_t start_after_s) {
   g_base = module_base;
   g_text_size = module_text_size;
   g_log = log;
+  g_start_after_s = start_after_s;
   // 0x2A: above the game's threads, so the samples are taken on time; it
   // sleeps almost all the time (sa2-nx uses the same).
   if (R_SUCCEEDED(threadCreate(&g_thread, ProfilerMain, nullptr, nullptr, 0x10000, 0x2A, -2)) &&

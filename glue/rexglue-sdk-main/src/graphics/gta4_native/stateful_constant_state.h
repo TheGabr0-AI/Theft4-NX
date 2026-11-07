@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <thread>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -184,6 +186,33 @@ struct ConstantApplyResult {
 // constants (two 3.5-4 KB heap blocks per draw otherwise). Releases may come
 // from any thread (command retirement is asynchronous), hence the mutex.
 class ConstantSnapshotPool {
+  // The pool is taken by the render worker for every draw that changes
+  // constants and released by the retirement thread for every retired one; the
+  // critical section is a vector push or pop. A std::mutex on Horizon hands
+  // ownership to a blocked waiter that may not run for a whole time slice, so
+  // the two threads convoyed: in the sd_logs20 city profile the render worker
+  // spent 32 % of its samples and the retirement thread 35 % blocked here.
+  // A spin lock never hands off; a holder preempted mid-section is waited out
+  // with yields.
+  class SpinLock {
+   public:
+    void lock() noexcept {
+      for (uint32_t spins = 0; flag_.test_and_set(std::memory_order_acquire); ++spins) {
+        if (spins < 256) {
+#if defined(__aarch64__)
+          asm volatile("yield");
+#endif
+        } else {
+          std::this_thread::yield();
+        }
+      }
+    }
+    void unlock() noexcept { flag_.clear(std::memory_order_release); }
+
+   private:
+    std::atomic_flag flag_ = ATOMIC_FLAG_INIT;
+  };
+
  public:
   static std::shared_ptr<const std::vector<uint8_t>> Copy(const std::vector<uint8_t>& source,
                                                           size_t copy_bytes = SIZE_MAX) {
@@ -218,7 +247,7 @@ class ConstantSnapshotPool {
   }
 
  private:
-  static std::mutex& mutex() { static std::mutex instance; return instance; }
+  static SpinLock& mutex() { static SpinLock instance; return instance; }
   // One list per bank size (vertex, pixel and the rare others).
   static std::vector<std::vector<uint8_t>*>& free_list(size_t size) {
     static std::vector<std::pair<size_t, std::vector<std::vector<uint8_t>*>>> lists;

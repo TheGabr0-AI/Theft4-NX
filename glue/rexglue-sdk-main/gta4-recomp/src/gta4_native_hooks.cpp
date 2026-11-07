@@ -88,6 +88,9 @@ REXCVAR_DEFINE_BOOL(
     "Diagnostic-only removal of the authored filler-light flag from apartment bulb x890")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+// Set by the deko3d graphics system when it is the title's native renderer (dk_graphics_system.cpp); weak: other builds do not have it.
+extern "C" unsigned int g_theft4_dk_skip_state_commands __attribute__((weak));
+
 namespace {
 
 using namespace rex::graphics::gta4_native;
@@ -3403,6 +3406,14 @@ bool CaptureNativeCommand(const Command& command) {
 
 template <typename Command>
 bool SubmitNativeCommand(const Command& command) {
+  if constexpr (std::is_same_v<Command, SetRenderStateCommand> || std::is_same_v<Command, SetTextureCommand> ||
+                std::is_same_v<Command, SetRenderTargetCommand> || std::is_same_v<Command, SetDepthStencilCommand>) {
+    // The deko3d back end reads the guest device at each draw and never uses these four: they are not captured into cached
+    // lists, not traced and not sent (run 45). The flag lives in dk_graphics_system.cpp; weak: other builds do not have it.
+    if (&g_theft4_dk_skip_state_commands && g_theft4_dk_skip_state_commands) {
+      return true;
+    }
+  }
   uint32_t help_device = 0;
   if constexpr (requires { command.device; }) help_device = command.device;
   if (CaptureNativeCommand(command)) {

@@ -10,6 +10,7 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -294,6 +295,9 @@ class XFile : public XObject {
   size_t find_index_ = 0;
 
   bool is_synchronous_ = false;
+  // IsIoTraceEnabled's answer once file_ is set (-1 = not asked yet): the device of an entry never changes, and the
+  // check was a dynamic_cast through file_ -> entry -> device on every read and write (run 51).
+  mutable std::atomic<int8_t> io_trace_{-1};
 };
 
 }  // namespace rex::system

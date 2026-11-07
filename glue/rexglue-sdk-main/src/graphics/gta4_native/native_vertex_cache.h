@@ -17,6 +17,9 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#if defined(__SWITCH__)
+#include <pthread.h>
+#endif
 #include <unordered_map>
 #include <vector>
 
@@ -196,6 +199,7 @@ class NativeVertexCacheOptimizer {
   // Copies the indices; false (nothing queued) when the queue is full.
   bool Enqueue(std::shared_ptr<NativeVertexCacheRange> range, const void* indices,
                uint32_t index_count, bool index32) {
+    if (!worker_ok_) return false;
     Job job{std::move(range), {}, index_count, index32};
     job.source.resize(size_t(index_count) * (index32 ? 4 : 2));
     std::memcpy(job.source.data(), indices, job.source.size());
@@ -217,7 +221,28 @@ class NativeVertexCacheOptimizer {
     bool index32;
   };
 
+#if defined(__SWITCH__)
+  // std::thread throws when the thread cannot be created, and without
+  // exceptions that is std::terminate: seen on console at the first cutscene.
+  // Create the worker directly with a modest stack and, if that fails too,
+  // simply never queue (draws keep the title's index order).
+  NativeVertexCacheOptimizer() {
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 256 * 1024);
+    pthread_t thread;
+    worker_ok_ = pthread_create(&thread, &attr, [](void* self) -> void* {
+                   static_cast<NativeVertexCacheOptimizer*>(self)->Run();
+                   return nullptr;
+                 }, this) == 0;
+    pthread_attr_destroy(&attr);
+    if (worker_ok_) pthread_detach(thread);
+  }
+  bool worker_ok_ = false;
+#else
   NativeVertexCacheOptimizer() { std::thread([this] { Run(); }).detach(); }
+  static constexpr bool worker_ok_ = true;
+#endif
 
   void Run() {
     for (;;) {

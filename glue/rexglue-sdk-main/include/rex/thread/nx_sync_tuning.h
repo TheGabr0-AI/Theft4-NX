@@ -48,4 +48,14 @@ inline std::atomic<bool>& SubscribedMultiWait() {
   return value;
 }
 
+// Run 56: single-object waits sleep on the kernel's address arbiter (a futex: rex/thread/nx_futex.h) instead of the
+// object's condition variable, so a lock-free signaller never takes the object mutex just to wake them (run 55's
+// profile: GTA IV's main thread 40 % of its samples in std::mutex::lock under XSemaphore::ReleaseSemaphore). Set once
+// before the first wait (switch-game, nx_sync_futex); never flipped while threads wait (waiters of the two kinds do
+// not see each other's wake-ups).
+inline std::atomic<bool>& FutexWaits() {
+  static std::atomic<bool> value{false};
+  return value;
+}
+
 }  // namespace rex::thread::nx_sync

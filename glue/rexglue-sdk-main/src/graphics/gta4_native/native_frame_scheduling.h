@@ -25,7 +25,12 @@ inline constexpr size_t kNativeBufferShadowValidationMaxBytes = 256;
 inline constexpr uint32_t kNativeBufferCacheRetentionFrames = 600;
 inline constexpr uint32_t kNativeBufferCachePollFrames = 120;
 inline constexpr uint32_t kNativeBufferCachePollPhaseFrames = 80;
+#if defined(__SWITCH__)
+// Switch: CPU copies share the same 4 GB with everything else.
+inline constexpr uint32_t kNativeBufferCacheLimitMiB = 128;
+#else
 inline constexpr uint32_t kNativeBufferCacheLimitMiB = 256;
+#endif
 inline constexpr size_t kNativeMaximumVertexConversionsPerBuffer = 2;
 inline constexpr uint32_t kNativeUploadShrinkObservationFrames = 120;
 

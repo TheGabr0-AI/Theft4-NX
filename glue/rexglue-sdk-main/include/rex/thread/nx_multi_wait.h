@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 
+#include <rex/thread/nx_futex.h>
 #include <rex/thread/nx_sync_tuning.h>
 
 namespace rex::thread::detail {
@@ -55,6 +56,9 @@ class NxConditionBase {
   virtual bool Signal() = 0;
 
   Result Wait(std::chrono::milliseconds timeout) {
+    if (nx_sync::FutexWaits().load(std::memory_order_relaxed)) {
+      return FutexWait(timeout);
+    }
     std::unique_lock lock(mutex_);
     // Registered before the predicate is read: a lock-free signaller that
     // updates the state and then sees no sleepers is ordered before this read
@@ -252,7 +256,11 @@ class NxConditionBase {
   }
 
   virtual void* native_handle() const {
+#if defined(_MSVC_STL_VERSION)
+    return nullptr;  // the PC tests' standard library has no native handle (run 56's tests/deko3d/dk_run56_probe.cpp)
+#else
     return const_cast<std::condition_variable&>(cond_).native_handle();
+#endif
   }
 
  protected:
@@ -269,7 +277,9 @@ class NxConditionBase {
   // on GTA IV's job threads that herd was most of their CPU (C1 profile).
   // Multi-object waiters are always notified; they re-check every object.
   void NotifySignaledLocked(bool single_winner = false) {
-    if (single_winner && nx_sync::NotifyOne().load(std::memory_order_relaxed)) {
+    if (nx_sync::FutexWaits().load(std::memory_order_relaxed)) {
+      WakeFutex(single_winner);
+    } else if (single_winner && nx_sync::NotifyOne().load(std::memory_order_relaxed)) {
       cond_.notify_one();
     } else {
       cond_.notify_all();
@@ -284,6 +294,18 @@ class NxConditionBase {
   // holds the mutex from registering in sleepers_ until it sleeps, so the
   // lock/unlock here orders this notify after it went to sleep).
   void WakeSleepers(bool single_winner) {
+    if (nx_sync::FutexWaits().load(std::memory_order_relaxed)) {
+      // Run 56: the epoch moves first (a single-object waiter that read the old one returns from its futex wait at
+      // once), then the sleepers are looked at; the mutex only when multi-object waiters may need their notify.
+      epoch_.fetch_add(1, std::memory_order_seq_cst);
+      if (sleepers_.load(std::memory_order_seq_cst) == 0) return;
+      if (multi_count_.load(std::memory_order_seq_cst) != 0) {
+        std::lock_guard lock(mutex_);
+        for (auto* waiter : multi_waiters_) waiter->Notify();
+      }
+      nx_futex::Wake(&epoch_, single_winner && nx_sync::NotifyOne().load(std::memory_order_relaxed) ? 1 : -1);
+      return;
+    }
     if (sleepers_.load(std::memory_order_seq_cst) == 0) return;
     {
       std::lock_guard lock(mutex_);
@@ -293,12 +315,62 @@ class NxConditionBase {
   }
 
   void NotifyCondition(bool single_winner) {
-    if (single_winner && nx_sync::NotifyOne().load(std::memory_order_relaxed)) {
+    if (nx_sync::FutexWaits().load(std::memory_order_relaxed)) {
+      WakeFutex(single_winner);
+    } else if (single_winner && nx_sync::NotifyOne().load(std::memory_order_relaxed)) {
       cond_.notify_one();
     } else {
       cond_.notify_all();
     }
   }
+
+  // Run 56: the futex wake of the single-object waiters (the state changed before; mutex held or not).
+  void WakeFutex(bool single_winner) {
+    epoch_.fetch_add(1, std::memory_order_seq_cst);
+    if (sleepers_.load(std::memory_order_seq_cst) != 0) {
+      nx_futex::Wake(&epoch_, single_winner && nx_sync::NotifyOne().load(std::memory_order_relaxed) ? 1 : -1);
+    }
+  }
+
+  // Run 56: a single-object wait on the epoch's futex. Consumers still check and take the signal under mutex_ (a
+  // semaphore count never underflows: producers only add, atomically); the mutex is never held while asleep, and a
+  // signaller never needs it to wake this thread.
+  Result FutexWait(std::chrono::milliseconds timeout) {
+    const bool forever = timeout == std::chrono::milliseconds::max();
+    const auto deadline = forever ? std::chrono::steady_clock::time_point::max()
+                                  : std::chrono::steady_clock::now() + timeout;
+    std::unique_lock lock(mutex_);
+    for (;;) {
+      // Registered and the epoch read before the state: a signaller that changes the state after this look moves the
+      // epoch after it too (both sequentially consistent), so the futex wait below returns at once.
+      sleepers_.fetch_add(1, std::memory_order_seq_cst);
+      const uint32_t seen = epoch_.load(std::memory_order_seq_cst);
+      if (signaled()) {
+        sleepers_.fetch_sub(1, std::memory_order_seq_cst);
+        post_execution();
+        const bool pass_on = signaled();
+        lock.unlock();
+        if (pass_on) WakeFutex(true);
+        return Result::kSuccess;
+      }
+      lock.unlock();
+      int64_t wait_ns = -1;
+      if (!forever) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+          sleepers_.fetch_sub(1, std::memory_order_seq_cst);
+          return Result::kTimeout;
+        }
+        wait_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - now).count();
+      }
+      nx_futex::Wait(&epoch_, seen, wait_ns);
+      sleepers_.fetch_sub(1, std::memory_order_seq_cst);
+      lock.lock();
+    }
+  }
+
+  std::atomic<uint32_t> epoch_{0};        // run 56: the single-object waiters' futex word
+  std::atomic<uint32_t> multi_count_{0};  // run 56: multi-object registrations (multi_waiters_.size())
 
   // Single-object waiters inside Wait() plus multi-object registrations.
   std::atomic<uint32_t> sleepers_{0};
@@ -308,7 +380,9 @@ class NxConditionBase {
   // manual-reset event), so a notify_one never strands a signal.
   void PassOnLocked() {
     if (signaled()) {
-      if (nx_sync::NotifyOne().load(std::memory_order_relaxed)) {
+      if (nx_sync::FutexWaits().load(std::memory_order_relaxed)) {
+        WakeFutex(true);
+      } else if (nx_sync::NotifyOne().load(std::memory_order_relaxed)) {
         cond_.notify_one();
       } else {
         cond_.notify_all();
@@ -330,6 +404,7 @@ class NxConditionBase {
       // Track first so an allocation failure in the subscriber list is safe.
       handles_.push_back(&handle);
       handle.multi_waiters_.push_back(&waiter_);
+      handle.multi_count_.fetch_add(1, std::memory_order_seq_cst);
       handle.sleepers_.fetch_add(1, std::memory_order_seq_cst);
     }
     ~Registration() {
@@ -339,6 +414,7 @@ class NxConditionBase {
         auto found = std::find(list.begin(), list.end(), &waiter_);
         if (found != list.end()) {
           list.erase(found);
+          handle->multi_count_.fetch_sub(1, std::memory_order_seq_cst);
           handle->sleepers_.fetch_sub(1, std::memory_order_seq_cst);
         }
       }

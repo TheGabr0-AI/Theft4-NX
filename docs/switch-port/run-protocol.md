@@ -13,10 +13,14 @@ entrati in partita, cosa si è premuto.
 
 **Tre controlli prima di ogni avvio:**
 
-1. **NRO sovrascritto:** copiare `switch-game.nro` della cartella del run su
-   `sdmc:/switch/theft4/`, sovrascrivendo. Nella schermata di avvio (10 s,
-   cvar `nx_startup_summary_s`) il commit deve essere quello del file `COMMIT`
-   della cartella del run, senza `-dirty`.
+1. **NRO sovrascritto:** copiare l'NRO della cartella del run su
+   `sdmc:/switch/theft4/`, sovrascrivendo (fino al run 34 `switch-game.nro`;
+   dal run 37 l'NRO ha il nome della variante: `theft4.nro` NVK,
+   `theft4-dk.nro`, `theft4-dk-debug.nro`, fatti da
+   `tools/switch-game/build_variants.sh`, e lo stesso nome nel menu homebrew).
+   Nella schermata di avvio (10 s, cvar `nx_startup_summary_s`) il commit deve
+   essere quello del file `COMMIT` della cartella del run, senza `-dirty`
+   (run 37: `17f3a18-dirty`, costruito senza commit: dichiarato nel devlog).
 2. **Cache cancellata:** cancellare `sdmc:/switch/theft4/runtime-cache`
    (intera). Nella schermata: `cache files: runtime-cache 0`. Se un run vuole
    la cache calda, lo dice il suo piano.
@@ -35,6 +39,33 @@ ancora una a una dal toml. Run 30: Horizon OC risultava `RUNNING` ma i clock
 letti erano quelli voluti per tutto l'avvio: è il caso "profilo di default",
 che vale. La cache invece non era cancellata (controllo 2): annotarlo se
 succede di nuovo.
+
+**Dal run 45: più avvii con la stessa NRO.** Un run può avere gli avvii A, B, C… con la
+stessa NRO. Ogni avvio differisce da A per **una sola** riga del `.toml` (in genere
+l'interruttore della novità), in sottocartelle `NN-logs/A/`, `B/`, … del run.
+Prima si fa A; B e C sono facoltativi e si fanno solo se c'è tempo, e solo se la loro differenza da A può rispondere alla domanda aperta. Esempio, run 45: B spegneva lo skip, ma la regressione stava altrove, quindi non è servito (16 §R1). Se c'è un solo avvio, i log vanno direttamente in `NN-logs/`. Prima di ogni
+avvio: SHA-256 della NRO sulla scheda contro quello del devlog, `captures/` vuota, log
+vecchi rinominati.
+
+**Misure da leggere per prime** (16-deko3d-devlog.md §P, 17-optimization-roadmap.md
+§6): `threads in the last` (thread del titolo: front end, coda, Present; recorder:
+attesa/lavoro; CPU dei campioni), `GPU time from timestamps`, `cpu` e `cpu by core`,
+la riga dei frame/s. Le PNG si misurano tutte e alcune si aprono.
+
+**Dal run 56: benchmark e profilo nella stessa sessione.** I benchmark ufficiali solo a CPU 1020 / GPU 460,8 /
+memoria di serie, senza profili sys-clk/Horizon OC (righe `clocks:` di ogni heartbeat). Il campionatore parte dopo
+`nx_profile_start_s` secondi (run 56: 420): le finestre prima della riga `profile: sampling starts now` sono il
+benchmark, quelle dopo il profilo (`where.py --stacks`); i frame «anatomia» (`run 56 anatomy frame ... (not a benchmark
+frame)`) si escludono dalle finestre. Run con numero di draw per frame molto diverso si confrontano solo normalizzati
+(draw/s, µs per draw), mai in fps.
+
+**Automazione (valutata, non ancora attiva; 17 §5):** con FTP e nxlink di Sphaira
+(Sphaira in modalità applicazione) il PC può caricare la NRO, avviarla e
+riprendersi log e catture senza sysmodule nuovi. Mancano due cvar del gioco
+(`nx_auto_exit_s`, `nx_input_script`) e lo script `tools/console-loop/run_loop.py`.
+Gli avvii fatti da nxlink usano un loader diverso dal forwarder: base nuova, mai
+mescolati nei confronti. sys-botbase si installa solo con il consenso esplicito
+dell'utente.
 
 **Smoke:** `switch-smoke.nro` della stessa cartella del run fa anche il
 passo 8 (deko3d contro NVK, `13-deko3d-spike.md`, ~1–2 minuti, schermo fermo

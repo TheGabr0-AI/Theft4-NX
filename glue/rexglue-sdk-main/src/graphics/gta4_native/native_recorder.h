@@ -14,20 +14,27 @@
 // guest memory that the title may change before the next Present is captured by the front end (constants,
 // render state, DrawPrimitiveUp vertices); vertex and index buffers and textures are read by the recorder, which
 // the title waits for before reusing them (the completed-frame word, Gta4NativeGraphicsSystem's
-// SignalGuestFrameComplete).
+// SignalGuestFrameComplete). Run 49: except the buffers the title rewrites without that wait, which the front end copies
+// (native_draw_snapshot.h).
 
 #pragma once
 
 #include <array>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include <rex/graphics/gta4_native/title_commands.h>
 
 #include "core/draw_state.h"
+#include "native_draw_snapshot.h"
+#include "native_inline_vector.h"
 
 namespace rex::graphics::gta4_native {
+
+static_assert(kSnapshotStreams == kVertexStreamCount);
 
 // The vertex shader's float registers (256) and the pixel shader's (224), as host-endian floats.
 inline constexpr uint32_t kVertexConstantRegisters = 256;
@@ -39,9 +46,10 @@ struct ConstantRun {
   uint16_t count = 0;
   uint32_t data = 0;  // index of its first float in ConstantDelta::values
 };
+// Run 46: up to 16 registers in 8 runs travel inside the packet (native_inline_vector.h); more go to the heap.
 struct ConstantDelta {
-  std::vector<ConstantRun> runs;
-  std::vector<float> values;
+  InlineVector<ConstantRun, 8> runs;
+  InlineVector<float, 64> values;
   // True when this is the whole bank (the first draw of a device): the recorder replaces its copy.
   bool whole = false;
   bool empty() const { return runs.empty(); }
@@ -94,6 +102,19 @@ struct RecorderDraw {
   uint32_t primitive_restart_index = 0;
   std::shared_ptr<const std::vector<uint8_t>> up_vertices;
   uint32_t up_stride = 0;
+  // Run 49 (native_draw_snapshot.h): the vertex and index bytes copied at submit for a buffer the title rewrites (null:
+  // read from guest memory), or for a sampled draw the hash of those bytes at submit; `data_streams`: the streams of the
+  // declaration that either covers.
+  std::shared_ptr<const RecorderDrawData> data;
+  uint64_t submit_hash = 0;
+  std::array<uint32_t, 4> submit_parts{};  // run 59: DrawDataPartHashes at submit (indices, streams 0-2)
+  uint32_t data_streams = 0;
+  bool submit_hashed = false;
+  uint8_t copy_reason = 0;  // run 59: why `data` was copied (NativeFrontEnd::CopyReason)
+  // Run 50 (native_constant_diff.h ConstantBankHash): for a sampled draw, the front end's banks after this draw's
+  // deltas: vertex c0-c63, vertex c64-c255 (the bone palette), pixel.
+  std::array<uint64_t, 3> constants_hash{};
+  bool constants_hashed = false;
 
   uint64_t vertex_shader = 0;  // shader hashes (0: none)
   uint64_t pixel_shader = 0;
@@ -127,16 +148,60 @@ struct RecorderClear {
 
 struct RecorderResolve {
   ResolveCommand command{};  // as the title sent it
+  // The device's depth/stencil surface when the resolve carries a depth clear (flags bit 9): the surface that clear
+  // applies to, whatever the resolve read (native_resolve_clear.h). Empty otherwise.
+  SurfaceDescriptor depth_stencil{};
 };
 
 struct RecorderPresent {
   PresentCommand command{};
 };
 
+// The title's depth hand-off from the deferred phase to the forward phase (DepthSurfaceHandoffCommand), in the order of
+// the stream: the resolved scene depth `source_texture` goes into the `destination` depth surface, whose stencil is
+// rebuilt as scene coverage when `stencil_policy` says so (forward_stencil.h).
+struct RecorderDepthHandoff {
+  uint32_t device = 0;
+  SurfaceDescriptor source{};       // the deferred depth surface the resolved depth came from
+  SurfaceDescriptor destination{};  // the primary depth surface
+  uint32_t source_texture = 0;      // the title's texture object of the resolved depth (the resolve's destination)
+  ForwardStencilHandoffPolicy stencil_policy = ForwardStencilHandoffPolicy::kPreserve;
+};
+
 // What happened to a guest resource (ResourceUnlock with a guest write, ReleaseResource).
 struct RecorderResourceEvent {
   uint32_t handle = 0;
   bool released = false;
+  // Not zero: `handle` is the title's A8R8G8B8 alias of the resolved depth texture `packed_depth_source`
+  // (RegisterVirtualResourceCommand::packed_depth_source, sub_828D9768); released is false.
+  uint32_t packed_depth_source = 0;
+};
+
+// Run 54: the title locks a texture to read it on the CPU (TextureLockCommand, sub_82A44168): when the GPU produced it
+// (a resolve destination), its texels are copied back into guest memory first, as Gta4NativeGraphicsSystem's
+// ReadbackTextureToGuest does. GTA IV reads its scene luminance this way for the exposure; through run 53 the
+// deko3d path answered at once and the title read whatever guest memory held. The title's thread waits on `wait`
+// until the recorder, which takes the lock in stream order after the draws before it, completes it.
+struct TextureLockWait {
+  std::mutex mutex;
+  std::condition_variable done_cv;
+  bool done = false;
+  bool succeeded = false;
+  TextureLockResult result{};
+  void Complete(bool ok, const TextureLockResult& r) {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      succeeded = ok;
+      result = r;
+      done = true;
+    }
+    done_cv.notify_all();
+  }
+};
+
+struct RecorderTextureLock {
+  TextureLockCommand command{};
+  std::shared_ptr<TextureLockWait> wait;
 };
 
 // Implemented by the recorders. Called on the recorder's own thread, in the title's order.
@@ -146,10 +211,17 @@ class INativeRecorder {
   virtual void Draw(const RecorderDraw& draw) = 0;
   virtual void Clear(const RecorderClear& clear) = 0;
   virtual void Resolve(const RecorderResolve& resolve) = 0;
+  virtual void DepthHandoff(const RecorderDepthHandoff& handoff) = 0;
   // The frame ends: the guest front buffer is shown. Returns once the frame's GPU work is submitted (the guest
   // memory it read is no longer needed).
   virtual void Present(const RecorderPresent& present) = 0;
   virtual void ResourceEvent(const RecorderResourceEvent& event) = 0;
+  // Run 54. A recorder without a read-back completes the lock as before (the guest copy as it is).
+  virtual void TextureLock(const RecorderTextureLock& lock) {
+    if (lock.wait) {
+      lock.wait->Complete(true, TextureLockResult{});
+    }
+  }
   // Periodic report lines (every 10 s, from the recorder's thread).
   virtual void Report() = 0;
 };

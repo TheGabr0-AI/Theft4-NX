@@ -105,6 +105,18 @@ Compiler::~Compiler() {
     data_->stop = true;
   }
   data_->work.notify_all();
+  // A compile in progress ends only when uam is done with it: run 39 (and 37) waited here for over a minute at the
+  // exit, with the picture already gone (the recorder is destroyed first), and the game never left. The wait is
+  // bounded; a compile that is still running then keeps its Data (the thread uses it until it returns) and the exit
+  // goes on (exit(0) as mode A does with the game's threads: devlog section I).
+  constexpr uint64_t kJoinNs = 3'000'000'000ull;
+  if (R_FAILED(svcWaitSynchronizationSingle(data_->thread.handle, kJoinNs))) {
+    REXLOG_WARN("deko3d: the uam thread is still compiling after 3 s ({} jobs): not waited for, the exit goes on",
+                Pending());
+    rex::FlushLogging();
+    data_.release();  // deliberately kept: the running thread owns it until the process ends
+    return;
+  }
   threadWaitForExit(&data_->thread);
   threadClose(&data_->thread);
 }

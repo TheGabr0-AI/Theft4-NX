@@ -164,11 +164,139 @@ const char* ProductModelName(int model) {
   }
 }
 
+// Run 51: sys-clk and its forks (Horizon OC's sys-clk-plus) put their own clocks back a moment after clkrst sets
+// ours (run 50: CPU 1020 MHz for the whole run, "read back DIFFERENT"). Their manual override wins over every
+// profile in their loop, so the nx_*_mhz clocks are sent there when such a sysmodule is registered. From kabba536's
+// GTA IV port (src/ui/switch_sysclk.cpp, used with permission): the service names, command 0 (GetApiVersion) as the
+// check that the interface is sys-clk's, command 8 (SetOverride, module 0 CPU / 1 GPU / 2 memory, Hz; 0 releases),
+// and sm command 65100 (AtmosphereHasService) first, because smGetService of an unregistered name never returns.
+namespace sysclk {
+
+Service g_service{};
+bool g_open = false;
+bool g_tried = false;
+bool g_set[3] = {false, false, false};
+const char* g_name = nullptr;
+uint32_t g_api = 0;
+
+bool HasService(const char* name) {
+  const SmServiceName encoded = smEncodeName(name);
+  bool has = false;
+  if (hosversionAtLeast(12, 0, 0)) {
+    TipcService* sm = smGetServiceSessionTipc();
+    return sm && R_SUCCEEDED(tipcDispatchInOut(sm, 65100, encoded, has)) && has;
+  }
+  Service* sm = smGetServiceSession();
+  return sm && R_SUCCEEDED(serviceDispatchInOut(sm, 65100, encoded, has)) && has;
+}
+
+bool Open() {
+  if (g_open || g_tried) {
+    return g_open;
+  }
+  g_tried = true;
+  static const char* const kNames[] = {"sys:clk", "hoc:clk", "hocclk", "sysclk", "clk:sys", "sys:oc"};
+  for (const char* name : kNames) {
+    if (!HasService(name) || R_FAILED(smGetService(&g_service, name))) {
+      continue;
+    }
+    uint32_t api = 0;
+    if (R_FAILED(serviceDispatchOut(&g_service, 0, api))) {
+      serviceClose(&g_service);
+      continue;
+    }
+    g_name = name;
+    g_api = api;
+    g_open = true;
+    return true;
+  }
+  return false;
+}
+
+// Run 53: run 51 ended in a fault with its override set, and run 52 ran at CPU 1785 / memory 1600 although its
+// game.toml asked for the standard clocks (sys-clk keeps an override until it is cleared). A marker file says that an
+// override of ours is set; it goes when we release it. Found at start-up, it means an earlier run did not get to
+// release it: that override is ours and is released before anything else. An override set by hand in the overlay
+// has no marker and is not touched.
+constexpr const char* kMarker = "sdmc:/switch/theft4/sysclk-override.txt";
+
+void MarkSet(bool set) {
+  if (set) {
+    if (FILE* f = std::fopen(kMarker, "w")) {
+      std::fputs("theft4 set a sys-clk override; released at a clean exit\n", f);
+      std::fclose(f);
+    }
+  } else {
+    std::remove(kMarker);
+  }
+}
+
+bool SetOverride(uint32_t module, uint32_t hz) {
+  if (!Open()) {
+    return false;
+  }
+  const struct {
+    uint32_t module;
+    uint32_t hz;
+  } args{module, hz};
+  const bool ok = R_SUCCEEDED(serviceDispatchIn(&g_service, 8, args));
+  if (ok && module < 3) {
+    g_set[module] = hz != 0;
+    MarkSet(g_set[0] || g_set[1] || g_set[2]);
+  }
+  return ok;
+}
+
+// At start-up: an override an earlier run of ours left set (its marker is there) is released.
+bool ReleaseLeftOver() {
+  struct stat st {};
+  if (stat(kMarker, &st) != 0 || !Open()) {
+    return false;
+  }
+  for (uint32_t m = 0; m < 3; ++m) {
+    const struct {
+      uint32_t module;
+      uint32_t hz;
+    } args{m, 0};
+    serviceDispatchIn(&g_service, 8, args);
+  }
+  MarkSet(false);
+  return true;
+}
+
+// Only what this run set is released: an override set by hand in the overlay stays.
+void Release() {
+  for (uint32_t m = 0; m < 3; ++m) {
+    if (g_set[m]) {
+      SetOverride(m, 0);
+    }
+  }
+}
+
+}  // namespace sysclk
+
+// The nx_*_mhz clocks through sys-clk's override, when one is registered; logged once per call site.
+bool OverrideThroughSysClk(const char* why) {
+  bool ok = sysclk::SetOverride(0, g_raised_cpu_hz);
+  ok &= sysclk::SetOverride(1, g_raised_gpu_hz);
+  ok &= sysclk::SetOverride(2, g_raised_emc_hz);
+  if (sysclk::g_open) {
+    Log(!ok, "clocks (%s): sys-clk service '%s' (API %u): override CPU %.1f, GPU %.1f, memory %.1f MHz %s", why,
+        sysclk::g_name, sysclk::g_api, g_raised_cpu_hz / 1e6, g_raised_gpu_hz / 1e6, g_raised_emc_hz / 1e6,
+        ok ? "set" : "REFUSED");
+  } else {
+    Log(true, "clocks (%s): no sys-clk service answers (sys:clk, hoc:clk, hocclk, sysclk, clk:sys, sys:oc): "
+              "the override cannot be asked for", why);
+  }
+  return ok;
+}
+
 // The configuration's clocks back (at exit, or when the SoC is too hot).
 void RestoreBase() {
   if (!g_raised.exchange(false) || !g_base.ok) {
     return;
   }
+  sysclk::Release();
   SetRate(PcvModuleId_CpuBus, g_base.cpu_hz);
   SetRate(PcvModuleId_GPU, g_base.gpu_hz);
   SetRate(PcvModuleId_EMC, g_base.emc_hz);
@@ -276,10 +404,20 @@ void Raise(const char* why) {
     std::atexit(RestoreAtExit);
   }
   svcSleepThread(300'000'000ull);
-  const Clocks after = Read();
-  const bool held = after.ok && Distance(after.cpu_hz, g_raised_cpu_hz) <= kMarginHz &&
-                    Distance(after.gpu_hz, g_raised_gpu_hz) <= kMarginHz &&
-                    Distance(after.emc_hz, g_raised_emc_hz) <= kMarginHz;
+  Clocks after = Read();
+  bool held = after.ok && Distance(after.cpu_hz, g_raised_cpu_hz) <= kMarginHz &&
+              Distance(after.gpu_hz, g_raised_gpu_hz) <= kMarginHz &&
+              Distance(after.emc_hz, g_raised_emc_hz) <= kMarginHz;
+  // A clock sysmodule put its own back: ask it instead (its loop applies the override within ~1 s).
+  if (!held && OverrideThroughSysClk(why)) {
+    for (int i = 0; i < kPollSteps && !held; ++i) {
+      svcSleepThread(kPollStepNs);
+      after = Read();
+      held = after.ok && Distance(after.cpu_hz, g_raised_cpu_hz) <= kMarginHz &&
+             Distance(after.gpu_hz, g_raised_gpu_hz) <= kMarginHz &&
+             Distance(after.emc_hz, g_raised_emc_hz) <= kMarginHz;
+    }
+  }
   Log(!ok || !held,
       "clocks (%s): raised to CPU %.1f, GPU %.1f, memory %.1f MHz (cvars nx_cpu_mhz, "
       "nx_gpu_mhz, nx_emc_mhz; %s, GPU above 460.8 MHz in handheld mode %s): clkrst %s, read "
@@ -317,12 +455,20 @@ void Check() {
     Log(false, "clocks: the system set CPU %.1f, GPU %.1f, memory %.1f MHz: raising again (%u "
                "times so far)", c.cpu_hz / 1e6, c.gpu_hz / 1e6, c.emc_hz / 1e6, g_raised_again);
   }
+  if (g_raised_again == 2 || (sysclk::g_open && !(g_raised_again % 20))) {
+    OverrideThroughSysClk("put back by the system");
+  }
   SetRate(PcvModuleId_EMC, g_raised_emc_hz);
   SetRate(PcvModuleId_GPU, g_raised_gpu_hz);
   SetRate(PcvModuleId_CpuBus, g_raised_cpu_hz);
 }
 
 void ClockThread(void*) {
+  if (sysclk::ReleaseLeftOver()) {
+    Log(true, "clocks: a sys-clk override set by an earlier run of this game (which did not exit cleanly) was still "
+              "active: released before applying this run's clocks (marker %s)", sysclk::kMarker);
+    svcSleepThread(1'000'000'000ull);  // the sysmodule's loop puts its own clocks back within a second
+  }
   Apply("start-up");
   if (g_raised.load()) {
     g_wanted = {g_raised_cpu_hz, g_raised_gpu_hz, g_raised_emc_hz};

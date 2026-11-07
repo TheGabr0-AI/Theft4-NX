@@ -36,8 +36,20 @@ uint32_t xeKeKfAcquireSpinLock(PPCContext* ctx, X_KSPINLOCK* lock, bool change_i
   uint32_t pcr_addr = static_cast<uint32_t>(ctx->r13.u64);
   const uint32_t self = rex::byte_swap(pcr_addr);
   assert_true(lock->prcb_of_owner.value != self);
+  // Theft4 run 49 (docs/switch-port/16-deko3d-devlog.md, section V): test and test-and-set, with a short spin on the
+  // CPU's yield hint before the scheduler yield. Run 48's profile put the audio mixer in sched_yield (svcSleepThread) on
+  // this lock ~4 % of its time: a holder on another core lets go within a few hundred cycles, a sleep costs a syscall.
+  uint32_t spins = 0;
   while (!rex::thread::atomic_cas(0u, self, &lock->prcb_of_owner.value)) {
-    rex::thread::MaybeYield();
+    do {
+      if (++spins < 64) {
+#if defined(__aarch64__)
+        __asm__ volatile("yield" ::: "memory");
+#endif
+      } else {
+        rex::thread::MaybeYield();
+      }
+    } while (__atomic_load_n(&lock->prcb_of_owner.value, __ATOMIC_RELAXED) != 0);
   }
   return old_irql;
 }

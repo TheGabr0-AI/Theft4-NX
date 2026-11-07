@@ -25,6 +25,8 @@
 #include <span>
 #include <vector>
 
+#include "dk_dksh.h"
+
 struct NWindow;
 
 namespace rex::graphics::gta4_native::dk {
@@ -125,6 +127,8 @@ struct CoreStats {
   uint64_t image_bytes = 0;      // image heap in use (totals)
   uint64_t image_chunks = 0;
   uint64_t code_bytes = 0;
+  uint32_t scratch_max = 0;      // the largest per-warp scratch of a loaded shader (totals), against the queue's
+  uint64_t scratch_refused = 0;  // shaders not loaded because they need more than the queue gives (totals)
 };
 
 // One recording thread's command buffer, work slots, upload ring, image heap, code and descriptors.
@@ -165,6 +169,9 @@ class Core {
   void ReleaseImageLater(const ImageMemory& memory);
   // CPU-cached, GPU-uncached memory the CPU reads back (flush its cache before the GPU writes and before reading).
   DkMemBlock CreateReadbackBlock(uint32_t bytes, const char* name);
+  // Run 57: destroys one of them now and forgets it (run 56 destroyed the anatomy block itself and Destroy() destroyed
+  // it again at exit: the fault at 1,308 s). The caller made sure the GPU no longer uses it.
+  void DestroyReadbackBlock(DkMemBlock block);
 
   // Copies a DKSH's code into code memory and initializes `shader` from it.
   bool LoadShader(DkShader& shader, std::span<const uint8_t> dksh, const char* name);

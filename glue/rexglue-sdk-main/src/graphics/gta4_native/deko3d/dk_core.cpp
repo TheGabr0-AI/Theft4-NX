@@ -71,7 +71,9 @@ bool Device::Create(bool zcull) {
              (zcull ? DkQueueFlags_EnableZcull : DkQueueFlags_DisableZcull);
   qm.commandMemorySize = 1u << 20;
   qm.flushThreshold = qm.commandMemorySize / 8;
-  REXLOG_INFO("deko3d: creating the queue (graphics, ZCULL {})", zcull ? "on" : "off");
+  qm.perWarpScratchMemorySize = kQueueScratchBytes;  // the default 2048 is below what 27 vertex programs declare
+  REXLOG_INFO("deko3d: creating the queue (graphics, ZCULL {}, {} KiB of scratch per warp)", zcull ? "on" : "off",
+              kQueueScratchBytes >> 10);
   rex::FlushLogging();
   queue_ = dkQueueCreate(&qm);
   if (!queue_) {
@@ -424,6 +426,15 @@ DkMemBlock Core::CreateReadbackBlock(uint32_t bytes, const char* name) {
   return b;
 }
 
+void Core::DestroyReadbackBlock(DkMemBlock block) {
+  const auto it = std::find(readback_blocks_.begin(), readback_blocks_.end(), block);
+  if (it == readback_blocks_.end()) {
+    return;  // not ours (or already gone): never destroyed twice
+  }
+  readback_blocks_.erase(it);
+  device_->DestroyBlock(block);
+}
+
 // ---- Image heap: first fit in chunks, frees delayed until the slot's fence
 
 void Core::AddChunk(uint32_t bytes) {
@@ -496,19 +507,20 @@ void Core::ReleaseImageLater(const ImageMemory& memory) {
 bool Core::LoadShader(DkShader& shader, std::span<const uint8_t> dksh, const char* name) {
   // The DKSH header (uam's dksh.h): the control section (starting with this header) stays in CPU memory, the code
   // that follows it goes to code memory.
-  struct Header {
-    uint32_t magic, header_bytes, control_bytes, code_bytes, programs_offset, programs;
-  } h;
-  if (dksh.size() < sizeof(h)) {
-    REXLOG_ERROR("deko3d: shader {}: {} bytes, not a DKSH", name, dksh.size());
+  DkshProgram h;
+  if (!ParseDksh(dksh, h) || h.programs != 1) {
+    REXLOG_ERROR("deko3d: shader {}: {} bytes, not a one-program DKSH", name, dksh.size());
     return false;
   }
-  std::memcpy(&h, dksh.data(), sizeof(h));
-  if (h.magic != 0x48534B44u || h.programs != 1 || uint64_t(h.control_bytes) + h.code_bytes > dksh.size()) {
-    REXLOG_ERROR("deko3d: shader {}: not a one-program DKSH (magic 0x{:08X}, {} programs)", name, h.magic,
-                 h.programs);
+  // The queue gives every warp kQueueScratchBytes of local memory; a program that declares more would run past it
+  // (run 37: seconds per work from the first such vertex shader, and nothing from libdeko3dd).
+  if (h.per_warp_scratch > kQueueScratchBytes) {
+    ++stats_.scratch_refused;
+    REXLOG_ERROR("deko3d: shader {} needs {} bytes of scratch per warp, the queue gives {}: not loaded", name,
+                 h.per_warp_scratch, kQueueScratchBytes);
     return false;
   }
+  stats_.scratch_max = std::max(stats_.scratch_max, h.per_warp_scratch);
   const uint32_t at = Align(code_used_, DK_SHADER_CODE_ALIGNMENT);
   if (uint64_t(at) + h.code_bytes > (config_.code_mb << 20) - DK_SHADER_CODE_UNUSABLE_SIZE) {
     static bool logged = false;

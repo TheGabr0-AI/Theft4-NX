@@ -33,6 +33,13 @@ extern "C" {
 }  // extern "C"
 
 REXCVAR_DEFINE_BOOL(ffmpeg_verbose, false, "Audio", "Verbose FFmpeg output (debug and above)");
+// Theft4 run 49 (docs/switch-port/16-deko3d-devlog.md, section V): the kick returns at once, as on the hardware (the XMA
+// unit decodes on its own; sa2-nx/nfsmw-nx's audio_xma_in_worker does the same). Run 48's profile: the title's mixer
+// thread spent ~20 % of its time blocked in this write for the worker's whole decode, with audio at 38-45 % of real
+// time. A context the title locks (XMADisableContext) before the worker reached it is decoded there and then, so no
+// kick is lost and the title reads what the synchronous kick gave it.
+REXCVAR_DEFINE_BOOL(xma_async_kick, true, "Audio",
+                    "XMA context kicks return without waiting for the decode (a lock decodes a pending one first)");
 
 // As with normal Microsoft, there are like twelve different ways to access
 // the audio APIs. Early games use XMA*() methods almost exclusively to touch
@@ -130,7 +137,9 @@ X_STATUS XmaDecoder::Setup(system::KernelState* kernel_state) {
 
   const char* inline_setting = std::getenv("THEFT4_XMA_INLINE");
   inline_work_ = inline_setting && std::string_view(inline_setting) == "1";
-  REXAPU_INFO("XMA decode scheduling: {}", inline_work_ ? "inline" : "dedicated worker");
+  REXAPU_INFO("XMA decode scheduling: {}", inline_work_                   ? "inline"
+                                           : REXCVAR_GET(xma_async_kick) ? "dedicated worker, kicks not waited for (xma_async_kick)"
+                                                                         : "dedicated worker");
 
   worker_running_ = true;
   work_event_ = rex::thread::Event::CreateAutoResetEvent(false);
@@ -350,8 +359,8 @@ void XmaDecoder::WriteRegister(uint32_t addr, uint32_t value) {
       ready_context_words_[ready_word].fetch_or(kicked_value, std::memory_order_release);
       // Signal the decoder thread to start processing.
       work_event_->Set();
-      // Block until the worker finishes, so the game sees updated context data.
-      for (int i = 0; kicked_value && i < 32; ++i, kicked_value >>= 1) {
+      // Block until the worker finishes, so the game sees updated context data (not with xma_async_kick: see above).
+      for (int i = 0; !REXCVAR_GET(xma_async_kick) && kicked_value && i < 32; ++i, kicked_value >>= 1) {
         if (kicked_value & 1) {
           uint32_t context_id = base_context_id + i;
           contexts_[context_id].WaitForWorkDone();
@@ -379,6 +388,11 @@ void XmaDecoder::WriteRegister(uint32_t addr, uint32_t value) {
       if (value & 1) {
         uint32_t context_id = base_context_id + i;
         auto& context = contexts_[context_id];
+        // xma_async_kick: a kick the worker has not served yet is decoded now, before the title touches the context.
+        if (REXCVAR_GET(xma_async_kick) && !inline_work_ && context.is_enabled() && context.Work()) {
+          context.SignalWorkDone();
+          PROFILE_XMA_FRAME_DECODED();
+        }
         context.Disable();
         // [XMA fix] Added Block(false) after Disable(). Without this, the game
         // could call XMADisableContext and start modifying the context struct

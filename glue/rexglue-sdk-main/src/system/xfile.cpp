@@ -57,8 +57,14 @@ bool XFile::IsIoTraceEnabled() const {
   if (!file_) {
     return false;
   }
+  const int8_t known = io_trace_.load(std::memory_order_relaxed);
+  if (known >= 0) {
+    return known != 0;
+  }
   const auto* host_device = dynamic_cast<const rex::filesystem::HostPathDevice*>(device());
-  return host_device && host_device->trace_io();
+  const bool trace = host_device && host_device->trace_io();
+  io_trace_.store(trace ? 1 : 0, std::memory_order_relaxed);
+  return trace;
 }
 
 uint64_t XFile::position() const {

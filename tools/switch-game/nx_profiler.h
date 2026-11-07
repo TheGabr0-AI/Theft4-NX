@@ -33,8 +33,10 @@ struct BusyThread {
   double percent = 0;   // of one core in the last heartbeat window
 };
 
-// Starts the sampling thread. Call once, after logging is up.
-void Start(uint64_t module_base, uint64_t module_text_size, LogFn log);
+// Starts the sampling thread. Call once, after logging is up. Run 56: it samples nothing for the first
+// `start_after_s` seconds (nx_profile_start_s), so one session gives both an unprofiled benchmark stretch and a profile;
+// the log says when sampling began.
+void Start(uint64_t module_base, uint64_t module_text_size, LogFn log, uint32_t start_after_s = 0);
 
 bool Running();
 

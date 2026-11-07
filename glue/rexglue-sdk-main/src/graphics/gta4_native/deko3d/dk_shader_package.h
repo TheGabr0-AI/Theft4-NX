@@ -6,7 +6,9 @@
 // (gta4_deko3d_package.py) has the GLSL of the variants uam could not compile on the PC, for the console's uam.
 // Both are made on the PC from the user's own game and copied to sdmc:/switch/theft4/deko3d/: game data, never
 // in the repository or the NRO. Only the tables are read at start; a DKSH or a text is read from the card when
-// a draw first needs it.
+// a draw first needs it. The runtime package is version 2 (tools/deko3d/gta4_deko3d_runtime_check.py has the
+// layout and the validator): Open() checks every count, size and offset against the file before it allocates,
+// refuses a file that fails with the first reason logged, and then holds nothing.
 
 #pragma once
 
@@ -36,6 +38,23 @@ struct PackageShader {
   uint32_t specialization_mask = 0;
   uint32_t glsl_index = 0xFFFFFFFFu;
   uint32_t outputs = 0;
+  // Run 55 (the record's first reserved word, written by gta4_deko3d_runtime.py from the GLSL): kFlagsValid says the
+  // package states the others (a package before run 55 has 0: nothing is known, nothing is assumed).
+  static constexpr uint32_t kFlagKills = 1u << 0;        // a pixel shader with a discard
+  static constexpr uint32_t kFlagWritesDepth = 1u << 1;  // a pixel shader that writes gl_FragDepth
+  static constexpr uint32_t kFlagsValid = 1u << 2;
+  // Run 56: io_mask (the record's last word) is set. A vertex shader's: the outputs it writes as the constant zero (bit
+  // per output location, TEXCOORD0-15 then COLOR0-1, banjo-nx's "banjo-vszero"); a pixel shader's: the input locations
+  // its text declares (what it may read).
+  static constexpr uint32_t kFlagIoMask = 1u << 3;
+  static constexpr uint32_t kFlagsKnown = kFlagKills | kFlagWritesDepth | kFlagsValid | kFlagIoMask;
+  // Run 56: vertex shader variants that write fewer outputs (tools/deko3d/gta4_deko3d_vs_prune.py), under the normal
+  // variant's value with one of these bits: none but the position (no pixel shader), or only the outputs that are not
+  // the constant zero (a pixel shader that reads none of those). Compiled on the PC only, never on the console.
+  static constexpr uint32_t kVariantPositionOnly = 0x80000000u;
+  static constexpr uint32_t kVariantLiveOutputs = 0x40000000u;
+  uint32_t flags = 0;
+  uint32_t io_mask = 0;
   std::vector<Input> inputs;
   std::vector<Variant> variants;
   uint8_t texture_types[32] = {};  // 0 none, 1 2D, 2 2D array, 3 3D, 4 cube
@@ -44,7 +63,8 @@ struct PackageShader {
 class ShaderPackage {
  public:
   ~ShaderPackage();
-  // Reads the tables of both files in `dir`. False (logged) without the runtime package.
+  // Reads the tables of both files in `dir`. False (logged, the package left empty) without a valid runtime
+  // package: a missing file, a wrong version, a size or offset that does not fit the file.
   bool Open(const std::string& dir);
   bool opened() const { return runtime_ != nullptr; }
   size_t shader_count() const { return shaders_.size(); }
@@ -60,6 +80,9 @@ class ShaderPackage {
 
  private:
   bool ReadAt(FILE* f, uint64_t offset, void* out, size_t bytes);
+  void Reset();  // closes both files and empties every table
+  bool OpenRuntime(const std::string& path);
+  void OpenGlsl(const std::string& path);
 
   std::mutex file_mutex_;
   FILE* runtime_ = nullptr;

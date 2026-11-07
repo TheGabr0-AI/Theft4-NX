@@ -8,7 +8,10 @@
 #         -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja \
 #         -DCMAKE_TOOLCHAIN_FILE=$PWD/toolchains/switch-libnx.cmake \
 #         -DCMAKE_BUILD_TYPE=Release
-#   ninja -C out/build/switch-game -j3   # -> out/build/switch-game/switch-game.nro
+#   ninja -C out/build/switch-game -j3   # -> THEFT4_SWITCH_NRO_OUTPUT (default switch-game.nro)
+#
+# The named NRO variants (theft4.nro, theft4-dk.nro, theft4-dk-debug.nro) and their NACP names:
+# tools/switch-game/build_variants.sh.
 #
 # At most 3 jobs: a generated file takes 1-2 GB of RAM in GCC.
 
@@ -48,6 +51,10 @@ set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)
 option(REXGLUE_SWITCH_NO_NVK "Do not link Mesa's NVK driver nor the Vulkan backend" OFF)
 option(REXGLUE_SWITCH_DEKO3D "nx_gpu = deko3d: plume's deko3d back end and uam" OFF)
 option(REXGLUE_SWITCH_DEKO3D_DEBUG "Link the debug deko3d library (libdeko3dd)" OFF)
+if(REXGLUE_SWITCH_DEKO3D_DEBUG AND NOT REXGLUE_SWITCH_DEKO3D)
+    message(WARNING "REXGLUE_SWITCH_DEKO3D_DEBUG has no effect without REXGLUE_SWITCH_DEKO3D (the NVK build has no "
+                    "debug variant)")
+endif()
 if(REXGLUE_SWITCH_NO_NVK)
     set(THEFT4_SWITCH_GAME_VULKAN OFF CACHE BOOL "" FORCE)
 endif()
@@ -93,7 +100,7 @@ add_custom_command(
     VERBATIM
 )
 
-add_executable(switch-game main.cpp nx_input.cpp nx_clocks.cpp nx_profiler.cpp nx_threads.cpp
+add_executable(switch-game main.cpp nx_input.cpp nx_clocks.cpp nx_audio_mixer.cpp nx_profiler.cpp nx_threads.cpp
     "${THEFT4_ROOT}/tools/switch-common/nx_exit.cpp"
     "${MISSING_IMPORTS_CPP}" ${GENERATED_SOURCES})
 target_compile_features(switch-game PRIVATE cxx_std_23)
@@ -179,6 +186,117 @@ if(THEFT4_SWITCH_GAME_VULKAN)
         "-Wl,--wrap=sub_829CFE80,--wrap=__imp__sub_829CFE80"
         "-Wl,--wrap=nvFenceWait,--wrap=nvGpuChannelKickoff,--wrap=nvMapCreate,--wrap=nvMapClose,--wrap=nvioctlNvhostAsGpu_MapBufferEx,--wrap=nvGpuChannelGetErrorNotification")
 endif()
+# Liberty Recompiled's native hooks at the European addresses (tools/gta4_native_eu_translate.py, the PC build's
+# THEFT4_GTA4_NATIVE list): they send the title commands to whatever graphics system answers their ABI; a system that
+# answers 0 (the null GPU, nx_gpu = vulkan) leaves every hook running the game's own code. In the deko3d and the LRA
+# builds.
+set(THEFT4_GTA4_NATIVE_EU_SRC "${THEFT4_ROOT}/out/gta4-native-eu/src")
+set(_lra_hooks
+    "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_native_hooks.cpp"
+    "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_aspect_hooks.cpp"
+    "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_font_selection_trace.cpp"
+    "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_presentation_options.cpp"
+    "${THEFT4_GTA4_NATIVE_EU_SRC}/theft4_lra_app_stubs.cpp"
+    "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4eu_app_cvars.cpp"
+    "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4eu_unresolved_stubs.cpp")
+macro(theft4_add_lra_hooks)
+    if(NOT EXISTS "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_native_hooks.cpp")
+        message(FATAL_ERROR "this build needs the native hooks: run python tools/gta4_native_eu_translate.py")
+    endif()
+    target_sources(switch-game PRIVATE ${_lra_hooks})
+    set_source_files_properties(${_lra_hooks} PROPERTIES INCLUDE_DIRECTORIES
+        "${THEFT4_GTA4_NATIVE_EU_SRC};${THEFT4_ROOT}/glue/rexglue-sdk-main/src;${THEFT4_ROOT}/glue/rexglue-sdk-main/thirdparty/inja/third_party/include")
+    # Their guest pointers through GuestToHost (nx_lra_hooks_compat.h: no aliased views on the Switch).
+    set_source_files_properties(${_lra_hooks} PROPERTIES COMPILE_OPTIONS
+        "-include;${CMAKE_CURRENT_SOURCE_DIR}/nx_lra_hooks_compat.h")
+endmacro()
+
+# Run 51 (16-deko3d-devlog.md, section Y): Liberty Recompiled's own Vulkan renderer (gta4_native/graphics_system.cpp,
+# the one that draws the European base correctly on the PC) linked statically into the NVK build, for nx_gpu = lra.
+# kabba536's GTA IV Switch port runs the same renderer (LRA 7c97c58, our base) on NVK; its Switch changes to the
+# renderer are applied to ours (used with permission). Needs the game-derived LibertyRecompLib folder (shader cache,
+# font atlases) and the override cache the PC build compiles, both local only, and NVK with the NAK flip fix
+# (nak_flip_patch.py: THEFT4_SWITCH_VULKAN_LIBRARIES names the patched archive).
+option(THEFT4_SWITCH_LRA "NVK build: Liberty Recompiled's Vulkan renderer for nx_gpu = lra" OFF)
+set(THEFT4_LRA_PRIVATE_ROOT "" CACHE PATH "LibertyRecompLib folder with shader/shader_cache.cpp and font_atlases")
+set(THEFT4_LRA_OVERRIDE_CPP "" CACHE FILEPATH "shader_override_cache.cpp made by the PC build (gta4-native plugin)")
+set(THEFT4_LRA_SMOLV_ROOT "" CACHE PATH "smol-v source folder (smolv.cpp, smolv.h)")
+set(THEFT4_LRA_FONT_ROOT "sdmc:/switch/theft4/lra/font_atlases" CACHE STRING "Font atlases on the console")
+if(THEFT4_SWITCH_LRA)
+    if(NOT THEFT4_SWITCH_GAME_VULKAN OR REXGLUE_SWITCH_DEKO3D)
+        message(FATAL_ERROR "THEFT4_SWITCH_LRA is the NVK build: no REXGLUE_SWITCH_NO_NVK, no REXGLUE_SWITCH_DEKO3D")
+    endif()
+    foreach(_need "${THEFT4_LRA_PRIVATE_ROOT}/shader/shader_cache.cpp" "${THEFT4_LRA_OVERRIDE_CPP}"
+                  "${THEFT4_LRA_SMOLV_ROOT}/smolv.cpp")
+        if(NOT EXISTS "${_need}")
+            message(FATAL_ERROR "THEFT4_SWITCH_LRA: ${_need} not found (THEFT4_LRA_PRIVATE_ROOT, THEFT4_LRA_OVERRIDE_CPP, "
+                                "THEFT4_LRA_SMOLV_ROOT)")
+        endif()
+    endforeach()
+    set(_gta4_native "${THEFT4_ROOT}/glue/rexglue-sdk-main/src/graphics/gta4_native")
+    add_library(theft4-gta4-lra STATIC
+        "${_gta4_native}/graphics_system.cpp"
+        "${_gta4_native}/core/font_atlas.cpp"
+        "${_gta4_native}/native_buffer_arena.cpp"
+        "${_gta4_native}/native_descriptor_backend.cpp"
+        "${_gta4_native}/native_frame_context.cpp"
+        "${_gta4_native}/native_gpu_attribution.cpp"
+        "${_gta4_native}/native_memory_samples.cpp"
+        "${_gta4_native}/native_performance_samples.cpp"
+        "${_gta4_native}/native_submission_lifetime.cpp"
+        "${_gta4_native}/postfx_resource_pool.cpp"
+        "${_gta4_native}/smaa_pipeline.cpp"
+        "${_gta4_native}/split_postfx_pass.cpp"
+        "${_gta4_native}/sun_shafts_pass.cpp"
+        "${_gta4_native}/temporal/fsr_vulkan.cpp"
+        "${_gta4_native}/temporal/shader_archive.cpp"
+        "${_gta4_native}/temporal/vulkan_scene.cpp"
+        "${_gta4_native}/temporal/vulkan_frame_generation.cpp"
+        "${_gta4_native}/temporal/dlss_bootstrap.cpp"
+        "${_gta4_native}/temporal/dlss_upscaler.cpp"
+        "${_gta4_native}/temporal/dlss_frame_generation.cpp"
+        # rexui's PNG decoder (the font atlases): rexui is not built on the Switch, the NVK backend library lacks it.
+        "${THEFT4_ROOT}/glue/rexglue-sdk-main/src/ui/image_decode.cpp"
+        "${THEFT4_LRA_PRIVATE_ROOT}/shader/shader_cache.cpp"
+        "${THEFT4_LRA_OVERRIDE_CPP}"
+        "${THEFT4_LRA_SMOLV_ROOT}/smolv.cpp")
+    target_compile_features(theft4-gta4-lra PRIVATE cxx_std_23)
+    # REX_PLATFORM_SWITCH: kabba's renderer changes test it (our SDK's name is REX_PLATFORM_NX); here only, so that
+    # platform.h, and with it every generated file, stays as it is.
+    target_compile_definitions(theft4-gta4-lra PRIVATE REX_PLATFORM_SWITCH=1 REX_HAS_VULKAN=1
+        REXGLUE_BUILD_CONFIG="$<CONFIG>"
+        GTA4_NATIVE_FONT_ASSET_ROOT="${THEFT4_LRA_FONT_ROOT}")
+    # -O2, not -O3: graphics_system.cpp is ~37,000 lines (kabba's build lowers it further for GCC's memory).
+    target_compile_options(theft4-gta4-lra PRIVATE -fno-strict-aliasing -fno-char8_t -Wno-unused-variable
+        -Wno-missing-field-initializers $<$<CONFIG:RELEASE>:-O2>)
+    set_source_files_properties("${THEFT4_LRA_PRIVATE_ROOT}/shader/shader_cache.cpp" "${THEFT4_LRA_OVERRIDE_CPP}"
+        PROPERTIES COMPILE_OPTIONS "-O0;-g0")
+    target_include_directories(theft4-gta4-lra PRIVATE
+        "${_gta4_native}"
+        "${THEFT4_ROOT}/glue/rexglue-sdk-main/include"
+        "${THEFT4_ROOT}/glue/rexglue-sdk-main/src"
+        "${THEFT4_ROOT}/glue/rexglue-sdk-main"
+        "${THEFT4_ROOT}/glue/rexglue-sdk-main/thirdparty/renderdoc"
+        "${THEFT4_ROOT}/glue/rexglue-sdk-main/thirdparty/stb"
+        "${THEFT4_LRA_PRIVATE_ROOT}"
+        "${THEFT4_LRA_SMOLV_ROOT}")
+    target_link_libraries(theft4-gta4-lra PRIVATE $<LINK_ONLY:rexgpu-xenos-nx> rexruntime rexcore
+        Vulkan::Headers GPUOpen::VulkanMemoryAllocator SPIRV-Headers::SPIRV-Headers xxHash::xxhash fmt::fmt
+        spdlog::spdlog)
+    target_include_directories(theft4-gta4-lra PRIVATE
+        "$<TARGET_PROPERTY:Vulkan-Headers,INTERFACE_INCLUDE_DIRECTORIES>"
+        "$<TARGET_PROPERTY:VulkanMemoryAllocator,INTERFACE_INCLUDE_DIRECTORIES>"
+        "$<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>")
+    # zstd.h from the portlibs, searched last: that folder also has Mesa's newer Vulkan headers, which must not win
+    # over the SDK's (vulkan.hpp checks VK_HEADER_VERSION).
+    target_include_directories(theft4-gta4-lra AFTER PRIVATE "${DEVKITPRO}/portlibs/switch/include")
+    theft4_add_lra_hooks()
+    target_sources(switch-game PRIVATE nx_lra_platform.cpp)
+    set_property(SOURCE main.cpp APPEND PROPERTY COMPILE_DEFINITIONS "THEFT4_NX_LRA=1")
+    set_property(SOURCE main.cpp APPEND PROPERTY INCLUDE_DIRECTORIES "${_gta4_native}")
+    target_link_libraries(switch-game PRIVATE theft4-gta4-lra)
+endif()
+
 if(REXGLUE_SWITCH_DEKO3D)
     # uam as a static library for the Switch (its CMake builds uamlib when NX_ROOT is set), linked as
     # one object whose strong symbols are local except uam::* (plume_uam_localize.cmake: uam's Mesa 19
@@ -226,6 +344,7 @@ if(REXGLUE_SWITCH_DEKO3D)
         "${_gta4_native}/deko3d/dk_compiler.cpp"
         "${_gta4_native}/deko3d/dk_shader_package.cpp"
         "${_gta4_native}/deko3d/dk_recorder.cpp"
+        "${_gta4_native}/deko3d/dk_geometry_store.cpp"
         "${_gta4_native}/deko3d/dk_graphics_system.cpp")
     add_dependencies(theft4-gta4-deko3d switch-game-uam-local)
     target_compile_features(theft4-gta4-deko3d PRIVATE cxx_std_23)
@@ -236,27 +355,8 @@ if(REXGLUE_SWITCH_DEKO3D)
     # uam_local.o, libdeko3d(d) and libnx come with plume's target (one copy of the object in the link).
     target_link_libraries(theft4-gta4-deko3d PRIVATE rexcore xxHash::xxhash fmt::fmt spdlog::spdlog
         PUBLIC theft4-plume-deko3d)
-    # Liberty Recompiled's native hooks at the European addresses (tools/gta4_native_eu_translate.py, the PC build's
-    # THEFT4_GTA4_NATIVE list): they send the title commands to whatever graphics system answers their ABI. With
-    # nx_dk_stage 0 the null GPU answers 0 and every hook runs the game's own code.
-    set(THEFT4_GTA4_NATIVE_EU_SRC "${THEFT4_ROOT}/out/gta4-native-eu/src")
-    if(NOT EXISTS "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_native_hooks.cpp")
-        message(FATAL_ERROR "REXGLUE_SWITCH_DEKO3D needs the native hooks: run python tools/gta4_native_eu_translate.py")
-    endif()
-    set(_lra_hooks
-        "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_native_hooks.cpp"
-        "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_aspect_hooks.cpp"
-        "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_font_selection_trace.cpp"
-        "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4_presentation_options.cpp"
-        "${THEFT4_GTA4_NATIVE_EU_SRC}/theft4_lra_app_stubs.cpp"
-        "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4eu_app_cvars.cpp"
-        "${THEFT4_GTA4_NATIVE_EU_SRC}/gta4eu_unresolved_stubs.cpp")
-    target_sources(switch-game PRIVATE ${_lra_hooks})
-    set_source_files_properties(${_lra_hooks} PROPERTIES INCLUDE_DIRECTORIES
-        "${THEFT4_GTA4_NATIVE_EU_SRC};${THEFT4_ROOT}/glue/rexglue-sdk-main/src;${THEFT4_ROOT}/glue/rexglue-sdk-main/thirdparty/inja/third_party/include")
-    # Their guest pointers through GuestToHost (nx_lra_hooks_compat.h: no aliased views on the Switch).
-    set_source_files_properties(${_lra_hooks} PROPERTIES COMPILE_OPTIONS
-        "-include;${CMAKE_CURRENT_SOURCE_DIR}/nx_lra_hooks_compat.h")
+    # With nx_dk_stage 0 the null GPU answers 0 and every hook runs the game's own code.
+    theft4_add_lra_hooks()
     target_sources(switch-game PRIVATE nx_deko3d.cpp)
     set_property(SOURCE main.cpp APPEND PROPERTY COMPILE_DEFINITIONS
         "THEFT4_NX_DEKO3D=1;THEFT4_NX_DEKO3D_DEBUG=$<BOOL:${REXGLUE_SWITCH_DEKO3D_DEBUG}>")
@@ -275,8 +375,13 @@ target_link_options(switch-game PRIVATE
 target_link_options(switch-game PRIVATE
     "-Wl,--wrap=threadCreate,--wrap=threadClose,--wrap=pthread_create")
 
+# The name the homebrew menu (Sphaira) shows for the NRO is the NACP's. One per variant, with
+# THEFT4_SWITCH_NRO_OUTPUT, so the NROs are told apart on the card and in the menu (the default is the name used
+# up to run 36). tools/switch-game/build_variants.sh sets both:
+#   theft4.nro "Theft4", theft4-dk.nro "Theft4 DK", theft4-dk-debug.nro "Theft4 DK (debug)".
+set(THEFT4_SWITCH_APP_NAME "Theft4 switch-game" CACHE STRING "Application name in the NRO's NACP")
 nx_generate_nacp(switch-game.nacp
-    NAME "Theft4 switch-game"
+    NAME "${THEFT4_SWITCH_APP_NAME}"
     AUTHOR "Theft4"
     VERSION "${PROJECT_VERSION}"
 )

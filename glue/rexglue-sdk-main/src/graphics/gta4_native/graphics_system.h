@@ -40,6 +40,7 @@
 #include <rex/graphics/pipeline/texture/info.h>
 #include <rex/system/interfaces/graphics.h>
 #include <rex/ui/vulkan/device.h>
+#include "native_texture_memory_arena.h"
 
 #include "postfx_resource_pool.h"
 #include "dirty_state_delta.h"
@@ -998,6 +999,10 @@ class Gta4NativeGraphicsSystem final : public system::IGraphicsSystem {
     VkImageView view = VK_NULL_HANDLE;
     VkDeviceSize allocation_size = 0;
     uint32_t memory_type = UINT32_MAX;
+    // Textures placed in a shared block (native_texture_memory_arena.h):
+    // `memory` is the block and must go back through the arena, not vkFreeMemory.
+    VkDeviceSize memory_offset = 0;
+    bool suballocated = false;
   };
 
   struct NativeTextureImage {
@@ -1774,6 +1779,11 @@ class Gta4NativeGraphicsSystem final : public system::IGraphicsSystem {
   }
   void QueueTextureProtection(const NativeCommand& command, bool retain);
   void QueueTextureProtectionLocked(const NativeCommand& command, bool retain);
+  // Producer side of the queue index (see SubmitTitleCommand): retains collected
+  // per command without queued_protection_mutex_, moved into the index under
+  // render_mutex_ before the commands enter render_queue_.
+  void StageProducerTextureProtection(const NativeCommand& command);
+  void FlushProducerTextureProtectionLocked();
   static void CollectTextureProtection(const NativeCommand& command);
   void AppendQueuedTextureProtection(std::unordered_set<uint64_t>& generations) const;
   void ClearNativeFrameCommands();
@@ -1997,6 +2007,10 @@ class Gta4NativeGraphicsSystem final : public system::IGraphicsSystem {
   // widens the protected set. Lock order: render_mutex_, then this.
   NativeTextureProtectionIndex queued_texture_protection_;
   mutable std::mutex queued_protection_mutex_;
+  // Generations retained by commands the producer has captured but not yet queued.
+  // Lock order: render_mutex_, queued_protection_mutex_, then this.
+  std::vector<uint64_t> producer_pending_protection_;
+  mutable std::mutex producer_protection_mutex_;
   uint32_t queued_title_presents_ = 0;
   bool producer_waiting_ = false;
   uint64_t diagnostic_submit_sequence_ = 0;
@@ -2062,6 +2076,12 @@ class Gta4NativeGraphicsSystem final : public system::IGraphicsSystem {
     uint64_t epoch = 0;
     std::weak_ptr<const NativeBufferResource> resource;
     bool recent = false;
+    // Dirty-capture history of `streak_handle` (producer only): how many
+    // dirty captures in a row found new bytes, and a phase that still lets one
+    // in eight such captures run the shadow compare.
+    uint32_t streak_handle = 0;
+    uint8_t changed_streak = 0;
+    uint8_t skip_phase = 0;
   };
   // Two-way sets under a multiplicative hash: far views draw a few thousand
   // distinct buffers a frame, and a direct-mapped table indexed by handle bits
@@ -2628,6 +2648,9 @@ class Gta4NativeGraphicsSystem final : public system::IGraphicsSystem {
   };
   NativeImageReusePool<ReusableNativeImage> texture_allocation_pool_{33554432, 64};
   std::unique_ptr<NativeResourceReclaimer<ReusableNativeImage>> texture_reclaimer_;
+  // Shared blocks for texture images (Switch default, gta4_native_texture_suballocation).
+  std::shared_ptr<NativeTextureMemoryArena> texture_memory_arena_ =
+      std::make_shared<NativeTextureMemoryArena>();
   bool image_allocation_pool_enabled_=true;
   uint64_t texture_allocation_reuses_=0;
   void TrimTextureAllocationPool(bool all);

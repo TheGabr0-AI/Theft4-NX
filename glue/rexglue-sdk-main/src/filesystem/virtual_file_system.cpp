@@ -15,6 +15,8 @@
 
 #include <rex/filesystem/devices/host_path_entry.h>
 
+#include "../core/host_file_share.h"
+
 REXCVAR_DEFINE_BOOL(allow_game_relative_writes, false, "Filesystem",
                     "Not useful to non-developers. Allows code to write to paths "
                     "relative to game://. Used for "
@@ -254,12 +256,16 @@ X_STATUS VirtualFileSystem::OpenFile(Entry* root_entry, const std::string_view p
       return X_STATUS_FILE_IS_A_DIRECTORY;
     }
 
-    // If the cached entry does not exist on host anymore, invalidate it.
+    // If the cached entry does not exist on host anymore, invalidate it. Only when the host says it is not there: on
+    // the Switch a file open for writing is locked and its status fails with EIO, which threw out of the title's
+    // thread here in run 49 (core/host_file_share.h).
     if (parent_entry) {
       const auto* host_path_entry = dynamic_cast<const HostPathEntry*>(parent_entry);
       if (host_path_entry) {
         const auto file_path = host_path_entry->host_path() / rex::to_path(entry->name());
-        if (!std::filesystem::exists(file_path)) {
+        std::error_code ec;
+        const bool exists = std::filesystem::exists(file_path, ec);
+        if (HostFileIsGone(exists, ec)) {
           entry->Delete();
           entry = nullptr;
         }

@@ -11,7 +11,10 @@
 #include <bit>
 #include <cstring>
 
+#include "native_alias_registration.h"
 #include "native_buffer_metadata.h"
+#include "native_constant_diff.h"
+#include "native_resolve_clear.h"
 
 namespace rex::graphics::gta4_native {
 namespace {
@@ -45,34 +48,6 @@ bool Read(const void* command, size_t size, T& out) {
   }
   std::memcpy(&out, command, sizeof(T));
   return out.header.size == sizeof(T);
-}
-
-// The registers of [0, count) that differ between `guest` (big-endian floats) and `shadow`, appended as runs; the
-// shadow takes the new values. `whole`: every register travels.
-uint32_t DiffRegisters(const uint8_t* guest, float* shadow, uint32_t count, bool whole, ConstantDelta& delta) {
-  delta.whole = whole;
-  uint32_t changed = 0;
-  ConstantRun* run = nullptr;
-  for (uint32_t r = 0; r < count; ++r) {
-    uint32_t words[4];
-    for (uint32_t c = 0; c < 4; ++c) {
-      words[c] = LoadWord(guest + r * 16 + c * 4);
-    }
-    if (!whole && std::memcmp(words, shadow + r * 4, 16) == 0) {
-      run = nullptr;
-      continue;
-    }
-    std::memcpy(shadow + r * 4, words, 16);
-    if (!run) {
-      delta.runs.push_back({uint16_t(r), 0, uint32_t(delta.values.size())});
-      run = &delta.runs.back();
-    }
-    ++run->count;
-    const float* f = shadow + r * 4;
-    delta.values.insert(delta.values.end(), f, f + 4);
-    ++changed;
-  }
-  return changed;
 }
 
 }  // namespace
@@ -151,6 +126,14 @@ bool NativeFrontEnd::CaptureDraw(uint32_t device_address, RecorderDraw& draw) {
   draw.vertex_booleans = LoadWord(device + kBooleansOffset);
   draw.pixel_booleans = LoadWord(device + kBooleansOffset + 0x10);
   CaptureConstants(state, device, draw.vertex_constants, draw.pixel_constants);
+  if ((draw.sequence % kDrawHashEvery) == kDrawHashEvery / 2) {
+    // Run 50: the banks as this draw leaves them, for the recorder to compare with its own (half a period away from the
+    // data hash of CaptureDrawData, so the two samples do not share draws).
+    draw.constants_hash = {ConstantBankHash(state.vertex_constants.data(), 0, 64, true),
+                           ConstantBankHash(state.vertex_constants.data(), 64, kVertexConstantRegisters - 64, true),
+                           ConstantBankHash(state.pixel_constants.data(), 0, kPixelConstantRegisters, true)};
+    draw.constants_hashed = true;
+  }
   for (uint32_t i = 0; i < kRenderTargetCount; ++i) {
     draw.render_targets[i] = CaptureSurface(LoadWord(device + kRenderTargetOffset + i * 4));
   }
@@ -188,6 +171,7 @@ bool NativeFrontEnd::CaptureDraw(uint32_t device_address, RecorderDraw& draw) {
   }
 
   // Vertex streams: the buffer objects the device holds, with SetVertexStream's offset and stride.
+  std::array<bool, kVertexStreamCount + 1> locked{};  // the streams' and (last) the index buffer's lock count is not 0
   if (draw.kind != RecorderDraw::Kind::kUp) {
     for (uint32_t s = 0; s < kVertexStreamCount; ++s) {
       RecorderVertexStream stream = state.streams[s];
@@ -196,6 +180,7 @@ bool NativeFrontEnd::CaptureDraw(uint32_t device_address, RecorderDraw& draw) {
       uint32_t flags = 0;
       if (handle && BufferData(handle, flags, stream.address, stream.size)) {
         stream.fetch_address = (flags & 0xF) == 1;
+        locked[s] = (flags & 0xF00u) != 0;  // DecodeNativeBufferMetadata's guest_locked
         draw.streams[s] = stream;
       } else {
         draw.streams[s] = {};
@@ -210,8 +195,161 @@ bool NativeFrontEnd::CaptureDraw(uint32_t device_address, RecorderDraw& draw) {
       return Reject(uint32_t(CommandType::kDrawIndexedPrimitive), "index-buffer");
     }
     draw.index_32bit = (flags & kIndex32Flag) != 0;
+    locked[kVertexStreamCount] = (flags & 0xF00u) != 0;
+  }
+  if (draw.kind != RecorderDraw::Kind::kUp) {
+    CaptureDrawData(draw, locked);
   }
   return true;
+}
+
+void NativeFrontEnd::PromoteDynamicBuffer(uint32_t handle) {
+  std::lock_guard<std::mutex> lock(promote_mutex_);
+  promoted_.push_back(handle);
+  promote_pending_.store(true, std::memory_order_release);
+}
+
+void NativeFrontEnd::TakePromotions() {
+  std::lock_guard<std::mutex> lock(promote_mutex_);
+  for (uint32_t handle : promoted_) {
+    data_stats_.promoted_buffers += promoted_buffers_.insert(handle).second;
+  }
+  promoted_.clear();
+  promote_pending_.store(false, std::memory_order_relaxed);
+}
+
+void NativeFrontEnd::CaptureDrawData(RecorderDraw& draw, const std::array<bool, kVertexStreamCount + 1>& locked) {
+  if (promote_pending_.load(std::memory_order_acquire)) {
+    TakePromotions();
+  }
+  if (!draw.declaration) {
+    return;
+  }
+  // The streams the declaration reads (the recorder reads a subset of them: the shader's inputs).
+  uint32_t mask = 0;
+  for (const VertexElement& e : draw.declaration->elements) {
+    if (e.stream < kVertexStreamCount && draw.streams[e.stream].address && draw.streams[e.stream].stride) {
+      mask |= 1u << e.stream;
+    }
+  }
+  const bool indexed = draw.kind == RecorderDraw::Kind::kIndexed;
+  const uint32_t width = draw.index_32bit ? 4 : 2;
+  // Run 59: the first reason that applies (CopyReason).
+  const bool promotions = handle_promotions_.load(std::memory_order_relaxed);
+  uint8_t reason = kCopyNone;
+  auto consider = [&](bool is_locked, uint32_t buffer) {
+    const uint8_t r = is_locked                                             ? kCopyLocked
+                      : dynamic_buffers_.contains(buffer)                   ? kCopyRewritten
+                      : promotions && promoted_buffers_.contains(buffer)    ? kCopyPromoted
+                                                                            : kCopyNone;
+    if (r && (!reason || r < reason)) {
+      reason = r;
+    }
+  };
+  for (uint32_t s = 0; s < kVertexStreamCount; ++s) {
+    if (mask & (1u << s)) {
+      consider(locked[s], draw.streams[s].buffer);
+    }
+  }
+  if (indexed) {
+    consider(locked[kVertexStreamCount], draw.index_buffer);
+  }
+  const bool copies = submit_copies_.load(std::memory_order_relaxed);
+  // Run 59: a draw whose buffers touch a page the title rewrote under a waiting draw (VolatilePages): its range decides
+  // below. The indices' bytes are known now; a stream's whole data first (cheap), its range once the indices are scanned.
+  VolatilePages& pages = GlobalVolatilePages();
+  bool page_suspect = false, index_on_page = false;
+  if (copies && !reason && volatile_pages_.load(std::memory_order_relaxed) && pages.marked()) {
+    for (uint32_t s = 0; s < kVertexStreamCount && !page_suspect; ++s) {
+      const RecorderVertexStream& st = draw.streams[s];
+      if ((mask & (1u << s)) && st.size > st.offset) {
+        page_suspect = pages.Any(IsPhysicalDataAddress(st.address, st.fetch_address), st.address + st.offset,
+                                 st.size - st.offset);
+      }
+    }
+    if (indexed) {
+      index_on_page = pages.Any(false, draw.index_address + draw.start_index * width, uint64_t(draw.index_count) * width);
+      page_suspect = page_suspect || index_on_page;
+    }
+    data_stats_.page_suspects += page_suspect;
+  }
+  const bool was_locked = reason == kCopyLocked;
+  bool copy = copies && reason != kCopyNone;
+  if (!copy && !page_suspect && (draw.sequence % kDrawHashEvery) != 0) {
+    return;
+  }
+  // The same reads as DkRecorder::Draw: the stream's view, its offset, the indices from start_index on.
+  std::array<DrawStreamSpan, kVertexStreamCount> spans{};
+  for (uint32_t s = 0; s < kVertexStreamCount; ++s) {
+    if (!(mask & (1u << s))) {
+      continue;
+    }
+    const RecorderVertexStream& st = draw.streams[s];
+    const uint8_t* base = IsPhysicalDataAddress(st.address, st.fetch_address)
+                              ? memory_->TranslatePhysical<const uint8_t*>(st.address)
+                              : memory_->TranslateVirtual<const uint8_t*>(st.address);
+    if (base) {
+      spans[s] = {base + st.offset, st.size > st.offset ? uint64_t(st.size - st.offset) : 0, st.stride};
+    }
+  }
+  const uint8_t* indices = nullptr;
+  uint64_t index_bytes = 0;
+  DrawVertexRange range;
+  if (indexed) {
+    index_bytes = uint64_t(draw.index_count) * width;
+    if (!draw.index_count || uint64_t(draw.start_index) * width + index_bytes > draw.index_size) {
+      return;  // the recorder rejects it
+    }
+    indices = memory_->TranslateVirtual<const uint8_t*>(draw.index_address);
+    if (!indices) {
+      return;
+    }
+    indices += size_t(draw.start_index) * width;
+    const IndexPolicy policy =
+        IndexPolicyFor(draw.primitive_type, draw.primitive_restart, draw.primitive_restart_index, draw.index_32bit);
+    range = IndexedVertexRange(indices, draw.index_count, draw.index_32bit, policy, draw.base_vertex);
+  } else {
+    range = {true, draw.start_vertex, draw.vertex_count};
+  }
+  if (!range.valid) {
+    return;
+  }
+  if (!copy && page_suspect) {
+    // Run 59: the bytes this draw reads, on a marked page or not.
+    bool on_page = index_on_page;
+    for (uint32_t s = 0; s < kVertexStreamCount && !on_page; ++s) {
+      uint64_t start = 0, bytes = 0;
+      if ((mask & (1u << s)) && StreamRangeBytes(spans[s], range, start, bytes)) {
+        const RecorderVertexStream& st = draw.streams[s];
+        on_page = pages.Any(IsPhysicalDataAddress(st.address, st.fetch_address),
+                            st.address + st.offset + uint32_t(start), bytes);
+      }
+    }
+    if (on_page) {
+      copy = true;
+      reason = kCopyPages;
+    } else if ((draw.sequence % kDrawHashEvery) != 0) {
+      return;
+    }
+  }
+  draw.data_streams = mask;
+  if (copy) {
+    // Run 50: recycled, no allocation per draw; run 56: the bytes in the pool's arena.
+    auto data = GlobalDrawDataPool().TakeCopy(indices, index_bytes, spans.data(), mask, range);
+    ++data_stats_.copied_draws;
+    data_stats_.copied_locked += was_locked;
+    data_stats_.copied_rewritten += reason == kCopyRewritten;
+    data_stats_.copied_promoted += reason == kCopyPromoted;
+    data_stats_.copied_pages += reason == kCopyPages;
+    data_stats_.copied_bytes += data->used;
+    draw.data = std::move(data);
+    draw.copy_reason = reason;
+  } else {
+    draw.submit_hash = DrawDataHash(indices, index_bytes, spans.data(), mask, range);
+    draw.submit_parts = DrawDataPartHashes(indices, index_bytes, spans.data(), mask, range);
+    draw.submit_hashed = true;
+    ++data_stats_.hashed_draws;
+  }
 }
 
 bool NativeFrontEnd::Submit(const void* command, size_t size, std::vector<FrontEndPacket>& out) {
@@ -258,13 +396,45 @@ bool NativeFrontEnd::Submit(const void* command, size_t size, std::vector<FrontE
     case CommandType::kSetTexture:
     case CommandType::kSetDepthStencil:
     case CommandType::kSetRenderTarget:
-    case CommandType::kDepthSurfaceHandoff:
+      // Read from the device at each draw (render state, textures, targets).
+      return true;
+    case CommandType::kDepthSurfaceHandoff: {
+      // Passed on in the stream's order (run 44): the recorder makes the primary depth surface hold the resolved scene
+      // depth. A malformed one is counted as dropped, as every one was before.
+      DepthSurfaceHandoffCommand c;
+      if (!Read(command, size, c) || !IsValidForwardStencilHandoffPolicy(c.stencil_policy) || !c.source_texture ||
+          !c.destination.handle) {
+        ++stats_.ignored_depth_handoff;
+        return true;
+      }
+      RecorderDepthHandoff h;
+      h.device = c.device;
+      h.source = c.source;
+      h.destination = c.destination;
+      h.source_texture = c.source_texture;
+      h.stencil_policy = c.stencil_policy;
+      out.emplace_back(std::move(h));
+      ++stats_.depth_handoffs;
+      return true;
+    }
+    case CommandType::kRegisterVirtualResource: {
+      // Only the packed depth alias is used (the recorder converts the depth the title reads as bytes); the rest of
+      // the registrations (sizes of the title's scaled targets) are counted as dropped.
+      RegisterVirtualResourceCommand c;
+      if (Read(command, size, c) && IsPackedDepthAliasRegistration(c)) {
+        out.emplace_back(RecorderResourceEvent{c.resource, false, c.packed_depth_source});
+        ++stats_.packed_depth_aliases;
+      } else {
+        ++stats_.ignored_virtual_resource;
+      }
+      return true;
+    }
     case CommandType::kRegisterReflectionTarget:
-    case CommandType::kRegisterVirtualResource:
     case CommandType::kUpdateEnvironmentalData:
     case CommandType::kTemporalUpdate:
-      // Read from the device at each draw (render state, textures, targets), or not used by this front end yet
-      // (reflections, virtual resources, the temporal path, environmental data: later stages).
+      // Not used by this front end yet (the depth hand-off, virtual resources, reflections, the temporal path,
+      // environmental data: later stages), but counted: the report says how often the title sends them.
+      ++stats_.ignored_other;
       return true;
     case CommandType::kSetPixelShader:
     case CommandType::kSetVertexShader: {
@@ -311,6 +481,11 @@ bool NativeFrontEnd::Submit(const void* command, size_t size, std::vector<FrontE
       }
       if (c.access == ResourceUnlockAccess::kGuestWrite) {
         out.emplace_back(RecorderResourceEvent{c.resource, false});
+        // Run 49: written again after its first fill, the buffer is one the title rewrites (textures land here too:
+        // harmless, draws only look buffers up).
+        if (++unlocks_[c.resource] == 2) {
+          dynamic_buffers_.insert(c.resource);
+        }
       }
       return true;
     }
@@ -320,6 +495,9 @@ bool NativeFrontEnd::Submit(const void* command, size_t size, std::vector<FrontE
         return Reject(uint32_t(header.type), "release");
       }
       shader_hashes_.erase(c.resource);
+      unlocks_.erase(c.resource);
+      dynamic_buffers_.erase(c.resource);
+      promoted_buffers_.erase(c.resource);
       out.emplace_back(RecorderResourceEvent{c.resource, true});
       return true;
     }
@@ -428,6 +606,12 @@ bool NativeFrontEnd::Submit(const void* command, size_t size, std::vector<FrontE
         return Reject(uint32_t(header.type), "resolve");
       }
       ++stats_.resolves;
+      if (r.command.flags & kResolveClearDepthBit) {
+        // The depth clear of a resolve applies to the device's bound depth/stencil, as of this command.
+        if (const uint8_t* device = memory_->TranslateVirtual<const uint8_t*>(r.command.device)) {
+          r.depth_stencil = CaptureSurface(LoadWord(device + kDepthStencilOffset));
+        }
+      }
       out.emplace_back(std::move(r));
       return true;
     }
