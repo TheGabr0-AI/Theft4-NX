@@ -3996,4 +3996,53 @@ barriers; banjo-nx draws them: next, measured first); the audio (AI1: nothing ne
 | CONFIG | `run61-build/game.toml`: deko3d, anatomy off, A/B on, phases 513 |
 
 Also: `test_runtime_package.py --real deko3d-out-s61 --expect-shaders 2074 --expect-blobs 7445`: **all package tests
-passed**, the C++ reader opens s61; `test_run60.py`: OK.
+passed**, the C++ reader opens s61; `test_run60.py`, `test_run59.py`, `test_run58.py`: OK.
+
+### AI5. Build
+
+`out/console-runs/run61-build/` (`build_variants.sh ... dk-debug`, `-j3`, `THEFT4_DK_PACKAGE=<private>/deko3d-out-s61`,
+log `run61-build.log`, 0 errors, 0 compiler warnings; built from the commit that adds this section, its hash in
+`COMMIT`, without `-dirty`; the code is `2b173ea`'s). Rebuilt:
+`dk_recorder.o`, `dk_graphics_system.o`, `main.o`. The ELF holds `run 61 shader not in the package` and `skinned depth
+always` (strings checked). Note for the build from the Bash tool: its profile makes `pwd` print `C:/...`, which CMake
+then prefixes with `/c/...`; run the script under `bash --noprofile --norc`. Files and SHA-256: `SHA256SUMS.txt`.
+
+### AI6. Run 61: what to do, what to bring back
+
+Standard clocks, no sys-clk / Horizon OC profile. Empty `sdmc:/switch/theft4/captures/`. Copy `theft4-dk-debug.nro`,
+`game.toml` and **the whole `deko3d/`** of `run61-build/` (the package changed: 100,311,296 bytes). The intro cut-scene to
+its end, then **at least 15 minutes of gameplay** close to people (Roman, passers-by) and in a car; `+` held 1 s. Bring
+back `game.log`, `game-crash.log`, `game-exit.log` and the whole `captures/` into `out/console-runs/run61-logs/`.
+
+Look at, in this order:
+1. **The characters in the `skinned depth always` captures against the `baseline` ones** (the phase lines name the
+   phase; one capture in each phase's last window). Whole (drawn over what is in front of them, which is expected in
+   that phase) = the depth test rejects their fragments: next, which earlier depth write (a placement restore, a
+   hand-off, a pass of the same mesh). Still in shards = the fragments never reach the depth test: next, the pixel
+   shader's kill and the rasterizer.
+2. `run 61 shader not in the package` lines: none expected; any line names a shader to look up in the manifest.
+3. The A/B lines: draws/s and GPU time of both phases (the depth-always phase is not a speed test).
+
+Off switch: `nx_dk_ab = false`.
+
+### AI7. Optimisations: what the measurements point at, what was not done
+
+The audit of this session was driven by run 60's profile (AI1), not by a list: the title waits for the recorder at the
+Present, the recorder waits for the GPU's slot fences (931 s of the 2,289 s session; 0 in some windows, 79-150 us a
+drawn draw in others), the GPU reports 119.5 ms busy and 68.7 ms idle a frame. What the other ports did on those points
+(their code read in earlier sessions, tables AC3 and AD4; local clones of nfsmw-nx `266f943`, sa2-nx `adf3a4e`,
+masseffect-nx `650e14e`; katamari-nx, bejeweled3-nx, renut-nx and banjo-nx were not fetched again this session):
+
+| Technique | Source | Here | Status |
+|---|---|---|---|
+| ZCULL on | nfsmw-nx HowToDeko3d 6 (WWHD: ~2 ms GPU a frame once uam patch 7 is in) | queue created with ZCULL off since M2; patch 7 is in | not done: needs `DkInvalidateFlags_Zcull` after every depth copy/restore (placements, hand-offs, resolves); a stale ZCULL adds holes while holes are investigated. Next, behind its own switch, after the depth answer of run 61 |
+| tiled cache | HowToDeko3d 7 (deko3d 0.5.0 never enables it; WWHD disables it; "untested") | disabled every work (`BeginWorkState`) | not done: no port measured it; a GPU fault would cost the session |
+| resolves drawn instead of copy-engine copies | banjo-nx (`banjo_renut_tuning.cpp`, AD4) | 28 resolves a frame on the copy engine, `DkBarrier_Full` around them, 69 barriers a frame | next: measure first (stamp the pre-list and the barriers so the GPU's idle 68.7 ms is attributed) |
+| no allocation per draw, arena, futex waits | sa2-nx, masseffect-nx, nfsmw-nx | in since run 56 (AD3) | in |
+| geometry store, chain reuse of state | nfsmw-nx, reNut | in since run 52; emitted-state cache `e_` | in |
+| VS outputs only where read | masseffect-nx S6, banjo-nx gate | in since run 56; the 96 new shaders pruned too (30 VS) | in |
+| submit copies only for real changes | (ours) | run 60's hash fix verified: 31,323 copies in a session against 6.4 M | in, verified on the console |
+
+No speed change ships in run 61: its one A/B is the characters' depth test, and a speed change in the same session
+would change what the captures are compared against. 30 fps at standard clocks is far (5.3 fps measured); the next
+measured step is the GPU's idle time.
