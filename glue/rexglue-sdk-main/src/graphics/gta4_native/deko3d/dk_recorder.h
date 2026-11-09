@@ -52,6 +52,7 @@
 #include "dk_placement.h"
 #include "dk_shader_probe.h"
 #include "dk_shader_package.h"
+#include "dk_overwrite.h"
 #include "dk_stage_counters.h"
 
 namespace rex::memory {
@@ -611,6 +612,8 @@ class DkRecorder final : public INativeRecorder {
   std::array<StageReport, size_t(AbPhase::kCount) + 1> stage_phase_{};
   StageReport stage_totals_;
   uint64_t stage_report_windows_ = 0;
+  // Run 63 (dk_overwrite.h): what writes the characters' surfaces after them in the same frame.
+  OverwriteTracker overwrite_;
   void HarvestStageCounters(uint32_t slot);
   void LogStageCounters(const char* what, const StageReport& r);
 };

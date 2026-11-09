@@ -4176,3 +4176,82 @@ Look at, in this order:
 3. The A/B lines: draws/s and GPU time of the phases (the counters cost a report per sampled draw: compare with run 61).
 
 Off switch: `nx_dk_ab = false` (the counters stay on: one draw in four of the G-buffer, 32 a frame at most).
+
+## 2026-11-09: run 62 read and run 63 (AK): the characters' triangles reach the targets; what overwrites them next
+
+### AK1. Run 62 read (`out/console-runs/run62-logs/`, 61 captures)
+
+| | |
+|---|---|
+| Run | **1,024 s** at CPU 1020 / GPU 460.8 / memory 1331.2, `+` exit, **0 faults**, 934 MiB headroom. A/B baseline / cull off / skinned depth always, 7+ cycles. |
+| Speed (A/B totals, 16 windows a phase) | baseline **5.66 fps, 22,919 draws/s, 4,050 draws a frame, GPU busy 123.3 + idle 53.5 ms a frame** (run 61: 5.82 fps, 20,990 draws/s in different shots: the stage counters cost no measurable throughput); recorder **20.0 us a drawn draw = textures 3.6 + vertices 5.9 (5.5 of it the geometry store re-hashing ranges every frame) + index range scan 1.8 + constants 2.2 + rest 6.5**. |
+| Audio | 54-100 % of real time (gameplay 54-68 %): as run 61. |
+
+**The stage counters (VERIFIED, `tests/deko3d/test_run63.py EVIDENCE`; per phase, all cycles):**
+
+| Phase | class | draws sampled | assembled / expected | clipper out / in | fragments a triangle | samples passed / fragment |
+|---|---|---|---|---|---|---|
+| baseline | characters | 16,942 | **1.000** (0 short) | 0.329 | 8.5 | **0.989** |
+| baseline | scenery | 90,376 | 1.000 | 0.296 | 57.4 | 1.000 |
+| cull off | characters | 6,164 | 1.000 | 0.339 | 6.2 | 0.992 |
+| cull off | scenery | 33,324 | 1.000 | 0.345 | 25.3 | 1.000 |
+| depth always | characters | 5,870 | 1.000 | 0.328 | 5.1 | 1.000 |
+| depth always | scenery | 30,682 | 1.000 | 0.351 | 20.5 | 1.000 |
+
+Per vertex shader, the clipper's share matches the faces run 60's probe meshes show to the camera (head `A2D8E2F3F87A09AE`
+0.326 against 0.28 counted offline, torso `9A16E1CEAD4ABA0D` 0.530 against 0.54); the hair (`EF7ED6F38B1F9211`, alpha
+test) passes 0.941 of its fragments, the rest of the characters 1.000. The clipper's share does not move with "cull off"
+in either class (0.329 -> 0.339, 0.296 -> 0.345): this counter is taken before face culling, so it measures frustum
+clipping, which treats the characters as it treats the scenery.
+
+**Verdict (VERIFIED for what the counters measure): every stage of the GPU writes the characters as it writes the
+scenery.** Their triangles are assembled, clipped, shaded and written. With run 56's anatomy (holes in every G-buffer
+target and in the resolved depth, the wall behind visible through them), the holes are made **after** the characters'
+draws and before the G-buffer is resolved: something writes their surfaces again. The A/B phases of runs 58-62 could
+not show it (none changes what comes after the draw). Excluded now: assembly, clipping, rasterization, the pixel
+shader's kill, the stencil and sample tests.
+
+Not done, with the reason: the audio (AJ1: the hot work is behind indirect calls of `sub_821737C0`'s dispatch, reached
+through `REX_CALL_INDIRECT_FUNC`; the profiler's stacks do not name the callees, so which function to write natively is
+not known yet; no speculative change); the diagnostic hashes (constant banks, submit race: about 1-2 % of the title's
+render thread and of the recorder; the submit hash also drives the promotion of rewritten buffers, a safety net);
+the geometry store's per-frame verification (5.5 us of 20 a draw: trusting ranges for several frames risks stale
+geometry, so it needs a guest-write signal first); the shadow clip (the title's `PA_CL_CLIP_CNTL` per draw still not
+logged).
+
+### AK2. What run 63 changes
+
+1. **What writes over the characters** (new `dk_overwrite.h`, `OverwriteTracker`): per frame, the guest surfaces
+   (colour targets and depth) a skinned G-buffer draw wrote; until each one's resolve, every later operation on it is
+   counted by kind: clears (the title's, a resolve's colour clear), **EDRAM placements materialized into it** (the copy
+   or the conversion pass rewrites the whole image), depth hand-offs into it, resolve depth clears, **draws that do not
+   test depth** (or test ALWAYS) and draws that test it. The first 32 that are not depth-tested draws are logged with the
+   frame, the draw and its vertex shader. Also counted: the depth/colour-0 pairs the characters and the scenery draw with,
+   and the character draws on a depth surface the scenery never uses (a character there hides nothing and is hidden by
+   nothing, so later scenery overwrites it).
+2. **`nx_dk_ab = false`**: no phases; the stage counters stay on.
+
+What each answer fixes: placements > 0 = the materialization rewrites a target the characters are in (compare the
+placement key of the G-buffer surfaces); draws without depth > 0 = those draws (the logged vertex shaders) and their
+state; characters on their own depth = the surface translation (`Surface`, `BindTargets`) gives them a separate image;
+only depth-tested draws = the characters' depth values lose to the scenery's (the next instrument: the depth they write).
+
+### AK3. Offline tests
+
+`python tests/deko3d/test_run63.py` (new; with `dk_run63_overwrite.cpp`): **OK**. OVERWRITE: 16 checks, clang
+`-Wall -Werror` (nothing counted before a character or on another surface, the resolve ends the following, events listed
+once, depth-tested draws counted not listed, a new frame forgets, own-depth draws found). EVIDENCE: run 62's three
+phases as in the table. RECORDER: the six hooks. CONFIG: `run63-build/game.toml`. `test_run62.py`: OK.
+
+### AK4. Build
+
+`out/console-runs/run63-build/` (`build_variants.sh ... dk-debug`, `-j3`, package s61 unchanged, `run63-build.log`, 0
+errors, 0 warnings). Checksums: `SHA256SUMS.txt` (the commit in `COMMIT` and in the ELF).
+
+### AK5. Run 63: what to do, what to bring back
+
+Standard clocks. Empty `sdmc:/switch/theft4/captures/`. Copy `theft4-dk-debug.nro`, `game.toml` and the whole `deko3d/`
+of `run63-build/`. The intro cut-scene to its end, then **10 minutes of gameplay close to people** (Roman's flat, the
+street) and one drive; `+` held 1 s. Bring back `game.log`, `game-crash.log`, `game-exit.log` and `captures/` into
+`out/console-runs/run63-logs/`. Look at: `run 63 after the characters' draws` (which kinds are not 0), the `run 63
+overwrite` lines (which surfaces, which vertex shaders), `run 63 surfaces`.

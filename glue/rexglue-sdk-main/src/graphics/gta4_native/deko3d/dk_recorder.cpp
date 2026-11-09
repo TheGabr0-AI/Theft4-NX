@@ -595,6 +595,7 @@ void DkRecorder::PrepareSurfaceContent(const SurfaceDescriptor& d, DkImageEntry&
     ForgetState();  // the targets, shaders and state are the draw's to emit again
     ++placement_stats_.conversions;
   }
+  overwrite_.Note(OverwriteKind::kPlacement, d.handle);  // run 63: the whole image rewritten from the placement's owner
   if (placement_logged_.size() < 24 && placement_logged_.insert((uint64_t(o.surface.handle) << 32) | d.handle).second) {
     REXLOG_INFO("deko3d: EDRAM placement of {:08X} ({}x{}, samples {}) materialized from {:08X} ({}x{}, samples {}) by "
                 "{} (reduce {}x{}, expand {}x{})",
@@ -1146,6 +1147,7 @@ void DkRecorder::DepthHandoff(const RecorderDepthHandoff& h) {
   geometry_.Forget();  // run 53: a new epoch for the geometry store (the title may have waited for the GPU)
   ++handoff_.commands;
   EnsureWork();
+  overwrite_.Note(OverwriteKind::kDepthHandoff, h.destination.handle);  // run 63
   const auto reject = [&](HandoffVerdict verdict, const char* detail) {
     ++handoff_.rejected[uint32_t(verdict) & 7];
     if (handoff_.logged++ < 8) {
@@ -1305,6 +1307,14 @@ void DkRecorder::Clear(const RecorderClear& c) {
                             std::bit_cast<float>(c.color_bits[1]), std::bit_cast<float>(c.color_bits[2]),
                             std::bit_cast<float>(c.color_bits[3]));
   }
+  for (uint32_t i = 0; i < kRenderTargetCount; ++i) {  // run 63: a clear of a surface the characters wrote
+    if ((colors & (1u << i)) && overwrite_.Note(OverwriteKind::kClear, c.render_targets[i].handle)) {
+      break;
+    }
+  }
+  if (depth) {
+    overwrite_.Note(OverwriteKind::kClear, c.depth_stencil.handle);
+  }
   if (depth && c.depth_stencil.handle) {
     dkCmdBufClearDepthStencil(cmd, (c.flags & 0x10) != 0, float(std::bit_cast<double>(c.depth_bits)),
                               (c.flags & 0x20) ? 0xFF : 0, uint8_t(c.stencil));
@@ -1320,6 +1330,7 @@ void DkRecorder::Resolve(const RecorderResolve& r) {
   const ResolveCommand& c = r.command;
   EnsureWork();
   const bool depth = (c.flags & 7) == 4;
+  overwrite_.Resolved(c.source.handle);  // run 63: its content is captured from here on
   DkImageEntry* source = Surface(c.source, depth);
   if (!source) {
     return;
@@ -1435,6 +1446,12 @@ void DkRecorder::Resolve(const RecorderResolve& r) {
   // other aspect" 467 times in run 40 and did not. What stays unrepresentable (bit 8 on a depth resolve, or a clear
   // with a format override) is still only counted.
   gaps_.resolve_cross_clear += plan.unrepresentable_color || (clear_depth && !depth && !plan.clear_device_depth);
+  if (plan.clear_device_depth) {
+    overwrite_.Note(OverwriteKind::kResolveDepthClear, r.depth_stencil.handle);  // run 63
+  }
+  if (clear_color) {
+    overwrite_.Note(OverwriteKind::kClear, c.source.handle);  // run 63: the resolve's colour clear of its source
+  }
   if (plan.clear_device_depth) {
     DkImageEntry* target = Surface(r.depth_stencil, true);
     if (!target) {
@@ -3608,6 +3625,38 @@ void DkRecorder::Draw(const RecorderDraw& d) {
     dkCmdBufDraw(cmd, primitive, vertex_count, 1, 0, 0);
   }
   ++draws_drawn_;
+  // Run 63 (dk_overwrite.h): the characters' surfaces, and every later draw on one of them in the same frame.
+  {
+    std::array<uint32_t, kRenderTargetCount> colours{};
+    for (uint32_t i = 0; i < kRenderTargetCount; ++i) {
+      colours[i] = d.render_targets[i].handle;
+    }
+    const uint32_t depth_handle = d.depth_stencil.handle;
+    if (skinned_gbuffer) {
+      overwrite_.SkinnedDraw(colours.data(), colours.size(), depth_handle);
+    } else {
+      const core::FixedFunctionState& x = d.fixed;
+      const bool writes = x.color_write_mask != 0 || (x.depth_enable && x.depth_write_enable);
+      if (writes) {
+        uint32_t targets = 0;
+        for (uint32_t c : colours) {
+          targets += c != 0;
+        }
+        if (targets >= 3 && depth_handle) {
+          overwrite_.SceneryDraw(depth_handle, colours[0]);
+        }
+        const bool tests_depth = x.depth_enable && depth_handle && x.depth_function != 7;
+        const OverwriteKind kind = tests_depth ? OverwriteKind::kDrawWithDepth : OverwriteKind::kDrawWithoutDepth;
+        bool noted = false;
+        for (uint32_t c : colours) {
+          noted = noted || (c && overwrite_.Note(kind, c, d.sequence, d.vertex_shader));
+        }
+        if (!noted && x.depth_enable && x.depth_write_enable) {
+          overwrite_.Note(kind, depth_handle, d.sequence, d.vertex_shader);
+        }
+      }
+    }
+  }
   if (stage_sampled) {
     const uint32_t slot = uint32_t(work_ % kSlots);
     std::vector<StageSample>& samples = stage_slot_samples_[slot];
@@ -3892,6 +3941,7 @@ void DkRecorder::Present(const RecorderPresent& p) {
   CloseWork();
   swapchain_.Present(image);
   frames_.fetch_add(1);
+  overwrite_.NewFrame(frames_.load());  // run 63
   geometry_.NewFrame(frames_.load() + 1);
   WriteCaptures();
   HarvestProbes();
@@ -4203,6 +4253,31 @@ void DkRecorder::Report() {
               probe_swapped_, probe_unswapped_, probe_started_,
               std::count_if(probes_.begin(), probes_.end(),
                             [](const auto& e) { return e.second.state == Probe::State::kReady; }));
+  // Run 63 (dk_overwrite.h): what wrote the characters' surfaces after them, before those surfaces were resolved.
+  {
+    const auto& n = overwrite_.interval();
+    const auto& t = overwrite_.totals();
+    REXLOG_INFO("deko3d: run 63 after the characters' draws, on their surfaces, before the resolve (interval / totals): "
+                "{} {}/{}, {} {}/{}, {} {}/{}, {} {}/{}, {} {}/{}, {} {}/{}; surfaces resolved after them {}; character "
+                "draws on a depth surface the scenery never uses {}",
+                OverwriteKindName(OverwriteKind::kClear), n[0], t[0], OverwriteKindName(OverwriteKind::kPlacement), n[1],
+                t[1], OverwriteKindName(OverwriteKind::kDepthHandoff), n[2], t[2],
+                OverwriteKindName(OverwriteKind::kResolveDepthClear), n[3], t[3],
+                OverwriteKindName(OverwriteKind::kDrawWithoutDepth), n[4], t[4],
+                OverwriteKindName(OverwriteKind::kDrawWithDepth), n[5], t[5], overwrite_.resolved(),
+                overwrite_.CharacterDrawsOnOwnDepth());
+    overwrite_.ResetInterval();
+    for (const OverwriteTracker::Event& e : overwrite_.TakeNewEvents()) {
+      REXLOG_INFO("deko3d: run 63 overwrite: {} on {:08X} at frame {} (draw {}, vertex shader {:016X}) after a character "
+                  "drew into it",
+                  OverwriteKindName(e.kind), e.handle, e.frame, e.sequence, e.vertex_shader);
+    }
+    if (stage_report_windows_ % 6 == 5) {
+      REXLOG_INFO("deko3d: run 63 surfaces (depth/colour 0 x draws): characters {}; scenery {}",
+                  OverwriteTracker::PairsText(overwrite_.characters()),
+                  OverwriteTracker::PairsText(overwrite_.scenery()));
+    }
+  }
   // Run 62: the stage counters over the whole session every window; the characters' vertex shaders one by one every
   // sixth window (once a minute).
   LogStageCounters("totals", stage_totals_);
