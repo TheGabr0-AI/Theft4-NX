@@ -4246,7 +4246,16 @@ phases as in the table. RECORDER: the six hooks. CONFIG: `run63-build/game.toml`
 ### AK4. Build
 
 `out/console-runs/run63-build/` (`build_variants.sh ... dk-debug`, `-j3`, package s61 unchanged, `run63-build.log`, 0
-errors, 0 warnings). Checksums: `SHA256SUMS.txt` (the commit in `COMMIT` and in the ELF).
+errors, 0 warnings), built from commit `fe696e8` (in `COMMIT` and in the ELF, without `-dirty`; the ELF holds the
+`run 63 after the characters` line). `SHA256SUMS.txt`:
+
+| File | Bytes | SHA-256 |
+|---|---|---|
+| `theft4-dk-debug.nro` | 47,306,949 | `396917d3137e436c9d1f8c8f4ecb3cb89d40461ca1920067b9812cf7395a9884` |
+| `switch-game-dk-debug.elf` | 324,058,960 | `bc13c86b476dd7574887c96cec3ffaeb978e9d4b2f884d8b6e6128e06544cc58` |
+| `game.toml` | 1,345 | `3eabe13504e64193fb16a3235df6f39be5b2fafb39bc78047bac9b6107218749` |
+| `deko3d/gta4_deko3d_runtime.bin` (s61) | 100,311,296 | `f4d9fdc4f41cf3ad49b8af8853d768cda386efe108ba3b15dc3856da9b01789f` |
+| `deko3d/gta4_deko3d_glsl.bin` (s61) | 43,826,659 | `b7ce84705982d12176f30136045556b1bf2668642e6f09610bae5759db419494` |
 
 ### AK5. Run 63: what to do, what to bring back
 
