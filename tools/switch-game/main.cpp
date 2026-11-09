@@ -87,6 +87,7 @@
 #include <rex/cvar.h>
 namespace theft4::nx_audio_mixer {
 uint64_t Calls();  // nx_audio_mixer.cpp
+uint64_t RouteCalls();  // run 64: the native routing function (sub_8216D7E0)
 }
 #include <rex/diagnostics/export_stubs.h>
 #include <rex/diagnostics/missing_function.h>
@@ -237,6 +238,10 @@ REXCVAR_DEFINE_BOOL(nx_dk_anatomy, false, "Switch",
 REXCVAR_DEFINE_BOOL(nx_dk_geometry_trust, true, "Switch",
                     "nx_gpu = deko3d (run 53): the geometry store trusts a range checked once until the next work, frame "
                     "or non-draw command (nfsmw-nx's epoch); false = every lookup hashes the whole range, as run 52");
+REXCVAR_DEFINE_BOOL(nx_dk_geometry_signals, true, "Switch",
+                    "nx_gpu = deko3d (run 64): the geometry store binds a range checked in this frame without hashing it "
+                    "again until its buffer object is unlocked after a guest write or released; false = hashed again in "
+                    "every epoch, as run 63");
 REXCVAR_DEFINE_INT32(nx_dk_geometry_mb, 96, "Switch",
                      "nx_gpu = deko3d (run 52): MiB of the geometry store (nfsmw-nx's): vertex ranges seen before with "
                      "the same bytes are bound from it, not copied and swapped again; 0 = off, as through run 51");
@@ -3184,10 +3189,12 @@ struct Heartbeat {
         GAME_INFO("audio: %" PRIu64 " frames in the window (%.0f%% of real time), output ran dry "
                   "%" PRIu64 " times, %" PRIu64 " frames dropped, %.0f ms waiting for a free "
                   "buffer; since start %" PRIu64 " frames; NEON mixer voice loops %" PRIu64
-                  " (run 51, cvar nx_audio_neon_mixer)",
+                  " (run 51, cvar nx_audio_neon_mixer), native routing calls %" PRIu64
+                  " (run 64, cvar nx_audio_native_routes)",
                   frames - last_frames, 100.0 * double(frames - last_frames) / real_time,
                   starved - last_starved, dropped - last_dropped,
-                  double(wait_ns - last_wait_ns) / 1e6, frames, theft4::nx_audio_mixer::Calls());
+                  double(wait_ns - last_wait_ns) / 1e6, frames, theft4::nx_audio_mixer::Calls(),
+                  theft4::nx_audio_mixer::RouteCalls());
         last_frames = frames;
         last_starved = starved;
         last_dropped = dropped;
@@ -3845,6 +3852,7 @@ void StartupSummary() {
       dk.constant_versions = REXCVAR_GET(nx_dk_constant_versions);
       dk.geometry_mb = uint32_t(std::max(0, int(REXCVAR_GET(nx_dk_geometry_mb))));
       dk.geometry_trust = REXCVAR_GET(nx_dk_geometry_trust);
+      dk.geometry_signals = REXCVAR_GET(nx_dk_geometry_signals);
       dk.texture_lock_readback = REXCVAR_GET(nx_dk_texture_lock_readback);
       // Run 55: the read-backs only in the diagnostic mode (nx_dk_diagnostics); the normal mode pays for none of them.
       dk.skin_diff = REXCVAR_GET(nx_dk_diagnostics) ? uint32_t(std::max(0, int(REXCVAR_GET(nx_dk_skin_diff)))) : 0;

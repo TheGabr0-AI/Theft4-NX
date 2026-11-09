@@ -197,6 +197,9 @@ bool NativeFrontEnd::CaptureDraw(uint32_t device_address, RecorderDraw& draw) {
     draw.index_32bit = (flags & kIndex32Flag) != 0;
     locked[kVertexStreamCount] = (flags & 0xF00u) != 0;
   }
+  for (uint32_t s = 0; s <= kVertexStreamCount; ++s) {
+    draw.locked_buffers |= uint32_t(locked[s]) << s;  // run 64
+  }
   if (draw.kind != RecorderDraw::Kind::kUp) {
     CaptureDrawData(draw, locked);
   }

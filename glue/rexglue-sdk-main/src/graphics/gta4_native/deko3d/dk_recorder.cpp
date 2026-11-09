@@ -384,6 +384,7 @@ bool DkRecorder::Initialize() {
     GeometryStore::Options g;
     g.mb = options_.geometry_mb;
     g.trust_epoch = options_.geometry_trust;
+    g.trust_signals = options_.geometry_signals;
     const bool made = geometry_.Create(
         g, kSlots,
         [this](uint32_t bytes) -> std::pair<uint8_t*, DkGpuAddr> {
@@ -395,8 +396,9 @@ bool DkRecorder::Initialize() {
           return {static_cast<uint8_t*>(dkMemBlockGetCpuAddr(geometry_block_)), dkMemBlockGetGpuAddr(geometry_block_)};
         },
         [this](uint64_t work) { return core_.WorkDone(work); });
-    REXLOG_INFO("deko3d: geometry store (run 52, nfsmw-nx's): {} MiB, trust per epoch {} (run 53){}",
-                options_.geometry_mb, options_.geometry_trust ? "on" : "off",
+    REXLOG_INFO("deko3d: geometry store (run 52, nfsmw-nx's): {} MiB, trust per epoch {} (run 53), trust by write "
+                "signal within a frame {} (run 64){}",
+                options_.geometry_mb, options_.geometry_trust ? "on" : "off", options_.geometry_signals ? "on" : "off",
                 made ? "" : ", NOT created: every draw's vertices go to the upload ring");
   }
   if (!swapchain_.Create(device_, options_.output_width, options_.output_height, 1)) {
@@ -1514,7 +1516,13 @@ void DkRecorder::Resolve(const RecorderResolve& r) {
 // ---- Resources
 
 void DkRecorder::ResourceEvent(const RecorderResourceEvent& event) {
-  geometry_.Forget();  // run 53: a new epoch for the geometry store (the title may have waited for the GPU)
+  if (event.packed_depth_source) {
+    geometry_.Forget();  // run 53: a new epoch for the geometry store (the title may have waited for the GPU)
+  } else {
+    // Run 64: a guest-write unlock or a release of this object, in the stream's order: the ranges read through it are
+    // hashed again at their next draw (and a new epoch, as before).
+    geometry_.Written(event.handle);
+  }
   if (event.packed_depth_source) {
     if (alias_sources_.size() < 256) {
       const auto [it, added] = alias_sources_.emplace(event.handle, event.packed_depth_source);
@@ -2684,8 +2692,11 @@ void DkRecorder::Draw(const RecorderDraw& d) {
                                            : uint64_t(reinterpret_cast<uintptr_t>(index_source));
       const uint64_t mode = (uint64_t(1) << 61) | uint64_t(d.index_32bit) | (uint64_t(index_policy.restart) << 1) |
                             (uint64_t(index_policy.guest_restart) << 2) | (uint64_t(index_from_copy) << 63);
+      // Run 64: the index buffer object, for the store's write signals (0 while the title holds it locked).
+      const uint32_t index_owner = (d.locked_buffers >> kVertexStreamCount) & 1u ? 0u : d.index_buffer;
       const GeometryStore::Result stored = geometry_.Find(
-          index_source, key, uint32_t(index_bytes_total), mode, uint32_t(index_bytes_total), [&](uint8_t* target) {
+          index_source, key, uint32_t(index_bytes_total), mode, uint32_t(index_bytes_total), index_owner,
+          [&](uint8_t* target) {
             conversion = ConvertIndices(index_source, d.index_count, d.index_32bit, index_policy, target);
             converted = true;
           });
@@ -3346,8 +3357,10 @@ void DkRecorder::Draw(const RecorderDraw& d) {
         mode = (mode & ~(uint64_t(3) << 62)) | (uint64_t(1) << 63) |
                (uint64_t(IsPhysicalDataAddress(stream.address, stream.fetch_address)) << 62);
       }
+      // Run 64: the stream's buffer object, for the store's write signals (0 while the title holds it locked).
+      const uint32_t stream_owner = (d.locked_buffers >> s.stream) & 1u ? 0u : d.streams[s.stream].buffer;
       const GeometryStore::Result stored =
-          geometry_.Find(range, key, uint32_t(bytes), mode, uint32_t(bytes), [&](uint8_t* target) {
+          geometry_.Find(range, key, uint32_t(bytes), mode, uint32_t(bytes), stream_owner, [&](uint8_t* target) {
             if (s.fixes.empty()) {
               CopyGuestWords(target, range, bytes);
               return;
@@ -4341,6 +4354,10 @@ void DkRecorder::Report() {
                 g.lookups, g.hits, g.hit_bytes >> 20, g.admitted, g.admitted_bytes >> 20, g.changes, g.volatile_lookups,
                 g.evictions, g.no_room, g.collisions, g.hashed_bytes >> 20, geometry_.used_bytes() >> 20,
                 geometry_.total_bytes() >> 20, geometry_.entries(), g.trusted_hits);
+    REXLOG_INFO("deko3d: run 64 geometry store write signals (totals; nx_dk_geometry_signals {}): hits without a hash "
+                "(checked this frame, their buffer not written since) {}, write signals (guest-write unlocks and "
+                "releases) {}, content changes without a signal {} of {} changes",
+                options_.geometry_signals ? "on" : "off", g.signal_hits, g.signals, g.changes_unsignalled, g.changes);
   }
   REXLOG_INFO("deko3d: packed depth alias (A8R8G8B8 fetches of a resolved depth; totals): pass {}, {} conversions, {} "
               "fetches served by one already converted, {} failed, {} other depth/colour mix-ups, {} aliases live; "

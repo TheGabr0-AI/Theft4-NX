@@ -52,6 +52,7 @@ struct GraphicsSystemOptions {
   bool constant_versions = true;    // nx_dk_constant_versions (run 50)
   uint32_t geometry_mb = 96;        // nx_dk_geometry_mb (run 52)
   bool geometry_trust = true;       // nx_dk_geometry_trust (run 53)
+  bool geometry_signals = true;     // nx_dk_geometry_signals (run 64)
   bool texture_lock_readback = true;  // nx_dk_texture_lock_readback (run 54)
   uint32_t skin_diff = 1;           // nx_dk_skin_diff (run 54): GPU skinning read-backs to take (0 = none)
   bool depth_bias = true;           // nx_dk_depth_bias (run 55)

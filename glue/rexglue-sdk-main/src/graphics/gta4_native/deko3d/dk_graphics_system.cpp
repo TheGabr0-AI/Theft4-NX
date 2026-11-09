@@ -356,6 +356,7 @@ void Deko3dGraphicsSystem::RecorderMain() {
   ro.constant_versions = options_.constant_versions;
   ro.geometry_mb = options_.geometry_mb;
   ro.geometry_trust = options_.geometry_trust;
+  ro.geometry_signals = options_.geometry_signals;
   ro.skin_diff = options_.skin_diff;
   ro.depth_bias = options_.depth_bias;
   ro.depth_only = options_.depth_only;

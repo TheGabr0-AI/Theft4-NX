@@ -111,6 +111,9 @@ struct RecorderDraw {
   uint32_t data_streams = 0;
   bool submit_hashed = false;
   uint8_t copy_reason = 0;  // run 59: why `data` was copied (NativeFrontEnd::CopyReason)
+  // Run 64: the buffers the title held locked when it submitted the draw (bit s: stream s; bit kVertexStreamCount: the
+  // index buffer). Their bytes may be half written: the geometry store never trusts them by write signal.
+  uint32_t locked_buffers = 0;
   // Run 50 (native_constant_diff.h ConstantBankHash): for a sampled draw, the front end's banks after this draw's
   // deltas: vertex c0-c63, vertex c64-c255 (the bone palette), pixel.
   std::array<uint64_t, 3> constants_hash{};

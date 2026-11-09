@@ -33,11 +33,10 @@ inline void StoreGuest(Host&& host, uint32_t ea, simde_float32x4_t v) {
   simde_vst1q_u8(host(ea & ~0xFu), simde_vrev32q_u8(simde_vreinterpretq_u8_f32(v)));
 }
 
-// r3 dst, r4 src, r5 the address of the start gain vector, r6 the address of the step vector (guest addresses).
+// The voice loop with the start gain vector (v13) and the step vector (v0) in registers (run 64: nx_audio_routes.h
+// builds them itself instead of storing them on the guest stack for this function to load back).
 template <class Host>
-inline void MixVoice(Host&& base, uint32_t dst, uint32_t src, uint32_t gain_ea, uint32_t step_ea) {
-  const simde_float32x4_t step = LoadGuest(base, step_ea);    // v0
-  const simde_float32x4_t start = LoadGuest(base, gain_ea);   // v13
+inline void MixVoiceVectors(Host&& base, uint32_t dst, uint32_t src, simde_float32x4_t start, simde_float32x4_t step) {
   const simde_float32x4_t step2 = simde_vaddq_f32(step, step);       // v11 = v0 + v0
   simde_float32x4_t g1 = simde_vaddq_f32(start, step);               // v12 = v13 + v0
   const simde_float32x4_t step3 = simde_vaddq_f32(step2, step);      // v10 = v11 + v0
@@ -65,6 +64,14 @@ inline void MixVoice(Host&& base, uint32_t dst, uint32_t src, uint32_t gain_ea, 
     StoreGuest(base, d + 16, r1);
     StoreGuest(base, d + 32, r2);
   }
+}
+
+// r3 dst, r4 src, r5 the address of the start gain vector, r6 the address of the step vector (guest addresses).
+template <class Host>
+inline void MixVoice(Host&& base, uint32_t dst, uint32_t src, uint32_t gain_ea, uint32_t step_ea) {
+  const simde_float32x4_t step = LoadGuest(base, step_ea);    // v0
+  const simde_float32x4_t start = LoadGuest(base, gain_ea);   // v13
+  MixVoiceVectors(base, dst, src, start, step);
 }
 
 }  // namespace theft4::nx_audio_mixer

@@ -4264,3 +4264,109 @@ of `run63-build/`. The intro cut-scene to its end, then **10 minutes of gameplay
 street) and one drive; `+` held 1 s. Bring back `game.log`, `game-crash.log`, `game-exit.log` and `captures/` into
 `out/console-runs/run63-logs/`. Look at: `run 63 after the characters' draws` (which kinds are not 0), the `run 63
 overwrite` lines (which surfaces, which vertex shaders), `run 63 surfaces`.
+
+## 2026-11-09: run 63 read and run 64 (AL): no instrument; the store checked by write signal, the mixer's routing function native
+
+### AL1. Run 63 read (`out/console-runs/run63-logs/`, 55 captures)
+
+| | |
+|---|---|
+| Run | **1,140 s** at CPU 1020 / GPU 460.8 / memory 1331.2, `+` exit, **0 faults**, 931 MiB headroom, A/B off. |
+| Recorder (all windows, 20.6 M draws) | **24.3 us a drawn draw; vertices 6.6, index range scan 2.0** (the two parts the geometry store's hashing is in). |
+| Geometry store (totals) | 34,858,953 lookups, 34,620,033 hits; **11,181,751 trusted within their epoch (32 %), 23,677,202 hashed: 188,227 MiB (8,335 bytes each)**; **448 content changes** in the whole session. |
+| Audio | 108 of 112 windows below 90 % of real time: **53-81 %**, the output dry 30 times a window on average (54-56 % and 43-44 times in the last windows). |
+
+**The overwrite tracker (VERIFIED, `tests/deko3d/test_run64.py EVIDENCE`):** on the surfaces a character drew into, between
+its draw and the surface's resolve, over the whole session: **clears 0, EDRAM placements materialized 0, depth hand-offs
+0, resolve depth clears 0, character draws on a depth surface the scenery never uses 0**. Draws that do not test depth:
+7,987 over 31,948 resolved surfaces, that is **one a frame, always the same**: vertex shader `2299F2D447D96CC6`, pixel
+shader `A11692B372C58D98`, a rectangle list over the screen with **colour write mask `800`** (the alpha of the third
+target only), depth test and write off. It cannot make the holes: they are in the albedo, the normals and the depth.
+Draws that test depth: 4,466,451 (the scenery: 527 a frame, drawn after the first skinned draw).
+
+**What that means for the characters: AK2's table has no fix for this answer.** Nothing rewrites the characters'
+surfaces; AK2's last row ("only depth-tested draws = the characters' depth loses to the scenery's") names an instrument,
+not a correction, and no state of this renderer is proven wrong by run 63. **No change was made to the characters'
+path** (a change without a proven cause is what the rules forbid). What was checked again offline in this session, on
+data already here:
+
+- Run 60's probe meshes drawn as wireframes (the GPU's own `gl_Position`, the draw's indices): the head (`A2D8…`, w 2.2-2.5),
+  the jacket near the camera (`9023…`, w 0.9-1.5) and the far torso (`9A16…`) are whole. A near mesh is right after the
+  vertex shader.
+- In every probe mesh `z = A w + B` with one (A, B) per draw (reverse Z, near 0.05 / 0.25 / 0.4 by camera): no vertex
+  with a depth of its own.
+- Run 56/57's anatomy captures of the G-buffer depth (`dk-f005603-a11`, `dk-f006207-a11`): the far pedestrian is whole
+  with stencil `0x89`; the near characters keep their silhouette and lose about half of their triangles, whole, with
+  straight edges; the pieces left carry the pedestrians' stencil, the holes carry the background's depth and stencil.
+- The characters' pixel shaders (`ps_7D672A6B…`, `ps_652CFED6…`): `discard` only under the alpha-test variant (specialization
+  bit 2), `gl_SampleMask` all ones unless alpha to mask is on (off for these draws), early fragment tests forced only
+  in the variants without the alpha test. Not the cause.
+- The vertex shaders write `gl_ClipDistance[0] = 0.0` when the title's clip plane is off (`g_DkShared[36].x`), and the
+  recorder writes that word as 0: constant for every draw, characters and scenery alike.
+- Not verified by any run so far: **the index bytes the GPU reads** (the probe file's indices are converted again on the
+  CPU; the stage counters count triangles, not which vertices they join). This is the one input of the characters' draws
+  between the vertex shader and the rasterizer that no run has compared.
+
+### AL2. What run 64 changes
+
+1. **The geometry store checks a range once a frame, and again when its buffer is written** (`dk_geometry_store.h/.cpp`
+   `Options::trust_signals`, `Written`, `Find(..., owner, ...)`; cvar `nx_dk_geometry_signals`, default on).
+   *Before:* a stored range was trusted until the end of its epoch, and an epoch ends at every clear, resolve, depth
+   hand-off, resource event, texture lock, work and frame: a mesh drawn in the shadow pass and again in the G-buffer was
+   hashed twice a frame, 8.3 KiB each time, and none of those boundaries is a write. *Now:* each range remembers the guest
+   buffer object it is read through (`RecorderVertexStream::buffer`, `RecorderDraw::index_buffer`); the hooks already
+   send the title's **unlock after a guest write** and the object's **release** in the command stream, in order with the
+   draws (`RecorderResourceEvent`), and the recorder turns both into `Written(handle)`. A range checked in this frame
+   whose object has had no such signal since is bound without hashing. That is the content at the draw's submit: a
+   re-hash at record time could see bytes the title wrote after submitting the draw.
+   *Never trusted this way:* the front end's submit copies (buffers rewritten after their first fill: mode bit 63, as
+   before); a buffer **locked when the draw was submitted** (new `RecorderDraw::locked_buffers`, from the lock count the
+   front end already reads: the recorder passes owner 0); a range met through two different buffer objects; a range not
+   yet hashed in this frame. **Every range is still hashed once a frame**: the signals are not proven complete (a write
+   that passes no Lock, a second object over the same memory), so a write without a signal is found by the next frame's
+   hash, as it was, and counted apart.
+   *Line:* `run 64 geometry store write signals (totals): hits without a hash ..., write signals ..., content changes
+   without a signal N of M changes`. If N stays 0 over a session, trusting ranges across frames is the next step (the
+   rest of the 6.6 + 2.0 us); not done now, because nothing measured says the signals are complete.
+2. **The mixer's routing function `sub_8216D7E0` as native code** (`tools/switch-game/nx_audio_routes.h`, strong
+   definition in `nx_audio_mixer.cpp`; cvar `nx_audio_native_routes`, default on).
+   *Which function:* `tools/switch-game/guest_profile.py` (new) charges each sampled pc of the mixer thread to its
+   outermost frame instead of the inlined NEON load `where.py --profile` names. Run 63, thread 16, 53,832 samples:
+   **`sub_8216D7E0` 22.5 %**, `sub_8216DBB0` 8.4 % (run 51's NEON loop), `sub_82185E38` 8.0 %, `sub_828C6740` 5.9 %,
+   waits 4.4 %, `sub_82188C28` 2.9 %. The stacks name what is behind the indirect calls: **`sub_821737C0` (vtable slot
+   6) calls `sub_828C6740`, `sub_828C5A58`, `sub_828C2D28`** (and `sub_82178398`); **`sub_82185E38` calls
+   `sub_82188C28`**, one of the 40 format-specific resamplers at `0x8217BDC0-0x8218B798` that no generated code calls
+   directly.
+   *What it is:* under the audio spin lock, for each route of a mix object (source channel, destination channel,
+   current gain, target gain) a 256-sample gain ramp, then either the voice loop `sub_8216DBB0` (add) or a 64-vector
+   loop inside the function (overwrite). *Before:* every vector through the stored PPC registers, the ramp written to the
+   guest stack for the voice loop to load back. *Now:* the same guest loads, stores, scalar arithmetic, flush-mode
+   switches and calls of the guest's other functions (format match, fill, copy, the lock), with the vectors in host
+   registers. The generated code reaches the function only through the function table (0 direct calls), so the strong
+   definition replaces the weak alias and **no generated file changes**. With either audio cvar off the generated
+   function runs.
+   *Line:* the `audio:` line adds `native routing calls N`; its `% of real time` and `output ran dry` are the measure.
+3. `game.toml`: A/B off, profiler from 600 s (as run 63). No new instrument: the run 62 stage counters and the run 63
+   tracker are untouched.
+
+Not changed, with the reason: the characters (AL1: no proven cause); shadows and lighting (no evidence); the resamplers
+and `sub_828C6740` (next native functions by share, each needs its own equivalence run against the generated body, as
+below); trust of stored ranges across frames (needs `content changes without a signal` from a console run).
+
+### AL3. Offline tests
+
+`python tests/deko3d/test_run64.py` (new; `dk_run64_store.cpp`, `dk_run64_routes.cpp`): **OK** (CONFIG once the build
+folder exists).
+
+| Part | Result |
+|---|---|
+| SIGNALS | 108,000 draws over 48 buffers the title writes at any moment (through a Lock with its signal, while locked, through a submit copy, through a second object, with no Lock between frames): **0 ranges bound with other bytes than the draw's**, signals off and on; 4,894 lookups answered by signal; 0 changes without a signal when every write has one, 1,283 counted when 403 writes have none. Clang `-Wall -Wextra -Werror`. Mutation: with `Written` recording nothing the test fails (10 wrong ranges, 396 in RELEASE). |
+| RELEASE | an object released and its memory reused by other bytes in the same frame: 2,333 bound, 0 wrong |
+| BENCH (this PC, run 63's shape: 2,400 ranges of 1-15 KiB, twice in one epoch and once in another a frame, 24 unrelated signals a frame) | **446 -> 237 ns a lookup (-47 %), 5,354 -> 2,677 bytes hashed a lookup**, every lookup a hit in both. A PC measure of the same code; the console's is run 64's `recorder time per drawn draw` (vertices, index range scan) against run 63's 6.6 and 2.0 us. |
+| ROUTES | `nx_audio_routes.h` against **the generated `sub_8216D7E0` and `sub_8216DBB0` themselves** (extracted by the test from the local `gta4_recomp.2.cpp`, compiled with the generated header): 6,000 random mix objects (4,025 with a route table, 2,710 overwriting, 2,013 with the source at or over the destination, 1,975 without a table; null descriptors, the lock free / held / held by another thread, a failing format match, gains from denormal to 1e30, random constants): **0 differences** in guest memory outside the dead stack frame, r1, r3, the flush mode and the logged calls (arguments and return addresses). Mutation: the ramp advanced by the wrong step fails 551 rounds. |
+| SPEED (this PC, simde's NEON on SSE) | 8 routes: add 2,303 -> 711 ns (3.2x), overwrite 2,563 -> 964 ns (2.7x). Not the console. |
+| AUDIO | run 63's log and ELF through `guest_profile.py`: the shares above; `sub_8216D7E0` first; the callees behind both indirect calls named |
+| EVIDENCE | run 63's store, recorder and tracker numbers of AL1 |
+| WIRING | owner passed unless locked (vertices, indices), unlock/release -> `Written`, the lock mask, both cvars, the audio counter |
+
+`test_run53.py`, `test_run52.py`, `test_run51.py`: OK (the store's and the mixer's older tests).

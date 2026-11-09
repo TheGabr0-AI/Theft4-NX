@@ -22,6 +22,17 @@
 // trust_epoch on (cvar nx_dk_geometry_trust; an epoch is one work, one frame or one guest wait) and, without sampling,
 // hashes a range in one XXH3 pass instead of per 64-byte line (the line hashes are only needed for the samples).
 //
+// Run 64 (trust_signals, cvar nx_dk_geometry_signals): run 63 hashed 188 GB in 23.7 M lookups to find 448 changes,
+// because an epoch ends at every clear, resolve, hand-off and resource event, none of which writes a buffer. The title
+// writes a vertex or index buffer between Lock and Unlock, and the hooks send that unlock (guest write) and the
+// object's release in the command stream, in order with the draws. A range read through buffer object `owner` and
+// checked in this frame is therefore bound without hashing again until Written(owner) says the object was unlocked
+// after a write or released. This is the content at the draw's submit: a re-hash at record time can see bytes the
+// title wrote after submitting the draw. Never applied to: the front end's submit copies (mode bit 63), a stream the
+// title holds locked at the draw (the caller passes owner 0), a range reached through two different objects, a range
+// not yet checked in this frame (every range is still hashed once a frame: a write that passed no Lock is found then,
+// and counted apart as `changes_unsignalled`).
+//
 // Not kept: ranges seen once (admitted the second time), and changing ranges (changed twice in a row: to the ring,
 // unhashed, for 64 frames). When full, the ranges unused longest go first, never one used in this frame or the last.
 // One thread: the recorder's.
@@ -75,12 +86,16 @@ class GeometryStore {
     uint64_t samples = 0;
     uint64_t disagreements = 0;   // a sample missed a change the whole hash saw (switches sampling off)
     uint64_t trusted_hits = 0;    // hits answered without hashing (trust_epoch: already checked in this epoch)
+    uint64_t signal_hits = 0;     // hits answered without hashing (trust_signals: checked this frame, owner not written)
+    uint64_t signals = 0;         // Written() calls
+    uint64_t changes_unsignalled = 0;  // of `changes`: an owned range whose owner had no write signal since its check
   };
 
   struct Options {
     uint32_t mb = 96;           // 0 = off
     bool trust_epoch = false;   // nfsmw: a range checked once is trusted until the next work, frame or guest wait
     bool sampling = false;      // nfsmw: stored ranges rechecked by a rotating 1/8 of their lines
+    bool trust_signals = false;  // run 64: checked once a frame, again after its buffer object's write signal
   };
 
   GeometryStore() = default;
@@ -116,6 +131,14 @@ class GeometryStore {
   void NewWork(uint64_t open_work);
   void NewFrame(uint64_t frame);
   void Forget() { ++epoch_; }  // a guest wait for the GPU
+  // Run 64: the title unlocked buffer object `owner` after writing it, or released it (the command stream's order).
+  void Written(uint32_t owner) {
+    ++epoch_;
+    ++stats_.signals;
+    if (owner) {
+      signals_[owner] = ++signal_serial_;
+    }
+  }
 
   // Looks the range up (`bytes` guest bytes at `data`, its host form `host_bytes` bytes). When it is admitted now,
   // write(uint8_t* target) writes its host form into the store (in order, once: the memory is CPU-uncached).
@@ -127,8 +150,15 @@ class GeometryStore {
   // live at a new host address every draw, so they are keyed by their guest address (the caller marks the mode).
   template <class Write>
   Result Find(const uint8_t* data, uint64_t key, uint32_t bytes, uint64_t mode, uint32_t host_bytes, Write&& write) {
+    return Find(data, key, bytes, mode, host_bytes, 0u, write);
+  }
+  // Run 64: `owner` is the guest buffer object the range is read through (0: unknown, or locked at the draw: the range
+  // is hashed as before).
+  template <class Write>
+  Result Find(const uint8_t* data, uint64_t key, uint32_t bytes, uint64_t mode, uint32_t host_bytes, uint32_t owner,
+              Write&& write) {
     uint8_t* target = nullptr;
-    Result r = Lookup(data, key, bytes, mode, host_bytes, target);
+    Result r = Lookup(data, key, bytes, mode, host_bytes, owner, target);
     if (target) {
       write(target);
     }
@@ -164,6 +194,12 @@ class GeometryStore {
     uint32_t offset = 0, size = 0;  // its block (size 0: none)
     uint32_t changes = 0;
     uint32_t lo = 0, hi = 0;  // index ranges: SetRange
+    // Run 64: the buffer object the range was last checked through, that object's write signal and the frame then;
+    // `shared`: reached through two different objects (never trusted by signal).
+    uint32_t owner = 0;
+    bool shared = false;
+    uint64_t signal = 0;
+    uint64_t checked_frame = 0;
     bool phases_valid = false;
     uint64_t phases[8] = {};
   };
@@ -178,7 +214,11 @@ class GeometryStore {
 
  private:
   Result Lookup(const uint8_t* data, uint64_t key_address, uint32_t bytes, uint64_t mode, uint32_t host_bytes,
-                uint8_t*& target);
+                uint32_t owner, uint8_t*& target);
+  uint64_t SignalOf(uint32_t owner) const {
+    const auto it = signals_.find(owner);
+    return it != signals_.end() ? it->second : 0;
+  }
   bool Reserve(uint32_t bytes, Entry& e);
   void ReleaseBlock(Entry& e);
   void Return(uint32_t offset, uint32_t size);
@@ -210,6 +250,8 @@ class GeometryStore {
   uint64_t open_work_ = 0;
   uint64_t done_up_to_ = 0;
   uint64_t swept_ = 0;
+  std::unordered_map<uint32_t, uint64_t> signals_;  // buffer object -> the serial of its last write signal
+  uint64_t signal_serial_ = 0;
   Stats stats_;
 };
 

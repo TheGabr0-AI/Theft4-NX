@@ -93,6 +93,9 @@ struct RecorderOptions {
   // nx_dk_geometry_trust (run 53): a range checked once is trusted until the next work, frame or non-draw command
   // (nfsmw-nx's epoch); false = every lookup hashes the whole range, as run 52.
   bool geometry_trust = true;
+  // nx_dk_geometry_signals (run 64): a range checked in this frame is bound without hashing until its buffer object is
+  // unlocked after a guest write or released (dk_geometry_store.h); false = hashed again in every epoch, as run 63.
+  bool geometry_signals = true;
   // nx_dk_depth_bias (run 55): the title's depth bias at every stage, as the Vulkan path (through run 54: only at stage 4)
   bool depth_bias = true;
   // nx_dk_depth_only (run 55, banjo-nx's depth-only draws): a draw that writes no colour, without alpha test or alpha to

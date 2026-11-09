@@ -86,6 +86,7 @@ void GeometryStore::Clear() {
   fast_.fill({});
   free_.clear();
   pending_.clear();
+  signals_.clear();
   used_bytes_ = 0;
   total_bytes_ = 0;
 }
@@ -139,7 +140,7 @@ void GeometryStore::NewFrame(uint64_t frame) {
 }
 
 GeometryStore::Result GeometryStore::Lookup(const uint8_t* data, uint64_t key_address, uint32_t bytes, uint64_t mode,
-                                            uint32_t host_bytes, uint8_t*& target) {
+                                            uint32_t host_bytes, uint32_t owner, uint8_t*& target) {
   target = nullptr;
   if (!active() || !bytes || host_bytes > total_bytes_ / 8) {
     return {};
@@ -179,11 +180,31 @@ GeometryStore::Result GeometryStore::Lookup(const uint8_t* data, uint64_t key_ad
       return {&e, gpu_ + e.offset, e.lo, e.hi};
     }
     return {};
+  } else if (options_.trust_signals && owner && !(mode >> 63) && e.size && !e.shared && e.owner == owner &&
+             e.checked_frame == frame_ && e.signal == SignalOf(owner)) {
+    // Run 64: checked in this frame through this buffer object, which the title has not unlocked after a write nor
+    // released since (the stream's order): the stored block is the range as the draw's submit saw it.
+    e.epoch = epoch_;  // Written() starts an epoch, so the rest of this one needs no signal lookup
+    ++stats_.hits;
+    ++stats_.signal_hits;
+    stats_.hit_bytes += bytes;
+    return {&e, gpu_ + e.offset, e.lo, e.hi};
   } else if (e.volatile_until > frame_) {
     ++stats_.volatile_lookups;
     return {};
   }
   e.epoch = epoch_;
+  // Run 64: this lookup hashes the range. Whether a change found below was announced (the owner's signal moved since
+  // the last check), and the check's owner, signal and frame for the lookups that follow.
+  const bool owned = owner != 0 && !(mode >> 63);
+  const uint64_t signal = owned ? SignalOf(owner) : 0;
+  const bool unannounced = owned && !fresh && !e.shared && e.owner == owner && e.signal == signal;
+  if (owned) {
+    e.shared = e.shared || (e.owner != 0 && e.owner != owner);
+    e.owner = owner;
+    e.signal = signal;
+    e.checked_frame = frame_;
+  }
   if (e.size && e.phases_valid && options_.sampling) {
     const uint32_t phase = uint32_t((frame_ + (e.data >> 6)) % kPhases);
     uint64_t read = 0;
@@ -242,6 +263,7 @@ GeometryStore::Result GeometryStore::Lookup(const uint8_t* data, uint64_t key_ad
   }
   // Changed: a new block next time it is stable; changing again, to the ring for a while.
   ++stats_.changes;
+  stats_.changes_unsignalled += unannounced;
   e.hash = hash;
   e.phases_valid = with_phases;
   std::copy(phases, phases + kPhases, e.phases);
