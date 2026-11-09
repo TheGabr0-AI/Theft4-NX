@@ -4146,7 +4146,23 @@ exists).
 | RECORDER | the counters reset before the draw, reported after it, harvested at the slot's reopening |
 | CONFIG | `run62-build/game.toml`: deko3d, anatomy off, A/B on, phases 545 |
 
-### AJ4. Run 62: what to do, what to bring back
+### AJ4. Build
+
+`out/console-runs/run62-build/` (`build_variants.sh ... dk-debug`, `-j3`, `THEFT4_DK_PACKAGE=<private>/deko3d-out-s61`,
+log `run62-build.log`, 0 errors, 0 compiler warnings), built from commit `5be09cd` (in `COMMIT` and in the ELF, without
+`-dirty`). Rebuilt: `dk_recorder.o`, `dk_graphics_system.o`, `main.o`. The ELF holds the `run 62 stage counters` lines
+(strings checked). From the Bash tool the script needs absolute `/c/...` paths for itself and the destination, with
+`PWD=/c/dev/Theft4-NX-clean` (otherwise CMake is given `/c/dev/.../C:/dev/...`). `SHA256SUMS.txt`:
+
+| File | Bytes | SHA-256 |
+|---|---|---|
+| `theft4-dk-debug.nro` | 47,298,757 | `93eb2163804d845ab684c3173b6df75c5aa82c63977ad27b441531d445835ce2` |
+| `switch-game-dk-debug.elf` | 323,796,904 | `0fe974904a38dec29bff63494f40af7020c44257882b72ebb30a120cdf8c83f6` |
+| `game.toml` | 1,631 | `13bca51d90ade52f7c2976771e98dc87fb98b2622de1ade127ea100931466e2b` |
+| `deko3d/gta4_deko3d_runtime.bin` (s61, unchanged) | 100,311,296 | `f4d9fdc4f41cf3ad49b8af8853d768cda386efe108ba3b15dc3856da9b01789f` |
+| `deko3d/gta4_deko3d_glsl.bin` (s61, unchanged) | 43,826,659 | `b7ce84705982d12176f30136045556b1bf2668642e6f09610bae5759db419494` |
+
+### AJ5. Run 62: what to do, what to bring back
 
 Standard clocks, no sys-clk / Horizon OC profile. Empty `sdmc:/switch/theft4/captures/`. Copy `theft4-dk-debug.nro`,
 `game.toml` and the whole `deko3d/` of `run62-build/` (package unchanged since run 61). The intro cut-scene to its end,
