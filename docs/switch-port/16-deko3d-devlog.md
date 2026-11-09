@@ -3883,3 +3883,117 @@ Off switches: `nx_dk_ab = false` (no phases), `nx_dk_diagnostics = false` (no pr
 
 Not solved, not claimed: the characters (run 60 tests the last untested link before the rasterizer), the HUD letters,
 the audio, 720p/30 fps. Expected only as estimates: fewer copies at submit and more draws/s.
+
+## 2026-11-09: run 60 read and run 61 (AI): the game's shaders extracted offline, the package complete, the characters' depth test put to the test
+
+### AI1. Run 60 read (`out/console-runs/run60-logs/`, 127 captures, 25 probes)
+
+| | |
+|---|---|
+| Run | **2,289 s** at CPU 1020 / GPU 460.8 / memory 1331.2 (`clocks read` in every heartbeat), `+` exit (`exit(0)`), **0 faults**. 11 A/B cycles (baseline / probe shaders). |
+| Probe swap (VERIFIED) | `run 60 probe shaders (totals)`: **615,067 skinned draws drawn with their probe's shader**, 7,379 without a ready one; probes started 26, ready 25; **24 vertex shaders swapped**, the characters' among them: `9A16E1CEAD4ABA0D` torso (3,463 vertices), `A2D8E2F3F87A09AE` head (2,816), `EF7ED6F38B1F9211` hair, `6A8A2868D092BFD7`, `9023A3B988FC0EB2`, plus their shadow-map draws (0 colour targets). The swap replaced the **vertex** shader only (pixel shader, inputs, constants, state unchanged), as designed. |
+| Pictures (VERIFIED, captures paired by the phase lines) | baseline `dk-f005777`, `dk-f006148`, `dk-f006203` against probe shaders `dk-f006009`, `dk-f006032`, `dk-f006302`: **characters in shards in both phases**, faces with triangular holes, dark shards rising from heads; **scenery has the same shards** (the ship and the crane in `dk-f006148`/`dk-f006203`). |
+| Verdict | The probe reached the characters' shaders, so the test is conclusive for what it tested: **the package's compiled vertex shader binary is cleared** (with run 55's GLSL probe: the positions are right and the binary that draws them is not the cause). The fault is after the vertex shader. |
+| Draw state of the characters (`run 60 skinned G-buffer draw`, 14 lines) | depth test on, func 6 (GEQUAL), write on; stencil on, func ALWAYS, REPLACE; cull 2; no user clip plane; alpha test only on the hair (func 5, ref 0.392); viewport 1280x720, depth 0-1; colour write FFF. Nothing differs from the scenery's G-buffer draws; the device uses `DkDeviceFlags_DepthZeroToOne` (D3D clip space): no convention error. |
+| Case A (missing shader) | **Excluded for run 60**: `drawn 29,022,176 (skipped by reason: none)`, front end `rejected 0` of 29,025,646; `shaders: 401 from the PC's DKSH, 0 compiled by the console's uam, 0 failed`. Every draw found both its shaders in the package. |
+| Submit copies (run 60's hash fix, VERIFIED on the console) | `front end, run 59 (totals)`: **31,323 draws copied at submit** in the whole session (run 59: 6.4 M), promoted buffers 0, rewritten pages 0; `run 59 submit race`: 0 changed of the sampled draws in every window. |
+| Speed | baseline 5.27 fps, 21,128 draws/s, 4,008 draws a frame, GPU busy 119.5 ms + idle 68.7 ms a frame; probe shaders 5.42 fps, 21,344 draws/s (scenes differ: not a gain). Run 59's baseline: 4.40 fps, 20,467 draws/s. |
+| Audio | 58-61 % of real time, output dry 19-28 times a window, 1 ms waiting for a buffer: **as run 59; nothing new, not changed**. |
+
+**Where the time goes (profiler after 600 s, `where.py --stacks`, VERIFIED):** the title's render thread (id 12) is
+**73.5 % waiting in a condition variable inside `SubmitTitleCommand` called from the swap hook (`sub_829D5338`)**: the
+frame backpressure, waiting for the recorder; the recorder is **54 % in `dk::Fence::wait` inside `Core::BeginWork` <-
+`EnsureWork` <- `Draw`/`Resolve`**: one work per frame, 3 slots, so at the start of frame N it waits for frame N-3 on the
+GPU. The GPU reports busy 119.5 ms and idle 68.7 ms a frame between its works' stamps; the idle part is outside the
+stamped commands (the pre-list's uploads, the barriers' drains: **69 barriers a frame**, most around the **28 resolves a
+frame** done on the copy engine with `DkBarrier_Full`). Where the GPU's idle time is spent is not measured yet.
+
+### AI2. The shaders: audit and offline extraction (VERIFIED on the game's files)
+
+**The path until run 60.** The package was translated from the **1,274 containers one PC session of 480 s created**
+(`pc_shader_dump_dir`, M0): only what that session drew, the limit the Tekken 6 port's author described. The path:
+`tools/pc-eu-base/native_hooks.cpp` (XXH3-64 of each container passed to `D3DDevice_CreateVertexShader/PixelShader`,
+virtual + physical size) -> XenosRecomp (`main.cpp` scanner, `shader_recompiler.cpp`) -> DXC -> `gta4_deko3d_structure.py`
+-> SPIRV-Cross -> banjo-nx's passes -> uam -> `gta4_deko3d_shaders.py` (DKSH cache) -> `gta4_deko3d_zero_init.py`,
+`gta4_deko3d_vs_prune.py` -> `gta4_deko3d_runtime.py` (the card's package) -> console: `RegisterShaderCommand` (the
+hash) -> `NativeFrontEnd` (`shader_hashes_`) -> `DkRecorder::Draw` -> `ShaderPackage::Find`; a hash not found rejects the
+draw (reasons 10/11, one warning per reason, until now without the hash).
+
+**Where the game keeps them (new tool `tools/deko3d/gta4_fxc_shaders.py`, readers in `gta4_xbox_data.py`):**
+- `common.rpf`: RPF2 whose table of contents is AES-256 encrypted (16 passes, the user's `aes_key.bin`, never in the
+  repository) and whose files are raw-deflate compressed (not LZX: libmspack is not needed here, as LRA's
+  `gta4_rpf_extractor.cpp` already does): **89 `shaders/fxl_final/*.fxc`** (RAGE `rgxa` effects). `xbox360.rpf` (863
+  files) and its nested `playerped.rpf` hold none.
+- `default.xex`: XEX2, AES-128 CBC with the retail key (`xex_module.cpp`), **basic compression** (no LZX): RAGE's own
+  effects compiled into the executable (`grcore` im/fastmipmap, `grpostfx`, `rmptfx`, `gpuptfx` simple render and
+  update, `atmoscatt_clouds`, `bink`, `perlinnoise`).
+
+A container is found by its magic at any byte offset (RAGE does not align them) and checked under **XenosRecomp's own
+rule** (`main.cpp:274`: `flags & 0xFFFFFF00 == 0x102A1100`, sizes inside the file, `field1C == 0`, `field20 == 0`; a
+container failing it is skipped by XenosRecomp **without a message**: the Tekken 6 kind of silent rejection). The tool
+names every candidate and its verdict.
+
+| Phase | Count |
+|---|---|
+| Sources | 89 `.fxc` (common.rpf) + 1 executable image |
+| Containers found | **1,370** (common.rpf 1,267, default.xex 103) |
+| Valid under XenosRecomp's rule | **1,370** |
+| Rejected | **0** (every container: `fieldC` 36, `field1C` 0, `field20` 0: GTA IV uses one container version; the 34 other `0x102A....` words in the `.fxc` are parameter bytes, not containers) |
+| Duplicates | 0 (each container carries its own debug path) |
+| Vertex shaders / pixel shaders | **666 / 704** (fxc 639 / 628; xex 27 / 76) |
+| In run 56-60's package (s56) | 1,274 of 1,370; **missing 96**: fxc 9 VS + 8 PS (all from `gta_normal_reflect_alpha.fxc`, an effect the 480 s session never drew), xex 21 VS + 58 PS |
+| The runtime dump (1,274) | **1,274 of 1,274 found offline** (1,250 in the `.fxc`, 24 in the executable: the "24 European shaders" of M0 are RAGE's particles, bink and perlin noise) |
+| Translated (XenosRecomp, DXC) | 96 of 96 -> **162 SPIR-V** (96 + 66 late alpha-test sources), 0 DXC failures; 3 state machines structured |
+| Compiled (uam) | **1,218 of 1,218 variants**, 0 failed; 30 VS zero-initialised, 30 of 30 pruned variants checked |
+| Packaged (s61) | **2,074 shaders (1,370 + 704 late), 14,670 variants, 0 without DKSH**, 7,445 DKSH, 100,311,296 bytes; validated by `gta4_deko3d_runtime_check.py` and the console's C++ reader (64 of 64 DKSH read back) |
+| s56's 1,912 shaders in s61 | **1,912 identical** (records, inputs, texture types, every variant's DKSH: `gta4_deko3d_package_diff.py`) |
+| Requested in run 60 | 401 DKSH variants (the log counts variants, not distinct hashes) |
+| Missing in run 60 | **0** (no draw skipped) |
+
+**Case A against case B.** Run 60 drew every draw with shaders the package had: the characters' shards, the black
+geometry and the missing surfaces of runs 47-60 are **not** missing shaders (case A excluded for what was played). They
+are case B (a shader present, found, compiled, and a wrong picture) or a fixed-function stage. The 96 shaders added now
+cover what the 480 s session never reached (a whole `gta_normal_reflect_alpha` effect, RAGE's GPU particle renderer
+`gpuptfx_simplerender` with its rain shaders, the fast-mipmap blur and depth downsample, RAGE's own post-processing and
+sky): any later scene that uses them would have lost those draws silently, one warning in all.
+
+### AI3. What run 61 changes
+
+1. **The package completed** (`deko3d-out-s61`): the 96 shaders the game holds and the package lacked, through the same
+   chain (new `tools/deko3d/gta4_deko3d_merge.py` adds them to s56 without recompiling its 13,392 variants). Run 61's
+   `deko3d/` carries it; the 1,912 shaders runs 56-60 used are byte-identical.
+2. **A missing shader is named** (`dk_recorder.cpp` `ShaderMissing`): `deko3d: run 61 shader not in the package: vertex|pixel
+   shader <HASH> (draw N); its draws are skipped`, once per hash (64 at most), so a skipped draw leads to its container in
+   `gta4_fxc_shaders.py`'s manifest.
+3. **The characters' depth test under test** (`dk_ab.h` phase `skinned depth always`, bit 512; run 61's
+   `nx_dk_ab_phases = 513`): in that phase every skinned draw into the G-buffer (3+ colour targets and a depth target) has
+   its depth compare made ALWAYS; the test and the write stay on, nothing else changes. Characters whole in this phase
+   and in shards in the baseline = their fragments are rejected by the depth test (an earlier depth write over them:
+   step 8 of the pipeline); in shards in both = the fragments never reach it (rasterization or the pixel shader's kill:
+   steps 6-7). Lines: the phase line names `skinned G-buffer depth compare always|the title's` and the draws changed.
+
+Not changed, with the reason: the vertex shaders (cleared by runs 55 and 60); any draw state (no state differs between
+the characters and the scenery: AI1); ZCULL (off since M2; HowToDeko3d 6 measured ~2 ms a frame in WWHD, but this
+renderer copies and restores depth often, and a stale ZCULL would add holes while the holes are being investigated);
+the tiled cache (deko3d 0.5.0 never enables it; HowToDeko3d 7: untested); the resolves on the copy engine (AI1's
+barriers; banjo-nx draws them: next, measured first); the audio (AI1: nothing new).
+
+### AI4. Offline tests
+
+`python tests/deko3d/test_run61.py` (new; with `dk_run61_xxh3.cpp`; the `.py` files need `git add -f`): **OK**.
+
+| Part | Result |
+|---|---|
+| XXH3 | `gta4_xbox_data.xxh3_64` against the repository's xxHash (clang): **41 lengths, 0 wrong** (every path: 0-16, 17-128, 129-240, one and several 1,024-byte blocks); and 1,274 of 1,274 runtime-dumped containers hash to their file names |
+| AB | dk_ab.h: `skinned depth always` is bit 512; mask 513 alternates baseline and it (clang `-Wall -Werror`) |
+| AES | FIPS-197 AES-128 and AES-256 blocks, SP 800-38A CBC-AES128 (two blocks, the chain carried): ok |
+| CONTAINERS | unaligned containers found, a truncated one and one with a virtual size under the header reported with their reason; `field1C` != 0 named as XenosRecomp's skip |
+| RPF2 | a synthetic archive (a directory, a stored file, a deflated file) read back |
+| MERGE | GDK1 round trip |
+| RECORDER | the missing shader is named at both rejection sites |
+| EVIDENCE | run 60: 29,022,176 drawn, skipped none; rejected 0; 615,067 probe draws, 24 shaders swapped (torso and head among them); 401 DKSH, 0 failed |
+| REAL (THEFT4_GAME_DIR, THEFT4_AES_KEY, THEFT4_SHADER_DUMP, THEFT4_PACKAGE) | 89 `.fxc` + the executable, 1,370 containers, 0 rejected; the dump all found offline; s61 lacks none |
+| CONFIG | `run61-build/game.toml`: deko3d, anatomy off, A/B on, phases 513 |
+
+Also: `test_runtime_package.py --real deko3d-out-s61 --expect-shaders 2074 --expect-blobs 7445`: **all package tests
+passed**, the C++ reader opens s61; `test_run60.py`: OK.
