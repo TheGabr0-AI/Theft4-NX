@@ -376,6 +376,10 @@ bool DkRecorder::Initialize() {
   }
   descriptors_to_free_.resize(kSlots);
   slot_stamps_.resize(kSlots);
+  // Run 62: the stage counters' reports after the pass stamps in the same block (64 KiB: 48,000 bytes of stamps, room
+  // for 32 sampled draws a work in each of the three slots).
+  stage_layout_ = StageCounterLayout::Fit(kSlots * kStampsPerSlot * 16, core_.config().query_kb << 10, kSlots, 32);
+  stage_slot_samples_.resize(kSlots);
   {
     GeometryStore::Options g;
     g.mb = options_.geometry_mb;
@@ -618,6 +622,7 @@ void DkRecorder::EnsureWork() {
   free_descriptors_.insert(free_descriptors_.end(), freed.begin(), freed.end());
   freed.clear();
   HarvestStamps(uint32_t(work_ % kSlots));
+  HarvestStageCounters(uint32_t(work_ % kSlots));
   BeginWorkState();
   StampPass(0, 0, 0, 0, 0);  // the start of the work: what the GPU did before it is another work's or idle
 }
@@ -647,6 +652,40 @@ void DkRecorder::StampPass(uint32_t kind, uint32_t first, uint32_t second, uint3
   dkCmdBufReportCounter(core_.commands(), DkCounter_Timestamp,
                         core_.QueriesGpu() + (uint64_t(slot) * kStampsPerSlot + stamps.size()) * 16);
   stamps.push_back({label, 0});
+}
+
+void DkRecorder::HarvestStageCounters(uint32_t slot) {
+  // Run 62: the slot's fence has been waited for (BeginWork), so its reports are final.
+  if (slot >= stage_slot_samples_.size()) {
+    return;
+  }
+  std::vector<StageSample>& samples = stage_slot_samples_[slot];
+  // The phase now running (a sample is at most two works old: the phase it was drawn in, but at a switch).
+  const size_t phase = options_.ab_phases && ab_.started() ? size_t(ab_.phase()) : size_t(AbPhase::kCount);
+  for (uint32_t i = 0; i < samples.size(); ++i) {
+    StageSample& s = samples[i];
+    for (uint32_t c = 0; c < kStageCounters; ++c) {
+      s.value[c] = StageReportValue(core_.QueriesCpu() + stage_layout_.Offset(slot, i, c));
+    }
+    stage_phase_[phase].Add(s);
+    stage_totals_.Add(s);
+  }
+  samples.clear();
+}
+
+void DkRecorder::LogStageCounters(const char* what, const StageReport& r) {
+  for (uint32_t c = 0; c < kStageClasses; ++c) {
+    const StageTotals& t = r.totals(StageClass(c));
+    REXLOG_INFO("deko3d: run 62 stage counters, {}, {}: {} draws sampled ({} short at assembly), triangles expected "
+                "{}; input primitives {} ({:.3f} of expected), clipper input {} ({:.3f} of input), clipper output {} "
+                "({:.3f} of clipper input), fragment invocations {} ({:.1f} a triangle out), samples passed {} ({:.3f} a "
+                "fragment)",
+                what, StageClassName(StageClass(c)), t.draws, t.assembly_short, t.expected, t.value[0], t.assembled(),
+                t.value[1], t.reached_clipper(), t.value[2], t.left_clipper(), t.value[3], t.fragments_per_triangle(),
+                t.value[4], t.samples_per_fragment());
+  }
+  REXLOG_INFO("deko3d: run 62 stage counters, {}: verdict: {}", what,
+              StageReport::Verdict(r.totals(StageClass::kSkinnedGbuffer), r.totals(StageClass::kStaticGbuffer)));
 }
 
 void DkRecorder::HarvestStamps(uint32_t slot) {
@@ -3537,6 +3576,30 @@ void DkRecorder::Draw(const RecorderDraw& d) {
   time_constants_ns_ += NowNs() - constants_start_ns;
 
   // --- The draw
+  // Run 62 (dk_stage_counters.h): indexed triangle lists into the G-buffer, the characters' and the scenery's, one in four
+  // of each while the work's slot has report room: the five stage counters reset before the draw, reported after it.
+  bool stage_sampled = false;
+  StageClass stage_class = StageClass::kStaticGbuffer;
+  if (indexed && primitive == DkPrimitive_Triangles && d.depth_stencil.handle && stage_layout_.samples_per_slot &&
+      stage_slot_samples_.size() == kSlots) {
+    uint32_t targets = 0;
+    for (const SurfaceDescriptor& t : d.render_targets) {
+      targets += t.handle != 0;
+    }
+    if (targets >= 3) {
+      stage_class = skinned_gbuffer ? StageClass::kSkinnedGbuffer : StageClass::kStaticGbuffer;
+      std::vector<StageSample>& samples = stage_slot_samples_[work_ % kSlots];
+      stage_sampled = stage_sampler_.Take(stage_class, uint32_t(samples.size()), stage_layout_.samples_per_slot);
+    }
+  }
+  static constexpr DkCounter kStageDk[kStageCounters] = {
+      DkCounter_InputPrimitives, DkCounter_ClipperInputPrimitives, DkCounter_ClipperOutputPrimitives,
+      DkCounter_FragmentShaderInvocations, DkCounter_SamplesPassed};
+  if (stage_sampled) {
+    for (DkCounter c : kStageDk) {
+      dkCmdBufResetCounter(cmd, c);
+    }
+  }
   if (indexed) {
     dkCmdBufDrawIndexed(cmd, primitive, d.index_count, 1, 0, -int32_t(index_min), 0);
   } else if (rect_list) {
@@ -3545,6 +3608,19 @@ void DkRecorder::Draw(const RecorderDraw& d) {
     dkCmdBufDraw(cmd, primitive, vertex_count, 1, 0, 0);
   }
   ++draws_drawn_;
+  if (stage_sampled) {
+    const uint32_t slot = uint32_t(work_ % kSlots);
+    std::vector<StageSample>& samples = stage_slot_samples_[slot];
+    const uint32_t index = uint32_t(samples.size());
+    for (uint32_t c = 0; c < kStageCounters; ++c) {
+      dkCmdBufReportCounter(cmd, kStageDk[c], core_.QueriesGpu() + stage_layout_.Offset(slot, index, c));
+    }
+    StageSample s;
+    s.cls = stage_class;
+    s.vertex_shader = d.vertex_shader;
+    s.expected_primitives = d.index_count / 3;
+    samples.push_back(s);
+  }
   // --- Run 54: the GPU's own values of a skinned draw's vertex shader (dk_shader_probe.h). The same draw once more with
   // the instrumented shader and the rasterizer off: it writes every top-level variable of main and gl_Position for the
   // first 64 vertices into a read-back block; the inputs the GPU was given are saved with them for probe_compare.py.
@@ -4020,6 +4096,8 @@ void DkRecorder::StepAb(double seconds, uint64_t frames, double gpu_busy_ms, dou
                 t.seconds > 0 ? double(t.draws) / t.seconds : 0.0, t.per_frame(double(t.draws)),
                 t.per_frame(t.gpu_busy_ms), t.per_frame(t.gpu_gap_ms), t.per_frame(double(t.materializations)),
                 t.per_frame(double(t.target_binds)), t.changed, t.rechecked, t.changed_percent());
+    const std::string what = fmt::format("phase \"{}\" (all cycles)", AbPhaseName(ab_.ended_phase()));
+    LogStageCounters(what.c_str(), stage_phase_[size_t(ab_.ended_phase())]);
   }
   const AbPhase p = ab_.phase();
   const bool placement_was = options_.placement;
@@ -4125,6 +4203,18 @@ void DkRecorder::Report() {
               probe_swapped_, probe_unswapped_, probe_started_,
               std::count_if(probes_.begin(), probes_.end(),
                             [](const auto& e) { return e.second.state == Probe::State::kReady; }));
+  // Run 62: the stage counters over the whole session every window; the characters' vertex shaders one by one every
+  // sixth window (once a minute).
+  LogStageCounters("totals", stage_totals_);
+  if (++stage_report_windows_ % 6 == 0) {
+    for (const auto& [vs, t] : stage_totals_.shaders()) {
+      REXLOG_INFO("deko3d: run 62 stage counters, totals, skinned vertex shader {:016X}: {} draws ({} short at "
+                  "assembly), triangles expected {}; input {:.3f}, clipper input {:.3f}, clipper output {:.3f}, {:.1f} "
+                  "fragments a triangle, {:.3f} samples passed a fragment",
+                  vs, t.draws, t.assembly_short, t.expected, t.assembled(), t.reached_clipper(), t.left_clipper(),
+                  t.fragments_per_triangle(), t.samples_per_fragment());
+    }
+  }
   REXLOG_INFO("deko3d: run 50 (totals): constant banks checked against the front end's {}, different: vertex c0-c63 "
               "{}, bone palette c64-c255 {}, pixel {}; constant blocks {} (vertex versions {}, pixel versions {}; inline "
               "pushes {})",

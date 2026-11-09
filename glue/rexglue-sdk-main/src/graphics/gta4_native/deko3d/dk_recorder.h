@@ -52,6 +52,7 @@
 #include "dk_placement.h"
 #include "dk_shader_probe.h"
 #include "dk_shader_package.h"
+#include "dk_stage_counters.h"
 
 namespace rex::memory {
 class Memory;
@@ -601,6 +602,17 @@ class DkRecorder final : public INativeRecorder {
   std::unordered_set<uint32_t> lock_logged_;
   DkMemBlock geometry_block_ = nullptr;
   uint64_t report_frames_ = 0, report_draws_ = 0, report_ns_ = 0;
+  // Run 62 (dk_stage_counters.h): the GPU's own counters of each pipeline stage around sampled G-buffer draws, the
+  // characters' against the scenery's. The samples of each slot's last work, read when its fence has been waited for.
+  StageCounterLayout stage_layout_;
+  StageSampler stage_sampler_;
+  std::vector<std::vector<StageSample>> stage_slot_samples_;
+  // By A/B phase (all cycles; the last entry: before the A/B began or without it) and over the whole session.
+  std::array<StageReport, size_t(AbPhase::kCount) + 1> stage_phase_{};
+  StageReport stage_totals_;
+  uint64_t stage_report_windows_ = 0;
+  void HarvestStageCounters(uint32_t slot);
+  void LogStageCounters(const char* what, const StageReport& r);
 };
 
 }  // namespace rex::graphics::gta4_native::dk

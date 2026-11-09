@@ -4054,3 +4054,109 @@ masseffect-nx `650e14e`; katamari-nx, bejeweled3-nx, renut-nx and banjo-nx were 
 No speed change ships in run 61: its one A/B is the characters' depth test, and a speed change in the same session
 would change what the captures are compared against. 30 fps at standard clocks is far (5.3 fps measured); the next
 measured step is the GPU's idle time.
+
+## 2026-11-09: run 61 read and run 62 (AJ): the depth test cleared, every link up to the clipper cleared, the GPU's own stage counters around the characters' draws
+
+### AJ1. Run 61 read (`out/console-runs/61-logs/`, 72 captures; the folder is `61-logs`, not `run61-logs`)
+
+| | |
+|---|---|
+| Run | **1,123 s** at CPU 1020 / GPU 460.8 / memory 1331.2 (every heartbeat), `+` exit (mode D, `exit(0)`), **0 faults**; 931 MiB of heap headroom at the end. 12 A/B cycles (baseline / skinned depth always), started in the intro cut-scene (frame ~4,300) and run on into gameplay. |
+| Package on the console (VERIFIED) | `gta4_deko3d_runtime.bin: 2074 shaders, 7445 DKSH ... (14670 variants, 0 without DKSH, 100311296 bytes)`: s61, the size of `run61-build`'s. **0 `run 61 shader not in the package` lines**; `drawn 19,969,364 (skipped by reason: none)`; `406 from the PC's DKSH, 0 compiled by the console's uam, 0 failed`. |
+| Depth-always phase (VERIFIED) | It ran: the phase line counts the skinned G-buffer draws drawn with compare ALWAYS (6,687 after the first cycle, 55,757 before the last); 12 phase captures (`run 58 A/B: capture of phase "skinned depth always"`). The override is applied before the depth state is bound (`dk_recorder.cpp`, `ab_skinned_depth_always_`). |
+
+**The decisive comparison: case B (VERIFIED by eye on the captures paired by the phase lines).** In every
+`skinned depth always` capture the characters are still in shards: `dk-f006173` (Niko, cut-scene: torso and arms in
+pieces, the background seen through the holes, a strip of hair standing off the head), `dk-f006518` (body in shards),
+`dk-f006854` (head and body of a character on the right), `dk-f005779` (no character; the ship's hull with the same
+dark triangular shards). The baseline captures between them (`dk-f005894`, `dk-f006307`, `dk-f009241`, `dk-f010979`)
+show the same holes. Head, torso, arms and clothes are all affected; no region is whole in one phase and broken in the
+other. **The depth test does not reject the characters' fragments; the cause is before it.** Not applied as a fix
+(it would only have hidden fragments that do arrive).
+
+**Every link up to the clipper, cleared (VERIFIED offline, `tests/deko3d/test_run62.py PROBE`).** Run 60's probe files
+hold the GPU's own `gl_Position` of every vertex of the characters' meshes and the draw's indices. For the five character
+vertex shaders (torso `9A16E1CEAD4ABA0D` 3,463 vertices, head `A2D8E2F3F87A09AE` 2,811, hair `EF7ED6F38B1F9211` 2,943,
+`6A8A2868D092BFD7` 2,559, `9023A3B988FC0EB2` 1,264): **0 NaN, 0 vertices outside 0 <= z <= w, 0 indices outside the
+mesh**. Rasterized on the PC with the title's culling (CCW kept on screen), the meshes are whole (a head and shoulders,
+the inside of the mouth and eyes the culled side). With run 55 (VS arithmetic), run 58 (cull off), run 60 (VS binary)
+and run 61 (depth): what is left is **the clipper/rasterizer, the pixel shader's kill and the stencil/sample tests on
+the console**. The characters' pixel shaders (`A980D55015FD7DF2`, `DA6733D3DA5C3DB8`, `76E0F19DF71047E7`) have one
+`discard` each, the alpha test, compiled out unless specialization bit 2 is set; the recorder sets it only for an
+alpha-tested draw (`value = 0x2 | func << 8`), and the torso is drawn without alpha test (run 60's state line).
+
+**Other findings of the read:**
+- *Character shadows.* The 512x512 skinned shadow draw of run 60's probe `5E7C32C4EF6771C0` (2,811 vertices, 4,999
+  triangles, viewport depth 1-0) has **every vertex at z/w 1.07-1.11**: the clipper removes the whole mesh (the
+  2560x2560 cascades are inside the range). Whether the title asks for depth clamping there is not logged
+  (`PA_CL_CLIP_CNTL` per draw is not in the probe), so it is **not changed** in run 62.
+- *Exposure.* The two daytime captures just after leaving the safehouse are white (`dk-f010414`, `dk-f010531`); the
+  daytime captures after them are plausibly exposed (`dk-f010979`, `dk-f011528`): an adaptation after the interior, not
+  the run 56 chain (13 EDRAM materializations a frame, 0 refused). The flickering lights of the report are not visible
+  in 20 s stills; no line measures them.
+- *Speed* (A/B totals, 24 windows a phase, cut-scene and gameplay mixed): baseline **5.82 fps, 20,990 draws/s, 3,607
+  draws a frame, GPU busy 113.9 ms + idle 57.1 ms a frame**; recorder **23.8 us a drawn draw** (totals). The title's
+  render thread (profile from 600 s, `where.py --stacks`): **35.7 % waiting at the Present for the recorder, 21.4 %
+  blocked on `front_mutex_` in `SubmitTitleCommand`**, `CaptureDraw`/`DiffRegisters` ~6 %; the recorder 47 % waiting for
+  packets, 16 % in `BeginWork`'s fence wait; the ring of 4,096 packets is full 900+ times a window in gameplay while the
+  recorder idles at other moments of the same window (bursts of draws, then the title's own work). Recorder and GPU
+  cost about the same per frame (~110-150 ms each): no single dominant cost to remove without a measurement of each.
+- *Stutter.* 0 shaders compiled on the console, 0 variants pending: no shader compile stutter. The XMA decoder and
+  file reads (thread 7: 20 % in `fsdev_read`) are the I/O seen; the startup windows are loading. No per-frame time
+  histogram exists to separate stutter from the steady cost (not measured).
+- *Audio* (110 windows): **the mixer produces 53-68 % of real time in gameplay windows** (100 % in menus), the output
+  runs dry 17-59 times a window, 1 ms a window waiting for a free buffer. The guest mixer thread (id 16) is busy in the
+  title's recompiled DSP code (`sub_82185E38` -> `sub_8216A288` -> `sub_82173688`/`sub_821743C0`/`sub_821737C0`, guest
+  128-bit vector loads and stores). **The crackle is starvation: too few samples, not a conversion or buffer error.** The
+  fix is native code for those functions (as run 51 did for `sub_8216DBB0`); not done in run 62.
+
+### AJ2. What run 62 changes
+
+1. **The GPU's own stage counters around the characters' draws** (new `dk_stage_counters.h`, `DkRecorder::Draw`): one
+   indexed G-buffer draw in four of each class (skinned = the characters, the rest = the scenery, the control), up to 32
+   a work: `dkCmdBufResetCounter` of input primitives, clipper input, clipper output, fragment invocations and samples
+   passed before the draw, `dkCmdBufReportCounter` after it, into the core's report block after the pass stamps (48,000
+   bytes of stamps + 3 x 32 x 80 bytes); read when the slot's fence has been waited for. Lines: `run 62 stage counters,
+   totals, <class>: ... input primitives N (x of expected), clipper input, clipper output, fragment invocations, samples
+   passed` with a verdict (`StageReport::Verdict`), per A/B phase at each phase's end, the characters' vertex shaders one by
+   one once a minute.
+2. **A/B `nx_dk_ab_phases = 545`**: baseline, cull off, skinned depth always. With the counters, cull off says what the
+   clipper removes besides culling (the probes say: nothing should be), depth always what is lost after the pixel shader
+   besides the depth test.
+
+What the answer leads to: assembly short = the index path on the GPU (bind, format, restart); clipper loss with cull off
+= the clip state (the shadow finding above points the same way); fragments lost = the pixel shader's kill or the stencil
+/sample state; no stage loses more for the characters than for the scenery = the triangles are written and something
+later overwrites them in the targets (placements, resolves).
+
+Not changed, with the reason: no renderer state (nothing proven against one: run 62 measures it); the shadow clip (the
+title's request is not known); the audio (needs native DSP functions: a session of its own); ZCULL, tiled cache, drawn
+resolves (no measurement of their share yet, AI7).
+
+### AJ3. Offline tests
+
+`python tests/deko3d/test_run62.py` (new; with `dk_run62_stage.cpp`): **OK** (CONFIG checked once the build folder
+exists).
+
+| Part | Result |
+|---|---|
+| STAGE | 14 checks, clang `-Wall -Werror`: layout fits the 64 KiB block after the stamps (32 a slot, aligned, distinct), sampler one in four within the room, the five verdicts and "not counted", totals and the report's value word, mask 545 = baseline, cull off, skinned depth always, cycling |
+| EVIDENCE | run 61: the depth-always phase began 12 times and changed 55,757 draws before the last, 12 phase captures, drawn 19,969,364 skipped none, missing shaders 0, the s61 package (2,074 / 7,445 / 0 without DKSH / 100,311,296 bytes), audio 53-100 % of real time over 110 windows |
+| PROBE | the five character meshes of run 60: 0 NaN, 0 outside 0 <= z <= w, 0 indices outside |
+| RECORDER | the counters reset before the draw, reported after it, harvested at the slot's reopening |
+| CONFIG | `run62-build/game.toml`: deko3d, anatomy off, A/B on, phases 545 |
+
+### AJ4. Run 62: what to do, what to bring back
+
+Standard clocks, no sys-clk / Horizon OC profile. Empty `sdmc:/switch/theft4/captures/`. Copy `theft4-dk-debug.nro`,
+`game.toml` and the whole `deko3d/` of `run62-build/` (package unchanged since run 61). The intro cut-scene to its end,
+then **at least 15 minutes of gameplay** close to people (Roman, passers-by) and in a car; `+` held 1 s. Bring back
+`game.log`, `game-crash.log`, `game-exit.log` and the whole `captures/` into `out/console-runs/run62-logs/`.
+
+Look at, in this order:
+1. `run 62 stage counters, phase "cull off"` and `phase "skinned depth always"`: the verdict, and the characters'
+   ratios against the scenery's.
+2. `run 62 stage counters, totals, skinned vertex shader 9A16E1CEAD4ABA0D` (and the other character shaders).
+3. The A/B lines: draws/s and GPU time of the phases (the counters cost a report per sampled draw: compare with run 61).
+
+Off switch: `nx_dk_ab = false` (the counters stay on: one draw in four of the G-buffer, 32 a frame at most).
