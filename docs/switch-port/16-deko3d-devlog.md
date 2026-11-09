@@ -4370,3 +4370,37 @@ folder exists).
 | WIRING | owner passed unless locked (vertices, indices), unlock/release -> `Written`, the lock mask, both cvars, the audio counter |
 
 `test_run53.py`, `test_run52.py`, `test_run51.py`: OK (the store's and the mixer's older tests).
+
+### AL4. Build
+
+`out/console-runs/run64-build/` (`build_variants.sh ... dk-debug`, `-j3`, package s61 unchanged, `out/run64-build.log`, 0
+errors, 0 warnings), built from commit `50492e5` (in `COMMIT` and in the ELF, without `-dirty`). In the ELF: `sub_8216D7E0`
+and `__imp__sub_8216D7E0` at different addresses (the native definition is the one in the function table), the `native
+routing calls` and `run 64 geometry store write signals` lines. From the Bash tool the build needs a clean environment
+with `TMP`, `TEMP` and `SYSTEMROOT` set (GCC otherwise fails with "Cannot create temporary file in C:\WINDOWS\").
+`SHA256SUMS.txt`:
+
+| File | Bytes | SHA-256 |
+|---|---|---|
+| `theft4-dk-debug.nro` | 47,319,237 | `ec7a8e93f77dcdbfdbdf12d37cef6fc52087b657f833df88c3278bee2d61a344` |
+| `switch-game-dk-debug.elf` | 324,282,216 | `72cc282a0f0e86a81dd248a471ca560dbbe50f25fd55a6aa3e856dbd22e06c43` |
+| `game.toml` | 1,477 | `447b2e957925078f8b1e5dd5f906bbb53ee3ed44ebed557234c998c75b3179e1` |
+| `deko3d/gta4_deko3d_runtime.bin` (s61) | 100,311,296 | `f4d9fdc4f41cf3ad49b8af8853d768cda386efe108ba3b15dc3856da9b01789f` |
+| `deko3d/gta4_deko3d_glsl.bin` (s61) | 43,826,659 | `b7ce84705982d12176f30136045556b1bf2668642e6f09610bae5759db419494` |
+
+### AL5. Run 64: what to do, what to bring back
+
+Standard clocks (CPU 1020 / GPU 460.8 / memory 1331.2). Empty `sdmc:/switch/theft4/captures/`. Copy `theft4-dk-debug.nro`,
+`game.toml` and the whole `deko3d/` of `run64-build/`. The intro cut-scene to its end, then **at least 10 minutes of
+gameplay** as run 63 (on foot close to people, one drive); `+` held 1 s. Bring back `game.log`, `game-crash.log`,
+`game-exit.log` and `captures/` into `out/console-runs/run64-logs/`.
+
+Neither change has run on the console yet: what is verified is the offline equivalence and the build. Look at:
+1. `recorder time per drawn draw`: vertices and index range scan against run 63's 6.6 and 2.0 us.
+2. `run 64 geometry store write signals`: hits without a hash; **content changes without a signal** (0 expected; any
+   other number says which writes pass no Lock, and the per-frame hash caught them).
+3. `audio:`: `% of real time` and `output ran dry` against run 63's 53-81 % and 30 a window; `native routing calls`
+   above 0. The sound must be the same as before (same samples by construction).
+4. `guest_profile.py game.log run64-build/switch-game-dk-debug.elf`: `sub_8216D7E0`'s share against 22.5 %.
+
+Off switches: `nx_dk_geometry_signals = false`, `nx_audio_native_routes = false`.
