@@ -22,6 +22,11 @@
 //                     storage-buffer writes, compiled by the console's uam) instead of the package's DKSH: the
 //                     characters whole in this phase and in shards in the baseline = the package's compiled vertex
 //                     shader is what places their vertices wrong (run 55's probe proved the GLSL, not that binary)
+// Run 61 adds (bit 512), after run 60 showed the characters in shards in both of its phases:
+//   skinned depth always  every skinned draw into the G-buffer (three or more colour targets and a depth target) has
+//                     its depth compare made "always" (the test and the write stay on, nothing else changes): the
+//                     characters whole in this phase = their fragments are rejected by the depth test (step 8); still in
+//                     shards = they never reach it (rasterization or the pixel shader's kill, steps 6-7)
 // No Switch headers: tests/deko3d/test_run58.py and test_run59.py drive it on the PC.
 
 #pragma once
@@ -41,6 +46,7 @@ enum class AbPhase : uint32_t {
   kPagesOff,
   kPagesOnly,
   kProbeShaders,  // run 60: skinned draws with the console-compiled instrumented vertex shader (dk_shader_probe.h)
+  kSkinnedDepthAlways,  // run 61: skinned G-buffer draws with the depth compare "always"
   kCount
 };
 
@@ -59,6 +65,7 @@ inline const char* AbPhaseName(AbPhase p) {
     case AbPhase::kPagesOff: return "pages off";
     case AbPhase::kPagesOnly: return "pages only";
     case AbPhase::kProbeShaders: return "probe shaders";
+    case AbPhase::kSkinnedDepthAlways: return "skinned depth always";
     default: return "?";
   }
 }

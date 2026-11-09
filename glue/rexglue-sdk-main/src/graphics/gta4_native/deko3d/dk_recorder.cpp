@@ -2271,6 +2271,15 @@ void DkRecorder::CollectCompiles() {
 
 // ---- Draws
 
+void DkRecorder::ShaderMissing(uint64_t hash, bool pixel) {
+  // Run 61: name the shader (0 = the title bound none), so a skipped draw is traced to its container
+  // (tools/deko3d/gta4_fxc_shaders.py's manifest lists every one the game's files hold). 64 hashes at most.
+  if (missing_shaders_logged_.size() < 64 && missing_shaders_logged_.insert(hash ^ (pixel ? 1ull << 63 : 0)).second) {
+    REXLOG_WARN("deko3d: run 61 shader not in the package: {} shader {:016X} (draw {}); its draws are skipped",
+                pixel ? "pixel" : "vertex", hash, draws_);
+  }
+}
+
 bool DkRecorder::DrawRejected(uint32_t reason, const char* text) {
   ++skipped_[reason];
   if (skipped_logged_.emplace(reason, true).second) {
@@ -2413,6 +2422,7 @@ void DkRecorder::Draw(const RecorderDraw& d) {
   // --- Shaders and the specialization value (Gta4NativeGraphicsSystem's GetOrCreatePipeline rule)
   const PackageShader* vs = d.vertex_shader ? package_.Find(d.vertex_shader, false) : nullptr;
   if (!vs) {
+    ShaderMissing(d.vertex_shader, false);
     DrawRejected(kSkipNoVertexShader, "vertex shader not in the package");
     return;
   }
@@ -2424,6 +2434,7 @@ void DkRecorder::Draw(const RecorderDraw& d) {
     const PackageShader* early = package_.Find(d.pixel_shader, false);
     const PackageShader* late = package_.Find(d.pixel_shader, true);
     if (!early) {
+      ShaderMissing(d.pixel_shader, true);
       DrawRejected(kSkipNoPixelShader, "pixel shader not in the package");
       return;
     }
@@ -2988,11 +2999,13 @@ void DkRecorder::Draw(const RecorderDraw& d) {
   // --- Run 60: the characters' vertex shaders. Each skinned G-buffer vertex shader's first state, once; in the A/B's
   // "probe shaders" phase a skinned draw whose shader has a ready probe draws with it (rasterizer on, the probe's
   // storage-buffer writes into a scratch block), so the package's DKSH is the one thing that differs from the baseline.
+  bool skinned_gbuffer = false;  // run 61: the draws the "skinned depth always" phase changes
   if (skin_weights && skin_indices && !up && !rect_list) {
     uint32_t colour_targets = 0;
     for (const SurfaceDescriptor& t : d.render_targets) {
       colour_targets += t.handle != 0;
     }
+    skinned_gbuffer = colour_targets >= 3 && d.depth_stencil.handle;
     if (colour_targets >= 3 && skinned_state_logged_.size() < 32 && skinned_state_logged_.insert(d.vertex_shader).second) {
       const core::FixedFunctionState& x = d.fixed;
       REXLOG_INFO("deko3d: run 60 skinned G-buffer draw {} vertex shader {:016X} pixel shader {:016X}: {} vertices, {} "
@@ -3140,6 +3153,10 @@ void DkRecorder::Draw(const RecorderDraw& d) {
       ds.depthTestEnable = x.depth_enable != 0;
       ds.depthWriteEnable = x.depth_enable && x.depth_write_enable;
       ds.depthCompareOp = CompareOp(x.depth_function);
+      if (ab_skinned_depth_always_ && skinned_gbuffer && ds.depthTestEnable) {
+        ds.depthCompareOp = DkCompareOp_Always;  // run 61 A/B: does the depth test reject the characters' fragments?
+        ++depth_always_draws_;
+      }
       ds.stencilTestEnable = x.stencil_enable != 0;
       ds.stencilFrontFailOp = StencilOp(x.stencil_fail);
       ds.stencilFrontPassOp = StencilOp(x.stencil_pass);
@@ -4011,6 +4028,7 @@ void DkRecorder::StepAb(double seconds, uint64_t frames, double gpu_busy_ms, dou
   ab_store_off_ = p == AbPhase::kStoreOff;
   ab_cull_off_ = p == AbPhase::kCullOff;
   ab_probe_shaders_ = p == AbPhase::kProbeShaders;
+  ab_skinned_depth_always_ = p == AbPhase::kSkinnedDepthAlways;
   if (options_.submit_copies) {
     options_.submit_copies(p != AbPhase::kCopiesOff);
   }
@@ -4026,14 +4044,15 @@ void DkRecorder::StepAb(double seconds, uint64_t frames, double gpu_busy_ms, dou
   e_.valid = false;  // the rasterizer state (culling) is emitted again
   REXLOG_INFO("deko3d: run 58 A/B phase \"{}\" begins (cycle {}): keep targets {}, placement {}, geometry store {}, "
               "submit copies {} (run 59: rewritten pages {}, promoted buffers {}), culling {}, skinned vertex shaders {} "
-              "(run 60; {} probes ready, {} draws swapped so far)",
+              "(run 60; {} probes ready, {} draws swapped so far), skinned G-buffer depth compare {} (run 61; {} draws "
+              "with it always so far)",
               AbPhaseName(p), ab_.cycle(), options_.keep_targets ? "on" : "off", options_.placement ? "on" : "off",
               ab_store_off_ ? "bypassed" : "on", p == AbPhase::kCopiesOff ? "off" : "on",
               p == AbPhase::kPagesOff ? "off" : "on", p == AbPhase::kPagesOnly ? "off" : "on",
               ab_cull_off_ ? "off" : "the title's", ab_probe_shaders_ ? "the probes' (console uam)" : "the package's",
               std::count_if(probes_.begin(), probes_.end(),
                             [](const auto& e) { return e.second.state == Probe::State::kReady; }),
-              probe_swapped_);
+              probe_swapped_, ab_skinned_depth_always_ ? "always" : "the title's", depth_always_draws_);
 }
 
 void DkRecorder::Report() {

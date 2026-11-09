@@ -209,6 +209,7 @@ class DkRecorder final : public INativeRecorder {
 
   // ---- Draws
   bool DrawRejected(uint32_t reason, const char* text);
+  void ShaderMissing(uint64_t hash, bool pixel);
   // Every draw's constant differences reach the device's banks, drawn or skipped; a drawn draw then pushes all the
   // registers that changed since its device's blocks were last brought up to date.
   void ApplyConstants(const RecorderDraw& d);
@@ -453,6 +454,8 @@ class DkRecorder final : public INativeRecorder {
   uint64_t presents_shown_ = 0, presents_without_source_ = 0;
   std::unordered_map<uint32_t, uint64_t> skipped_;  // reason -> draws
   std::unordered_map<uint32_t, bool> skipped_logged_;
+  // Run 61: the hash of every shader a draw asked for and the package lacks (case A: the draw is skipped), once each.
+  std::unordered_set<uint64_t> missing_shaders_logged_;
   uint64_t textures_created_ = 0, textures_uploaded_ = 0, bytes_uploaded_ = 0;
   uint64_t barriers_ = 0, slot_switches_ = 0, constant_pushes_ = 0;
   // Draws and binds that met a known difference from the Vulkan path (run 37 audit): counted and reported, nothing is
@@ -588,6 +591,8 @@ class DkRecorder final : public INativeRecorder {
   // scratch block nobody reads. Counted: draws swapped, skinned draws whose shader had no ready probe; the first state of
   // each skinned G-buffer vertex shader is logged once (depth, stencil, cull, clip plane, alpha test, viewport).
   bool ab_probe_shaders_ = false;
+  bool ab_skinned_depth_always_ = false;  // run 61: the A/B's "skinned depth always" phase
+  uint64_t depth_always_draws_ = 0;       // skinned G-buffer draws drawn with the depth compare "always" (run 61)
   DkMemBlock probe_scratch_ = nullptr;
   static constexpr uint32_t kProbeScratchBytes = 1u << 20;
   uint64_t probe_swapped_ = 0, probe_unswapped_ = 0;
