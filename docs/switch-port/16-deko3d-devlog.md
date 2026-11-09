@@ -4005,7 +4005,15 @@ log `run61-build.log`, 0 errors, 0 compiler warnings; built from the commit that
 `COMMIT`, without `-dirty`; the code is `2b173ea`'s). Rebuilt:
 `dk_recorder.o`, `dk_graphics_system.o`, `main.o`. The ELF holds `run 61 shader not in the package` and `skinned depth
 always` (strings checked). Note for the build from the Bash tool: its profile makes `pwd` print `C:/...`, which CMake
-then prefixes with `/c/...`; run the script under `bash --noprofile --norc`. Files and SHA-256: `SHA256SUMS.txt`.
+then prefixes with `/c/...`; run the script under `bash --noprofile --norc`. `COMMIT`: `d36131a`. `SHA256SUMS.txt`:
+
+| File | Bytes | SHA-256 |
+|---|---|---|
+| `theft4-dk-debug.nro` | 47,282,373 | `be2c60ab9877986ea111e2d00cab95aaec95f9efef84309a4c594e7f9ae7db40` |
+| `switch-game-dk-debug.elf` | 323,508,072 | `d7ae68b1c9455b25e7e10cdf1d3fb4d11d96716dfd6daf52c7a27d0806ffb986` |
+| `game.toml` | 1,592 | `1a04daab427f77d1e42f01cd9ba125bf4835312043cd1a02537e759ab00964d3` |
+| `deko3d/gta4_deko3d_runtime.bin` (s61) | 100,311,296 | `f4d9fdc4f41cf3ad49b8af8853d768cda386efe108ba3b15dc3856da9b01789f` |
+| `deko3d/gta4_deko3d_glsl.bin` (s61) | 43,826,659 | `b7ce84705982d12176f30136045556b1bf2668642e6f09610bae5759db419494` |
 
 ### AI6. Run 61: what to do, what to bring back
 
