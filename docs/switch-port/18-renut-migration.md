@@ -205,10 +205,11 @@ device runs without a GPU through boot and the loading screens, and the device's
 
 ## 7. Licences
 
-- reNut (masterspike52) has no licence file. Its author permits ChanseyIsTheBest's ports to reuse it; ChanseyIsTheBest
-  has told this project's owner that renut-nx's code may be reused here. **To settle before R2 puts ReNut's files in
-  this repository:** that permission in writing, and whether it covers masterspike52's part. R1 contains no file of
-  ReNut's.
+- reNut (masterspike52) has no licence file. **Settled on 2026-11-10:** this project's owner confirms
+  ChanseyIsTheBest's authorisation to reuse the code of his ports here and masterspike52's consent to the reuse of
+  reNut's code. From that day ReNut's files are in the repository: `thirdparty/renut/` (sa2-nx `adf3a4e`, first
+  committed unchanged: 475 files compared byte for byte with the clone), with its provenance in
+  `thirdparty/renut/README.md` and the notices in `THIRD_PARTY_NOTICES.md`.
 - banjo-nx's and sa2-nx's own parts are GPL-3.0, as this repository. plume (MIT), reblue-XenosRecomp (MIT) and uam
   (zlib / MIT / MPL-2.0 patches) come with their licences and notices, as `THIRD_PARTY_NOTICES.md` already does for
   plume.
