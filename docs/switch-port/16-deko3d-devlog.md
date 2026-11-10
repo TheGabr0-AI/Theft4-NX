@@ -4505,3 +4505,35 @@ the near characters, and only a picture taken right after the draw says which.
 | WIRING | `trust_frames` to the store; the snapshot last in the draw and at the resolve; the cvars |
 
 `test_run64.py` (and through it `test_run53.py`, `test_run52.py`, `test_run51.py`): OK.
+
+### AM5. Build
+
+`out/console-runs/run65-build/` (`build_variants.sh ... dk-debug`, `-j3`, package s61 unchanged, `out/run65-build.log`, 0
+errors, 0 warnings), built from commit `136ae66` (in `COMMIT` and in the ELF, without `-dirty`; the ELF holds the
+`character-drawn-colour` name). `SHA256SUMS.txt`:
+
+| File | Bytes | SHA-256 |
+|---|---|---|
+| `theft4-dk-debug.nro` | 47,323,333 | `6d93f08271a3d3ff404678de7486c3a1f54b27cbb772c6259718a69c7f684433` |
+| `switch-game-dk-debug.elf` | 324,406,080 | `40fbc73167733076397232624f2f1c623c2cd9954e0fa46d53db38b7def45626` |
+| `game.toml` | 1,456 | `f3afb6d16f4e3eb6a55a604825af71209cfb61e297df4cff1ad3828476b94f52` |
+| `deko3d/gta4_deko3d_runtime.bin` (s61) | 100,311,296 | `f4d9fdc4f41cf3ad49b8af8853d768cda386efe108ba3b15dc3856da9b01789f` |
+| `deko3d/gta4_deko3d_glsl.bin` (s61) | 43,826,659 | `b7ce84705982d12176f30136045556b1bf2668642e6f09610bae5759db419494` |
+
+### AM6. Run 65: a short run, what to bring back
+
+Standard clocks. Empty `sdmc:/switch/theft4/captures/`. Copy `theft4-dk-debug.nro`, `game.toml` and the whole `deko3d/`
+of `run65-build/`. **6-8 minutes:** the intro cut-scene to its end, then **2-3 minutes on foot with the camera close to
+people** (Roman, passers-by: the snapshot needs a skinned draw of 1,500 vertices or more, a near character), a short
+drive, listen to the audio; `+` held 1 s. Bring back `game.log`, `game-crash.log`, `game-exit.log` and `captures/` into
+`out/console-runs/run65-logs/`.
+
+Neither change of run 65 has run on the console. Look at, in this order:
+1. **`dk-f<frame>-a<n>-character-drawn-colour-*.png` against `...-character-resolved-colour-*.png` of the same frame**
+   (and the two depth images): the near character whole when drawn, or already in shards.
+2. `recorder time per drawn draw`: vertices and index range scan against run 64's 6.49 and 1.71 us.
+3. `run 64 geometry store write signals ... run 65`: hits from an earlier frame; content changes without a signal and
+   buffer objects back to a check a frame (0 and 0 expected; `now 1` instead of `now 8` means the trust ended).
+4. `audio:`: as run 64 (no audio change in this run).
+
+Off switches: `nx_dk_geometry_trust_frames = 1`, `nx_dk_character_snapshot = false`.
