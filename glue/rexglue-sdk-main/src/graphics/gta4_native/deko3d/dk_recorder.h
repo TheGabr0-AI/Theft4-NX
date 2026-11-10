@@ -96,6 +96,9 @@ struct RecorderOptions {
   // nx_dk_geometry_signals (run 64): a range checked in this frame is bound without hashing until its buffer object is
   // unlocked after a guest write or released (dk_geometry_store.h); false = hashed again in every epoch, as run 63.
   bool geometry_signals = true;
+  // nx_dk_geometry_trust_frames (run 65): frames between two hashes of a range whose buffer object had no write signal
+  // (run 64: 0 changes without a signal of 371 on the console); 1 = every frame, as run 64.
+  uint32_t geometry_trust_frames = 8;
   // nx_dk_depth_bias (run 55): the title's depth bias at every stage, as the Vulkan path (through run 54: only at stage 4)
   bool depth_bias = true;
   // nx_dk_depth_only (run 55, banjo-nx's depth-only draws): a draw that writes no colour, without alpha test or alpha to
@@ -109,6 +112,10 @@ struct RecorderOptions {
   // destination named in the file), so a picture fault is placed at the first target that shows it; false = only the
   // shown frame.
   bool anatomy = false;
+  // nx_dk_character_snapshot (run 65): on every second capture frame (eight in a run), the G-buffer's first colour
+  // target and its depth are saved right after each of the first three large skinned draws, and again when the title
+  // resolves them: the same frame's characters as drawn and as the lighting reads them.
+  bool character_snapshot = false;
   // nx_dk_placement (run 57, dk_placement.h, the Vulkan path's placement owners): a colour surface used while another
   // surface of the same EDRAM placement holds the content gets that content first (copy or sample-layout conversion);
   // false = every surface keeps only what was drawn into it, as through run 56.
@@ -426,6 +433,11 @@ class DkRecorder final : public INativeRecorder {
   static constexpr uint64_t kAnatomyMaxBytes = 16ull << 20;
   bool anatomy_frame_ = false;
   uint32_t anatomy_taken_ = 0, anatomy_images_ = 0, captures_requested_ = 0;
+  // Run 65: the character snapshot frame (nx_dk_character_snapshot).
+  static constexpr uint32_t kSnapshotEvery = 2, kSnapshotFrames = 8, kSnapshotDraws = 3, kSnapshotMinVertices = 1500;
+  bool snapshot_frame_ = false;
+  uint32_t snapshot_taken_ = 0, snapshot_requested_ = 0, snapshot_draws_ = 0;
+  std::unordered_set<uint32_t> snapshot_surfaces_;
   uint64_t anatomy_ns_ = 0;
   DkMemBlock anatomy_block_ = nullptr;
   uint32_t anatomy_bytes_ = 0;

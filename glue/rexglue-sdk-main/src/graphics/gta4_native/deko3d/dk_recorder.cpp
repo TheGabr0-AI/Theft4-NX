@@ -385,6 +385,7 @@ bool DkRecorder::Initialize() {
     g.mb = options_.geometry_mb;
     g.trust_epoch = options_.geometry_trust;
     g.trust_signals = options_.geometry_signals;
+    g.trust_frames = std::max<uint32_t>(options_.geometry_trust_frames, 1);
     const bool made = geometry_.Create(
         g, kSlots,
         [this](uint32_t bytes) -> std::pair<uint8_t*, DkGpuAddr> {
@@ -1336,6 +1337,12 @@ void DkRecorder::Resolve(const RecorderResolve& r) {
   DkImageEntry* source = Surface(c.source, depth);
   if (!source) {
     return;
+  }
+  // Run 65: the surface a snapshot saved after a character's draw, as the title resolves it in the same frame.
+  if (snapshot_frame_ && snapshot_surfaces_.erase(c.source.handle)) {
+    AnatomyCapture(*source, c.source.handle, c.destination_texture,
+                   depth ? "character-resolved-depth" : "character-resolved-colour");
+    EnsureWork();
   }
   // Run 57: a surface the title resolves without ever drawing into it (run 56: GTA IV's whole luminance chain) holds
   // what another surface of its EDRAM placement wrote.
@@ -3867,6 +3874,19 @@ void DkRecorder::Draw(const RecorderDraw& d) {
       pass.pixel_shader = d.pixel_shader;
     }
   }
+  // Run 65 (nx_dk_character_snapshot): the G-buffer as it is right after a large skinned draw, to set beside the same
+  // surfaces at their resolve in this frame. Last in the draw: the read-back closes the work and forgets the state.
+  if (snapshot_frame_ && skinned_gbuffer && vertex_count >= kSnapshotMinVertices && snapshot_draws_ < kSnapshotDraws) {
+    ++snapshot_draws_;
+    if (const DkImageEntry* colour = Surface(d.render_targets[0], false)) {
+      snapshot_surfaces_.insert(d.render_targets[0].handle);
+      AnatomyCapture(*colour, d.render_targets[0].handle, uint32_t(d.sequence), "character-drawn-colour");
+    }
+    if (const DkImageEntry* depth = Surface(d.depth_stencil, true)) {
+      snapshot_surfaces_.insert(d.depth_stencil.handle);
+      AnatomyCapture(*depth, d.depth_stencil.handle, uint32_t(d.sequence), "character-drawn-depth");
+    }
+  }
   record_ns_ += NowNs() - start_ns;
 }
 
@@ -3937,6 +3957,14 @@ void DkRecorder::Present(const RecorderPresent& p) {
                     frames_.load(), anatomy_images_, double(anatomy_ns_) / 1e6);
         anatomy_ns_ = 0;
       }
+      if (snapshot_frame_) {
+        snapshot_frame_ = false;
+        ++snapshot_taken_;
+        REXLOG_INFO("deko3d: run 65 character snapshot frame {} done: {} large skinned draws saved as drawn, {} images, "
+                    "the frame stalled {:.0f} ms for the read-backs (not a benchmark frame)",
+                    frames_.load(), snapshot_draws_, anatomy_images_, double(anatomy_ns_) / 1e6);
+        anatomy_ns_ = 0;
+      }
       // A capture of the frame every nx_dk_capture_s seconds.
       if (capture_next_ns_ && NowNs() >= capture_next_ns_ && !capture_.pending &&
           source->format == DkImageFormat_RGBA8_Unorm) {
@@ -3945,6 +3973,14 @@ void DkRecorder::Present(const RecorderPresent& p) {
         // Run 56: every kAnatomyEvery-th capture is followed by an anatomy frame (nx_dk_anatomy).
         if (options_.anatomy && anatomy_taken_ < kAnatomyFrames && captures_requested_++ % kAnatomyEvery == 0) {
           anatomy_frame_ = true;
+          anatomy_images_ = 0;
+        }
+        // Run 65: every kSnapshotEvery-th capture is followed by a character snapshot frame.
+        if (options_.character_snapshot && !anatomy_frame_ && snapshot_taken_ < kSnapshotFrames &&
+            snapshot_requested_++ % kSnapshotEvery == 0) {
+          snapshot_frame_ = true;
+          snapshot_draws_ = 0;
+          snapshot_surfaces_.clear();
           anatomy_images_ = 0;
         }
       }
@@ -4356,8 +4392,10 @@ void DkRecorder::Report() {
                 geometry_.total_bytes() >> 20, geometry_.entries(), g.trusted_hits);
     REXLOG_INFO("deko3d: run 64 geometry store write signals (totals; nx_dk_geometry_signals {}): hits without a hash "
                 "(checked this frame, their buffer not written since) {}, write signals (guest-write unlocks and "
-                "releases) {}, content changes without a signal {} of {} changes",
-                options_.geometry_signals ? "on" : "off", g.signal_hits, g.signals, g.changes_unsignalled, g.changes);
+                "releases) {}, content changes without a signal {} of {} changes; run 65: of those hits {} from a check "
+                "in an earlier frame (nx_dk_geometry_trust_frames {}, now {}), {} buffer objects back to a check a frame",
+                options_.geometry_signals ? "on" : "off", g.signal_hits, g.signals, g.changes_unsignalled, g.changes,
+                g.frame_hits, options_.geometry_trust_frames, geometry_.trust_frames(), g.distrusted);
   }
   REXLOG_INFO("deko3d: packed depth alias (A8R8G8B8 fetches of a resolved depth; totals): pass {}, {} conversions, {} "
               "fetches served by one already converted, {} failed, {} other depth/colour mix-ups, {} aliases live; "

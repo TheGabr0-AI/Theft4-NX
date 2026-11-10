@@ -87,6 +87,7 @@ void GeometryStore::Clear() {
   free_.clear();
   pending_.clear();
   signals_.clear();
+  distrusted_.clear();
   used_bytes_ = 0;
   total_bytes_ = 0;
 }
@@ -181,12 +182,14 @@ GeometryStore::Result GeometryStore::Lookup(const uint8_t* data, uint64_t key_ad
     }
     return {};
   } else if (options_.trust_signals && owner && !(mode >> 63) && e.size && !e.shared && e.owner == owner &&
-             e.checked_frame == frame_ && e.signal == SignalOf(owner)) {
+             frame_ - e.checked_frame < std::max<uint32_t>(options_.trust_frames, 1) && e.signal == SignalOf(owner) &&
+             (e.checked_frame == frame_ || !distrusted_.count(owner))) {
     // Run 64: checked in this frame through this buffer object, which the title has not unlocked after a write nor
     // released since (the stream's order): the stored block is the range as the draw's submit saw it.
     e.epoch = epoch_;  // Written() starts an epoch, so the rest of this one needs no signal lookup
     ++stats_.hits;
     ++stats_.signal_hits;
+    stats_.frame_hits += e.checked_frame != frame_;
     stats_.hit_bytes += bytes;
     return {&e, gpu_ + e.offset, e.lo, e.hi};
   } else if (e.volatile_until > frame_) {
@@ -263,7 +266,15 @@ GeometryStore::Result GeometryStore::Lookup(const uint8_t* data, uint64_t key_ad
   }
   // Changed: a new block next time it is stable; changing again, to the ring for a while.
   ++stats_.changes;
-  stats_.changes_unsignalled += unannounced;
+  if (unannounced) {
+    // Run 65: this object's bytes changed with no unlock or release in the stream: its ranges every frame from now on,
+    // and after kUnsignalledLimit such changes every range (the signals are not complete in this session).
+    ++stats_.changes_unsignalled;
+    stats_.distrusted += distrusted_.insert(owner).second;
+    if (stats_.changes_unsignalled >= kUnsignalledLimit) {
+      options_.trust_frames = 1;
+    }
+  }
   e.hash = hash;
   e.phases_valid = with_phases;
   std::copy(phases, phases + kPhases, e.phases);

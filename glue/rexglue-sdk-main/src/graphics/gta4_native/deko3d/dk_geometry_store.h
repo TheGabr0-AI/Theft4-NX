@@ -33,6 +33,13 @@
 // not yet checked in this frame (every range is still hashed once a frame: a write that passed no Lock is found then,
 // and counted apart as `changes_unsignalled`).
 //
+// Run 65 (trust_frames, cvar nx_dk_geometry_trust_frames): run 64 on the console counted 0 content changes without a
+// signal of 371 in 868 s, and the per-frame check still hashed 14.4 M of 25.6 M lookups (a range is mostly drawn once a
+// frame). A range checked through its object within the last `trust_frames` frames, the object unsignalled since, is
+// bound without hashing; it is hashed again every `trust_frames` frames. A change found without a signal marks that
+// object (its ranges are checked every frame from then on), and the eighth such change ends the trust across frames
+// for every range: the measure that allowed it no longer holds.
+//
 // Not kept: ranges seen once (admitted the second time), and changing ranges (changed twice in a row: to the ring,
 // unhashed, for 64 frames). When full, the ranges unused longest go first, never one used in this frame or the last.
 // One thread: the recorder's.
@@ -52,6 +59,7 @@ using DkGpuAddr = uint64_t;  // tests/deko3d/test_run52.py builds this on the PC
 #include <deque>
 #include <functional>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -89,6 +97,8 @@ class GeometryStore {
     uint64_t signal_hits = 0;     // hits answered without hashing (trust_signals: checked this frame, owner not written)
     uint64_t signals = 0;         // Written() calls
     uint64_t changes_unsignalled = 0;  // of `changes`: an owned range whose owner had no write signal since its check
+    uint64_t frame_hits = 0;      // of `signal_hits`: checked in an earlier frame (trust_frames, run 65)
+    uint64_t distrusted = 0;      // buffer objects checked every frame again after a change without a signal
   };
 
   struct Options {
@@ -96,6 +106,7 @@ class GeometryStore {
     bool trust_epoch = false;   // nfsmw: a range checked once is trusted until the next work, frame or guest wait
     bool sampling = false;      // nfsmw: stored ranges rechecked by a rotating 1/8 of their lines
     bool trust_signals = false;  // run 64: checked once a frame, again after its buffer object's write signal
+    uint32_t trust_frames = 1;   // run 65: with trust_signals, frames between two checks of an unsignalled range
   };
 
   GeometryStore() = default;
@@ -181,6 +192,8 @@ class GeometryStore {
   uint64_t used_bytes() const { return used_bytes_; }
   uint64_t total_bytes() const { return total_bytes_; }
   size_t entries() const { return table_.size(); }
+  uint32_t trust_frames() const { return options_.trust_frames; }  // 1 once the trust across frames has ended
+  static constexpr uint64_t kUnsignalledLimit = 8;
 
   struct Entry {
     uint64_t data = 0;
@@ -252,6 +265,7 @@ class GeometryStore {
   uint64_t swept_ = 0;
   std::unordered_map<uint32_t, uint64_t> signals_;  // buffer object -> the serial of its last write signal
   uint64_t signal_serial_ = 0;
+  std::unordered_set<uint32_t> distrusted_;  // run 65: objects that changed without a signal
   Stats stats_;
 };
 

@@ -235,6 +235,10 @@ REXCVAR_DEFINE_INT32(nx_dk_ab_phases, 0, "Switch",
 REXCVAR_DEFINE_BOOL(nx_dk_anatomy, false, "Switch",
                     "nx_gpu = deko3d (run 56): with nx_dk_capture_s, every resolve of the captured frame is saved as a "
                     "PNG too (sdmc:/switch/theft4/captures/dk-f<frame>-r<n>-<source>-<destination>.png)");
+REXCVAR_DEFINE_BOOL(nx_dk_character_snapshot, false, "Switch",
+                    "nx_gpu = deko3d (run 65): with nx_dk_capture_s, on every second capture frame (eight in a run) the "
+                    "G-buffer's first colour target and depth are saved right after each of the first three large "
+                    "skinned draws and again at their resolve (captures/dk-f<frame>-a<n>-character-...png)");
 REXCVAR_DEFINE_BOOL(nx_dk_geometry_trust, true, "Switch",
                     "nx_gpu = deko3d (run 53): the geometry store trusts a range checked once until the next work, frame "
                     "or non-draw command (nfsmw-nx's epoch); false = every lookup hashes the whole range, as run 52");
@@ -242,6 +246,9 @@ REXCVAR_DEFINE_BOOL(nx_dk_geometry_signals, true, "Switch",
                     "nx_gpu = deko3d (run 64): the geometry store binds a range checked in this frame without hashing it "
                     "again until its buffer object is unlocked after a guest write or released; false = hashed again in "
                     "every epoch, as run 63");
+REXCVAR_DEFINE_INT32(nx_dk_geometry_trust_frames, 8, "Switch",
+                     "nx_gpu = deko3d (run 65): with nx_dk_geometry_signals, frames between two hashes of a stored range "
+                     "whose buffer object had no write signal; 1 = every frame, as run 64");
 REXCVAR_DEFINE_INT32(nx_dk_geometry_mb, 96, "Switch",
                      "nx_gpu = deko3d (run 52): MiB of the geometry store (nfsmw-nx's): vertex ranges seen before with "
                      "the same bytes are bound from it, not copied and swapped again; 0 = off, as through run 51");
@@ -3853,6 +3860,7 @@ void StartupSummary() {
       dk.geometry_mb = uint32_t(std::max(0, int(REXCVAR_GET(nx_dk_geometry_mb))));
       dk.geometry_trust = REXCVAR_GET(nx_dk_geometry_trust);
       dk.geometry_signals = REXCVAR_GET(nx_dk_geometry_signals);
+      dk.geometry_trust_frames = uint32_t(std::max(1, int(REXCVAR_GET(nx_dk_geometry_trust_frames))));
       dk.texture_lock_readback = REXCVAR_GET(nx_dk_texture_lock_readback);
       // Run 55: the read-backs only in the diagnostic mode (nx_dk_diagnostics); the normal mode pays for none of them.
       dk.skin_diff = REXCVAR_GET(nx_dk_diagnostics) ? uint32_t(std::max(0, int(REXCVAR_GET(nx_dk_skin_diff)))) : 0;
@@ -3860,6 +3868,7 @@ void StartupSummary() {
       dk.depth_only = REXCVAR_GET(nx_dk_depth_only);
       dk.vs_prune = REXCVAR_GET(nx_dk_vs_prune);
       dk.anatomy = REXCVAR_GET(nx_dk_anatomy);
+      dk.character_snapshot = REXCVAR_GET(nx_dk_character_snapshot);
       dk.placement = REXCVAR_GET(nx_dk_placement);
       dk.keep_targets = REXCVAR_GET(nx_dk_keep_targets);
       dk.ab_phases = REXCVAR_GET(nx_dk_ab);

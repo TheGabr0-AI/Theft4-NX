@@ -4404,3 +4404,104 @@ Neither change has run on the console yet: what is verified is the offline equiv
 4. `guest_profile.py game.log run64-build/switch-game-dk-debug.elf`: `sub_8216D7E0`'s share against 22.5 %.
 
 Off switches: `nx_dk_geometry_signals = false`, `nx_audio_native_routes = false`.
+
+## 2026-11-10: run 64 read and run 65 (AM): the store trusted across frames; the characters as drawn against as resolved
+
+### AM1. Run 64 read on the console (`out/console-runs/run64-logs/`, 41 captures; `tests/deko3d/test_run65.py SWITCH`)
+
+Console measures only (CPU 1020 / GPU 460.8 / memory 1331.2). The two sessions are different play (867 s against
+1,140 s), so small differences are not attributed.
+
+| | Run 63 | Run 64 |
+|---|---|---|
+| Stability | 1,140 s, 0 faults, 0 draws skipped | **867 s, 0 faults, 0 draws skipped**, `+` exit, 935 MiB headroom |
+| Recorder, us a drawn draw | 24.26 (vertices 6.55, index range scan 1.97) | **23.59 (vertices 6.49, index range scan 1.71)** |
+| Store: lookups hashed | 23.68 M of 34.86 M (68 %), 5,661 bytes a lookup | **14.42 M of 25.57 M (56 %), 5,250 bytes a lookup**; 3.04 M answered by write signal |
+| Content changes | 448 | 371, **0 without a write signal**; 5,336 signals |
+| Audio (windows below 90 %) | 61.4 % of real time, output dry 29.8 times a window (108 windows) | **66.3 %, 24.0 times** (79 windows) |
+| Mixer thread, routing function + voice loop | **30.9 %** (`sub_8216D7E0` 22.5 + `sub_8216DBB0` 8.4) | **8.6 %** (one function now); 31.6 M native routing calls |
+| Mixer thread, next | `sub_82185E38` 8.0, `sub_828C6740` 5.9, `sub_82188C28` 2.9 | `sub_82185E38` 8.2, `sub_828C6740` 6.6, `sub_82188C28` 3.2 |
+
+What that says:
+- **The write-signal check works and is safe, and gains little by itself.** 12 % of the lookups were answered by signal,
+  the recorder's vertex and index parts moved by 0.06 and 0.26 us (-3 % of the recorder's time, inside the difference
+  between two sessions). The PC benchmark of run 64 (-47 %) assumed every range drawn in two epochs a frame; on the
+  console most ranges are looked up in one epoch a frame, so the per-frame hash is what is left. **The PC figure was
+  not a prediction of the console.** The useful result is the count: **0 of 371 changes without a signal**.
+- **The native routing function does on the console what the equivalence test said**: its share of the mixer thread
+  fell from 30.9 % to 8.6 %. The audio is still short (66 % of real time, 24 dry outputs a window): the thread stays at
+  95 % of a core, the freed time went to mixing more, not to idling. No regression heard or logged. The picture is as
+  run 63's (characters in shards).
+
+### AM2. The characters: the index path, and where the fault can still be
+
+The path was read end to end: guest index bytes (`TranslateVirtual`, the same view the title writes) ->
+`ConvertIndices` (big-endian 16 or 32 bit to host, lo/hi) -> the geometry store's block or the upload ring (both
+CPU-uncached, written once, before the work is submitted) -> `dkCmdBufBindIdxBuffer(format, address)` ->
+`dkCmdBufDrawIndexed(count, firstIndex 0, vertexOffset -lo)` with each stream bound at `base vertex + lo`.
+
+**What existing console data says about the indices the GPU reads (VERIFIED, `test_run65.py INDICES`):** run 60's probe
+draws the same draw once more with the same index binding and a vertex shader that writes `gl_Position` into a block
+pre-filled with ones, at `gl_VertexID`. In all 24 probed skinned meshes **no vertex slot is left unwritten** (0 of
+their vertices), and the draw's own indices name every vertex: the GPU's index stream reached every vertex of each
+mesh, the head (4,999 triangles) and the near jacket among them. An index buffer that was truncated, stale, shifted or
+read in the wrong format leaves slots unwritten or writes outside the range; none did. This is not a byte comparison of
+the index memory, but with run 55/60's positions (right) and run 62's counters (every triangle assembled) it leaves no
+room for a wrong index stream in the probed draws.
+
+Also closed in this session (offline, on the installed library and the package):
+- **User clip distances are off in deko3d**: the disassembly of the installed `libdeko3d.a` has no write of the
+  clip-distance enable register (Maxwell 3D 0x544) in its queue set-up or anywhere else; the `gl_ClipDistance[0]` every
+  vertex shader of the package writes is ignored (and it is the constant 0 while the title's plane is off).
+- The pixel shaders' `gl_SampleMask` is all ones unless alpha to mask is on; `discard` only in the alpha-test variants.
+- The holes follow triangle edges, not a 16-pixel grid (`dk-f005603-a11` enlarged): not ZCULL or a tile artefact.
+- Run 57's anatomy resolves the first colour target twice in a frame with equal images: no earlier state of it exists
+  in any capture.
+
+**Not proven, so not changed:** the cause. Everything measured so far holds for the draw as the probe repeats it; what
+no run has is the same frame's character **as drawn** next to **as resolved**. Run 62's counters say the triangles are
+written, run 63's tracker says nothing rewrites them, and the pictures say they are gone: one of the three is wrong for
+the near characters, and only a picture taken right after the draw says which.
+
+### AM3. What run 65 changes
+
+1. **The geometry store trusts a range across frames** (`dk_geometry_store.h/.cpp` `Options::trust_frames`, cvar
+   `nx_dk_geometry_trust_frames`, default 8). *Why now:* AM1's count (0 of 371 changes without a signal on the console)
+   is the measure run 64 said it needed. *Before (run 64):* a range was hashed once a frame. *Now:* a range checked
+   through its buffer object within the last 8 frames, the object without a write signal since, is bound without
+   hashing, and hashed again every 8 frames. *Guard:* a change found without a signal sends that object back to a check
+   every frame; the eighth such change in a session ends the trust across frames for every range (`trust_frames` 1, run
+   64's behaviour). The exclusions of run 64 stay (submit copies, buffers locked at the draw, ranges met through two
+   objects). *Exposure, stated:* if a write passes no Lock, the old range can be drawn for at most 7 frames, once per
+   object, 8 objects at most; run 64 met no such write.
+   *Line:* `run 64 geometry store write signals (totals) ...; run 65: of those hits N from a check in an earlier frame
+   (nx_dk_geometry_trust_frames 8, now 8), M buffer objects back to a check a frame`.
+2. **The characters as drawn and as resolved, in the same frame** (`nx_dk_character_snapshot`, on in run 65's
+   `game.toml`): on every second capture frame (eight in a run) the G-buffer's first colour target and its depth are
+   saved right after each of the first three skinned draws of 1,500 vertices or more, and again when the title
+   resolves those surfaces. Files `dk-f<frame>-a<n>-character-drawn-colour|depth-<surface>-<draw>.png` and
+   `...-character-resolved-colour|depth-...png`. This is a read-back, not a counter: it uses run 56's capture path, stalls
+   those eight frames only, and changes no draw. **It is the one measurement in this run; it is there because no fix for
+   the characters is proven and this picture decides between the two halves left**: whole when drawn = something later
+   removes them (then the draws between are the suspects, with their state); already in shards when drawn = the
+   rasterizer's inputs differ from the probe's repeat of the draw.
+3. Nothing else: the audio code is run 64's (attribution: one audio change measured per run). `sub_82185E38` (8.2 % of
+   the mixer thread, with its resampler `sub_82188C28` 3.2 %) is the next function to write natively, then
+   `sub_828C6740` (6.6 %): each needs its own run against the generated body, as `sub_8216D7E0` had. Not done in run 65:
+   `sub_82185E38` is a dispatcher over ~40 resamplers reached through a table, so the first step is which of them the
+   title uses (the profile names one), and that is a session of its own.
+
+### AM4. Offline tests
+
+`python tests/deko3d/test_run65.py` (new; `dk_run65_store.cpp`): **OK** (CONFIG once the build folder exists).
+
+| Part | Result |
+|---|---|
+| FRAMES | 162,000 draws, every write with its signal: **0 ranges bound with other bytes** at `trust_frames` 1 and 8; 34,934 lookups answered from an earlier frame's check; bytes hashed 79,850 -> 34,733 KiB |
+| RAW | 164 writes with no Lock: 1 old range bound (in the frame after the write), 8 objects sent back to a check a frame, the trust across frames ended (`trust_frames` 1) and **0 old ranges bound after that** |
+| BENCH (this PC, not the console) | run 63's shape: 258 -> 64 ns a lookup, 2,677 -> 334 bytes hashed a lookup |
+| SWITCH | AM1's table from the two logs and ELFs |
+| INDICES | 24 probed skinned meshes of run 60: 0 vertices the GPU left unwritten, 0 vertices the indices never name |
+| WIRING | `trust_frames` to the store; the snapshot last in the draw and at the resolve; the cvars |
+
+`test_run64.py` (and through it `test_run53.py`, `test_run52.py`, `test_run51.py`): OK.

@@ -357,11 +357,13 @@ void Deko3dGraphicsSystem::RecorderMain() {
   ro.geometry_mb = options_.geometry_mb;
   ro.geometry_trust = options_.geometry_trust;
   ro.geometry_signals = options_.geometry_signals;
+  ro.geometry_trust_frames = options_.geometry_trust_frames;
   ro.skin_diff = options_.skin_diff;
   ro.depth_bias = options_.depth_bias;
   ro.depth_only = options_.depth_only;
   ro.vs_prune = options_.vs_prune;
   ro.anatomy = options_.anatomy;
+  ro.character_snapshot = options_.character_snapshot;
   ro.placement = options_.placement;
   ro.keep_targets = options_.keep_targets;
   ro.ab_phases = options_.ab_phases;
