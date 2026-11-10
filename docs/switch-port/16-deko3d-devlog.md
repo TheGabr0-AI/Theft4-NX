@@ -4537,3 +4537,20 @@ Neither change of run 65 has run on the console. Look at, in this order:
 4. `audio:`: as run 64 (no audio change in this run).
 
 Off switches: `nx_dk_geometry_trust_frames = 1`, `nx_dk_character_snapshot = false`.
+
+## 2026-11-10: the migration to ReNut's renderer starts (AN); run 65 not read
+
+The user's decision: ReNut + plume + deko3d becomes the base (`18-renut-migration.md`: the audit of Theft4-NX, renut-nx
+and sa2-nx, the comparison table, the transfer list of Chansey's optimisations, steps R1-R6). This recorder stays as the
+fallback until the new renderer draws a real scene right.
+
+- **Run 65 was not read: `out/console-runs/run65-logs/` does not exist.** Whether the characters are in shards when
+  drawn is still not known, and no run is spent on it.
+- GTA IV links **Direct3D 2.0.6274**, older than the two XDKs ReNut has been on. Its device layout and the 16 functions
+  of step R1 were read from the European base's code (`tools/renut-gta4/gta4_d3d.h`, `tests/renut/test_gta4_d3d.py`:
+  65 instructions in 21 functions, OK).
+- **Step R1 (PC only, no picture):** `gta4_renderer = renut` runs the game's Direct3D without a GPU (ReNut's device
+  design). Result: boot and loading screens run without a fault; **it stalls at the first frame of the 3D scene** (18,
+  section 6, the open obstacle). Nothing of this has run on the console, and nothing here changes the Switch build
+  except two local generated files whose calls of 16 functions went back to their hookable names (same code without a
+  hook).

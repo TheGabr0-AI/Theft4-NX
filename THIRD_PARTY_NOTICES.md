@@ -15,5 +15,12 @@ any of it: the game's shaders are translated on the user's machine from the user
 | [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross) (`vulkan-sdk-1.4.304.0`) | not stored: a PC tool | SPIR-V to GLSL | Apache-2.0 |
 | [deko3d](https://github.com/devkitPro/deko3d) by fincs | devkitPro's package (`libdeko3d.a`, `libdeko3dd.a`) | the Switch GPU API | zlib |
 
+Design followed, no file taken: `tools/renut-gta4` (the game's Direct3D on a ring sink, with the device created
+through the library's no-hardware path) follows the design of [reNut](https://github.com/masterspike52/reNut) by
+masterspike52 as [renut-nx](https://github.com/ChanseyIsTheBest/renut-nx) and
+[sa2-nx](https://github.com/ChanseyIsTheBest/sa2-nx) (ChanseyIsTheBest) carry it, written here for GTA IV's Direct3D
+from GTA IV's own code (`docs/switch-port/18-renut-migration.md`, section 7: what must be settled before reNut's own
+files are put in this repository).
+
 Not taken: Renut's renderer (sa2-nx `app/src/renut_engine`), which has no licence file; LibertyRecompAndroid's
 `*_guest.inc` files and kabba536's `switch_audio_fast.cpp`, which are translated game code.

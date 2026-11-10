@@ -38,6 +38,12 @@
 
 #include "gta4_init.h"
 
+#if THEFT4_RENUT
+#include <rex/system/null_graphics_system.h>
+
+#include "gta4_renut_select.h"
+#endif
+
 
 REXCVAR_DEFINE_BOOL(pc_audio, false, "pc-eu-base",
                     "Host audio (SDL). Off by default, as in switch-game, which has no audio "
@@ -132,6 +138,15 @@ class EuBaseApp final : public rex::ReXApp {
   void OnPreSetup(rex::RuntimeConfig& config) override {
     // ReXGlue's emulated GPU, as in phase (a) of 06 section 11. SetupPresentation
     // has already copied the cvar into config, so the default goes there.
+#if THEFT4_RENUT
+    // docs/switch-port/18-renut-migration.md: with gta4_renderer = "renut" the game's
+    // Direct3D runs on ReNut's hooks (tools/renut-gta4), with no emulated GPU.
+    if (theft4::renut::Selected()) {
+      config.gpu_plugin.clear();
+      config.graphics = rex::system::CreateNullGraphicsSystem();
+      REXLOG_INFO("pc-eu-base: gta4_renderer = renut (step R1: Direct3D without a GPU, no picture)");
+    } else
+#endif
     if (config.gpu_plugin.empty()) {
       config.gpu_plugin = "xenos";
     }

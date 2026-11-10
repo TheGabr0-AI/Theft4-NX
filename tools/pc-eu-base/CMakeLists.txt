@@ -133,6 +133,35 @@ if(THEFT4_NATIVE_HOOKS)
   endforeach()
 endif()
 # rexui brings imgui and SDL3, which rex_app.cpp and the SDL main need.
+# ReNut's Direct3D-level path (docs/switch-port/18-renut-migration.md), chosen at boot with
+# gta4_renderer = "renut"; "xenos" (the default) keeps the emulated GPU and every hook runs the
+# game's original function. Its hooks are at addresses the native renderer's hooks and the
+# counting wrappers also take, so it has its own build:
+#   -DTHEFT4_RENUT=ON -DTHEFT4_GTA4_NATIVE=OFF -DTHEFT4_NATIVE_HOOKS=OFF
+# and the generated code must call the hooked functions by their hookable names:
+#   python tools/renut-gta4/weak_calls.py
+option(THEFT4_RENUT "ReNut's Direct3D-level renderer path, selectable with gta4_renderer" OFF)
+if(THEFT4_RENUT)
+  if(THEFT4_GTA4_NATIVE OR THEFT4_NATIVE_HOOKS OR THEFT4_D3D_CENSUS)
+    message(FATAL_ERROR "THEFT4_RENUT hooks the same Direct3D functions as THEFT4_GTA4_NATIVE, "
+                        "THEFT4_NATIVE_HOOKS and THEFT4_D3D_CENSUS: turn those off")
+  endif()
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  execute_process(
+    COMMAND "${Python3_EXECUTABLE}" "${THEFT4_ROOT}/tools/renut-gta4/weak_calls.py"
+            --gen "${THEFT4_GENERATED_DIR}" --check
+    RESULT_VARIABLE THEFT4_RENUT_WEAK_CALLS)
+  if(NOT THEFT4_RENUT_WEAK_CALLS EQUAL 0)
+    message(FATAL_ERROR "THEFT4_RENUT: the generated code still calls hooked Direct3D functions "
+                        "directly: run python tools/renut-gta4/weak_calls.py")
+  endif()
+  target_sources(theft4-eu-base PRIVATE "${THEFT4_ROOT}/tools/renut-gta4/gta4_renut_device.cpp")
+  target_include_directories(theft4-eu-base PRIVATE "${THEFT4_ROOT}/tools/renut-gta4")
+  target_compile_definitions(theft4-eu-base PRIVATE THEFT4_RENUT=1)
+  # The link map names the function of a fault address (renut-faults.txt).
+  target_link_options(theft4-eu-base PRIVATE "LINKER:/MAP:theft4-eu-base.map")
+endif()
+
 target_link_libraries(theft4-eu-base PRIVATE rex::runtime rexui)
 if(THEFT4_GTA4_NATIVE)
   target_sources(theft4-eu-base PRIVATE
