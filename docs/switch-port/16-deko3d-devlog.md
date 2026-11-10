@@ -4554,3 +4554,42 @@ fallback until the new renderer draws a real scene right.
   section 6, the open obstacle). Nothing of this has run on the console, and nothing here changes the Switch build
   except two local generated files whose calls of 16 functions went back to their hookable names (same code without a
   hook).
+
+## 2026-11-10: run 65 read (AO): the characters are in shards when drawn
+
+`out/console-runs/run65-logs/` came back after the migration audit of §AN. Build `136ae66` (the log's build line; the
+NRO, ELF, `game.toml` and package of `run65-build/` match `SHA256SUMS.txt`). 822 s at standard clocks, exit with `+`,
+0 faults, 0 draws skipped. 87 PNG: 43 frame captures and 44 snapshot images.
+
+**The question of §AM3 is answered: already in shards when drawn.** Snapshot frames 899 and 3194 had no large skinned
+draw; six frames have them (3964, 4305, 4784, 5344, 5610, 5877).
+
+- The G-buffer right after the first three large skinned draws holds only the characters on a cleared target: they
+  are drawn before the scenery. Nothing drawn earlier can hide or overwrite them at that moment, and the holes are
+  there (frame 5344 `a04`, frame 5877 `a04`: the face and the jacket in polygon-edged pieces, some pieces displaced).
+- Same frame, at the resolve: the same shards, with the scenery showing through the holes. Of the pixels the
+  characters had lit when drawn, those within 2/255 at the resolve: frame 4305 99.5 %, 4784 99.9 %, 5344 95.6 %,
+  5610 90.8 %, 5877 98.9 % (the rest is scenery drawn in front: the handle at 5344). Frame 3964 is the ship seen from
+  far (13,031 pixels, 41 %): not a close character, not counted.
+- So run 63's tracker was right (nothing rewrites them) and run 62's counters do not contradict it: the triangles are
+  rasterized, in the wrong places or not where they belong. The cause is in what the recorder gives the rasterizer
+  for these draws (vertex positions after skinning, or indices), not in a later pass.
+- **Not only the characters:** at frame 3964 the ship's hull has large pieces missing in the resolved G-buffer and in
+  the final frame (`dk-f003966.png`). The hull is not skinned.
+- Frames 5344 and 5877: the third large skinned draw changes 0 pixels of colour and of depth. Hidden, or drawn nowhere
+  visible: the pictures do not say.
+- The depth images: in frames 5610 and 5877 (`a03`) they agree with the resolved depth as the colour does; in 3964,
+  4784, 5344 and the first draw of 5877 under 8 % of the pixels are equal while the shapes are the same. The two
+  captures do not encode depth alike in those frames; **no conclusion is drawn from the depth numbers.**
+
+Method: `dk-f<frame>-a<n>-character-drawn-*` against `...-character-resolved-*` of the same frame, compared pixel by
+pixel (a throw-away script, unfiltered 8-bit PNG rows) and looked at.
+
+Other lines of the run: geometry store 9,246,570 hits without a hash, 8,872,351 of them from a check in an earlier
+frame, 0 content changes without a signal of 274, 0 objects back to a check a frame (`now 8`); recorder 16.3 us a draw
+in the last interval (vertices 4.1, index range scan 1.0; run 64: 23.59, 6.49, 1.71 over the run, so not the same
+measure); audio 63 % of real time, dry 32 times in the last window (no audio change in this run).
+
+**No fix is made in the recorder** (the direction is `18-renut-migration.md`). What this gives the new renderer: the
+first thing to compare once it draws is these shots; ReNut takes vertices, indices and constants from the device at
+the draw, so shards there too would point at the guest data or the shaders, whole characters at the recorder's path.

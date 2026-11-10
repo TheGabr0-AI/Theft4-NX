@@ -16,9 +16,13 @@ and the two `enhancements*.md` logs: the rows below that depend on them say so.
 
 - Branch `sync-clean` at `5c23f97`, equal to `origin/sync-clean`, working tree clean (two untracked items that were
   there before). `out/console-runs/run65-build/` is complete (`COMMIT` = `136ae66`).
-- **`out/console-runs/run65-logs/` does not exist: run 65 has not been brought back.** There are no
-  `character-drawn-*` / `character-resolved-*` pictures, so whether the characters are in shards when drawn or changed
-  later is **not known**. No run is spent on it before the migration (the user's rule).
+- At the first audit `out/console-runs/run65-logs/` did not exist. **It was brought back later and read on 2026-11-10
+  (devlog §AO): the characters are already in shards right after their own draws**, in an otherwise empty G-buffer
+  (they are drawn before the scenery), and the resolve of the same frame holds the same shards. Nothing removes them
+  afterwards: the old renderer hands the rasterizer wrong inputs for those draws (positions or indices), and the
+  scenery shows it too (the ship's hull, frame 3964). **Use for the new renderer:** ReNut reads vertex data, indices
+  and the skinning constants from the device at the draw; the same shots (ship at the credits, the two close-ups)
+  are the first comparison once R3 draws.
 
 ## 2. GTA IV's Direct3D against the ones ReNut knows
 
