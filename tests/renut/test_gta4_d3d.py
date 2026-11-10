@@ -39,7 +39,6 @@ LAYOUT = {
                  'lwz r3,48(r31)'],
     '829D7D40': ['lwz r10,10896(r31)', 'lwz r11,10908(r31)', 'lwz r11,13216(r31)'],
     '829D8730': ['lwz r11,48(r31)', 'lwz r10,52(r31)'],
-    '829D8798': ['lwz r10,56(r31)'],
     '829D76F0': ['lwz r3,13500(r31)', 'lbz r11,10941(r31)'],
     '829D8138': ['lwz r3,13500(r31)', 'lwz r4,14924(r31)', 'lwz r11,22280(r31)'],
     '829D8618': ['lwz r31,10908(r3)', 'stw r31,10928(r3)'],
@@ -52,6 +51,13 @@ LAYOUT = {
     '829D12C0': ['stw r29,12688(r30)'],
     '829CAAB0': ['lwz r11,12432(r31)', 'lwz r11,12444(r31)', 'lwz r11,12448(r31)', 'lwz r10,12720(r31)'],
     '829CAE18': ['lwz r10,12448(r31)'],
+    # Predicated tiling: BeginTiling stores its count and rects, EndTiling's tail and the pending block count.
+    '829CD470': ['stw r27,12740(r31)', 'addi r10,r31,12748'],
+    '829CD908': ['lwz r11,12740(r31)', 'addi r5,r31,12744', 'addi r5,r11,-8912'],  # the callback sub_829DDD30
+    '829DDF28': ['lbz r11,10941(r31)', 'stw r26,13216(r31)', 'stw r26,13220(r31)', 'addi r3,r31,13352',
+                 'addi r3,r31,13232'],
+    '829D7C68': ['lwz r11,11000(r30)', 'stw r11,11000(r30)'],
+    '829D8798': ['lwz r10,56(r31)', 'lwz r11,11000(r31)'],
 }
 # gta4_d3d.h constant -> the value the checks above read
 HEADER = {
@@ -66,6 +72,8 @@ HEADER = {
     'kSideBuffer': 16712, 'kSideBufferSize': 4800, 'kMinusOneB': 21540, 'kMinusOneC': 21544,
     'kPerfFrequency': 21568, 'kTitleMinusOne': 21680, 'kTitleMinusOneWords': 41, 'kBehaviorFlags': 22280,
     'kVdGlobalDeviceImportSlot': 0x82000000 + 1896, 'kVertexFetch': 1780 - 4,
+    'kPendingBlocks': 11000, 'kTileCount': 12740, 'kTileRects': 12744, 'kTileSegmentWords': 13220,
+    'kSegmentLists': 13232, 'kSegmentListCount': 7, 'kSegmentListSize': 20,
 }
 failures = []
 
@@ -87,7 +95,7 @@ def part_header():
     for name, value in HEADER.items():
         check(values.get(name) == value, 'HEADER: %s is %s, the code says %d' % (name, values.get(name), value))
     table = re.findall(r'^\s*X\((\w+), ([0-9A-F]{8}),', text, re.M)
-    check(len(table) == 16 and len(set(a for _, a in table)) == 16, 'HEADER: 16 distinct hooked functions')
+    check(len(table) == 17 and len(set(a for _, a in table)) == 17, 'HEADER: 17 distinct hooked functions')
     print('HEADER   %d constants checked, %d hooked functions' % (len(HEADER), len(table)))
     return table
 

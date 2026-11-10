@@ -67,9 +67,12 @@ generated listing: 65 instructions in 21 functions):
 | wait for a resource's fence / InsertFence | `829D7F78` / `829D8618` | - | - | not hooked (they call the hooked ones); 829D7F78 takes the fence from the resource's +8 |
 | D3DDevice_Swap | `829D5338` | 82558E98 | 82287590 | calls VdSwap; swap count 16544 |
 | DrawVertices / DrawIndexedVertices / BeginVertices | `829CCAC0` / `829CCEA8` / `829CC610` | 82565C60 / 82566078 / 82565758 | ... | the native renderer's hooks |
-| Clear / Resolve | `829CD470` / `829CB7C8` | 82563978 / 825656F8 | ... | the native renderer's hooks |
+| BeginTiling / EndTiling / EndTiling's tail | `829CD470` / `829CD908` / `829DDF28` | not hooked (SA2 does not tile) | 822788A0 / 82212328 / 82210138 | 829CD470 stores the tile count at 12740; the old notes had it as Clear |
+| Resolve | `829CB7C8` | 825656F8 | 8222D6C8 | EndTiling calls it once per tile |
+| SetPredication | `829CD300` | - | - | (device, mask); EndTiling calls it around each tile's resolve |
+| D3DDevice_InsertCallback | `829D8810` | 8254EEE8 | 821FB688 | writes the callback packet through `sub_829D7E08` |
 | CreatePixelShader / CreateVertexShader | `829D1708` / `829D1818` | 8255DBF8 / 8255E658 | ... | the native renderer's hooks |
-| **Not located yet** | InsertCallback, IsFencePending, SynchronizeToPresentationInterval (candidate `829D5158`), SetRingBufferParameters, CreateVertexDeclaration, D3DResource_Destroy (candidate `829D8D40`, called only by D3DResource_Release `829D92E8`), the gamma ramp's place in the device | | | needed from R2 on |
+| **Not located yet** | Clear / ClearF (829CD470 is not it), IsFencePending, SynchronizeToPresentationInterval (candidate `829D5158`), SetRingBufferParameters, CreateVertexDeclaration, D3DResource_Destroy (candidate `829D8D40`, called only by D3DResource_Release `829D92E8`), the gamma ramp's place in the device | | | needed from R2 on |
 
 **A trap found and closed:** `tools/switch-codegen/direct_calls.py` had turned the calls of every unhooked function into
 `__imp__sub_X`. The ring and fence functions had no hook then: **122 calls bypassed any hook on them** (KickOff alone
@@ -126,7 +129,7 @@ ports; here they come with the renderer, off until measured on the console.
 | Shader passes (branchless selects, early Z, constants in uniform buffers) | 2 | translator passes written against N&B's and SA2's shader shapes; GTA IV's must go through the difference test |
 | Asynchronous shader compilation | 1 | ReNut's prebuild workers and uam on the background core |
 | Late input, display sync, eager kicks | 2 | they sit in the SDK's input path and the present; measured useful only once the frame rate is near the cap |
-| Tiled drawing drawn once | 3 until proven | GTA IV's census shows no BeginTiling use yet (to check) |
+| Tiled drawing drawn once | 2 | **GTA IV tiles every 3D frame** (section 6): N&B's BeginTiling / EndTiling hooks are the model, their device work at 6274's offsets; sa2-nx does not hook them |
 | Banjo's native state setters (`d3d_native_state.cpp`) | 3 | written from N&B's disassembly; sa2-nx does not build them either |
 
 ## 5. Architecture and order
@@ -171,21 +174,34 @@ Build: `out/build/pc-eu-base` configured with `-DTHEFT4_RENUT=ON -DTHEFT4_GTA4_N
 |---|---|---|
 | 1 | Both devices created (title at 4006BB00, a no-hardware one at 40071300), the loading screens ran 28 s (4.1 M inline draws, a draw's state read through the layout: 1280x720 target, shaders, declaration), then a write to guest address 0 at the first scene draws | the fault was in `sub_829D77D8`, the hardware submission of a command block, reached through `sub_829D8290` because the title device has no ring set-up: hooked (the 16th hook) |
 | 2 | No fault in 180 s; after the first scene frame (indexed draws with stride 24 into a depth-only target, draws into 320x180 and 256x256 targets, then the 1280x720 back buffer) no thread made progress | the library's graphics interrupt was not registered: `sub_829DF308` is now called, and the null GPU's 60 Hz interrupt reaches `sub_829D7318` |
-| 3 | The same stall, at the same place, with the interrupt registered | **open** |
+| 3 | The same stall, at the same place, with the interrupt registered | the cause below |
+| 4 | **No stall.** 70 s of the 3D scene after the loading screens (4,589 tiled frames, 400-680 frames in 10 s with no pacing, up to 1,650 draws a frame), 0 faults | the hook on EndTiling's tail (`sub_829DDF28`) |
 
-**Where R1 stops (the first obstacle of the new path, not solved):** from the first frame of the 3D scene every game
-thread waits in the game's own wait function (`sub_827DAD40`, called from `sub_8221D838`, `sub_821966D0`,
-`sub_82207EE0`); none is inside Direct3D. The log does not say which signal is missing. Candidates, in the order to
-check: (1) the callbacks: `sub_829D8810` (D3DDevice_InsertCallback: its only caller is the resolve batch
-`sub_829CD908`) puts a callback in the ring for the GPU to run, and the sink never runs it; ReNut runs callbacks when
-the render thread reaches them, R1 has neither; (2) the worker threads of the hardware path (`sub_829DE0C0`, left out);
-(3) the pending-flip queue of the vertical blank (`sub_829D4BF8`), which the original Swap fills and R1's Swap does
-not. Also seen: with no pacing the loading screens swap 30,000-70,000 times a second (sa2-nx's note: the game's speed
-needs the presentation interval; its pacing is R2 material).
+**The stall, found and closed (2026-11-10, evening).** GTA IV draws its 3D scene with **predicated tiling**:
+`sub_829CD470` is `D3DDevice_BeginTiling` (the old renderer's notes called it Clear; its one caller is the game's
+`sub_8249E060`) and `sub_829CD908` is `D3DDevice_EndTiling` (callers `sub_8249FA60`, `sub_828525C0`). EndTiling's tail
+(`sub_829DDF28`) closes the segment the tiles' commands were recorded in, hands it to the GPU as a command block
+(`sub_829D7C68`: the device's count of pending blocks, +11000, goes up by one) and puts a callback in the ring
+(`sub_829D7E08` with `sub_829DDD30`), which on the console wakes Direct3D's worker thread (`sub_829DDC40`, created by
+`sub_829DE0C0`): the worker replays the block for each tile and takes the pending block off. R1's ring is a sink, so
+nothing took it off, and the next wait for an idle GPU (`sub_829D8798`: `BlockOnFence`, then a loop until +11000 is 0)
+never ended: that loop has no kernel call, which is why the log only showed every other thread waiting for the frame.
+The three candidates of the first reading were one mechanism: the ring callback (1) is the worker threads' wake-up (2);
+the flip queue (3) was not involved.
 
+*The fix is ReNut's own design, not a stand-in for the GPU:* a Direct3D-level renderer draws the tiled frame once at
+full size, so ReNut's EndTiling leaves out "the tiles' ring segment, D3D's WorkerDpc callback that replays it per tile,
+and its fence's packets" (sa2-nx `d3d/hooks/draw.cpp`). The hook on `sub_829DDF28` does the tail's device work (the
+tiling words cleared, the seven segment lists ended, the batch's fence, the out-of-command-memory result) and submits
+no block, so no callback and no worker are needed. No callback is faked and nothing is signalled by hand.
+`D3DDevice_InsertCallback` is `sub_829D8810` (its only caller is EndTiling); the swap's callback (`sub_829D4E90` with
+`sub_829D4CF8`) belongs to the original Swap, which the hook replaces.
+
+Still true: with no pacing the loading screens swap 30,000-70,000 times a second (the presentation interval is the
+renderer's work: sa2-nx's `sa2_renut_pacing.cpp`).
 What R1 does prove: Direct3D 2.0.6274's creation, ring, fence and Swap functions are the ones named in section 2, the
 device runs without a GPU through boot and the loading screens, and the device's bound state reads true through
-`gta4_d3d.h`. **It does not draw, and it does not reach gameplay.**
+`gta4_d3d.h`, and the 3D scene's frames run on it. **It does not draw: it is the hook layer, not the renderer.**
 
 ## 7. Licences
 

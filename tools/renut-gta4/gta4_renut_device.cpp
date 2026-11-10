@@ -91,7 +91,7 @@ std::atomic<uint32_t> g_ring_data_offset{0};
 
 struct Counters {
   std::atomic<uint64_t> frames{0}, kicks{0}, fence_waits{0}, draws{0}, indexed_draws{0}, begin_vertices{0}, clears{0},
-      resolves{0}, inline_allocations{0}, segments{0}, indirect_blocks{0};
+      resolves{0}, inline_allocations{0}, segments{0}, indirect_blocks{0}, tilings{0};
 };
 Counters g_count;
 std::atomic<uint32_t> g_title_device{0};
@@ -276,13 +276,14 @@ void FrameDone() {
   static uint64_t last_frames = 0, last_draws = 0;
   const uint64_t draws = g_count.draws + g_count.indexed_draws + g_count.begin_vertices;
   REXLOG_INFO("renut R1: {} frames ({} in this window, {} draws a frame); totals: {} draws ({} indexed, {} inline), "
-              "{} clears, {} resolves, {} kicks, {} fence waits, {} inline allocations, {} segments, {} command blocks "
-              "submitted",
+              "{} BeginTiling, {} resolves, {} kicks, {} fence waits, {} inline allocations, {} segments, {} command "
+              "blocks submitted, {} EndTiling tails",
               frames, frames - last_frames,
               frames > last_frames ? (draws - last_draws) / (frames - last_frames) : 0, draws,
               g_count.indexed_draws.load(), g_count.begin_vertices.load(), g_count.clears.load(),
               g_count.resolves.load(), g_count.kicks.load(), g_count.fence_waits.load(),
-              g_count.inline_allocations.load(), g_count.segments.load(), g_count.indirect_blocks.load());
+              g_count.inline_allocations.load(), g_count.segments.load(), g_count.indirect_blocks.load(),
+              g_count.tilings.load());
   last_frames = frames;
   last_draws = draws;
   g_describe_next.store(true, std::memory_order_relaxed);
@@ -418,10 +419,40 @@ THEFT4_RENUT_HOOK(sub_829CC610) {  // D3DDevice_BeginVertices
   __imp__sub_829CC610(ctx, base);
 }
 
-THEFT4_RENUT_HOOK(sub_829CD470) {  // D3DDevice_Clear
+THEFT4_RENUT_HOOK(sub_829CD470) {  // D3DDevice_BeginTiling (the old renderer's notes called it Clear)
   if (Selected())
     g_count.clears.fetch_add(1, std::memory_order_relaxed);
   __imp__sub_829CD470(ctx, base);
+}
+
+// BOOL EndTiling's tail (CDevice*, DWORD TileCount, DWORD Processors): the end of D3DDevice_EndTiling sub_829CD908.
+// The original closes the segment the tiles' commands were recorded in, hands it to the GPU as a command block
+// (sub_829D7C68: one more pending block at kPendingBlocks) behind a ring callback (sub_829DDD30) that wakes D3D's
+// worker thread, which replays the block once per tile and takes the pending block off again. Without a GPU nothing
+// takes it off: the next wait for an idle GPU (sub_829D8798) spun for ever, which was R1's stall at the first frame
+// of the 3D scene. A renderer at the Direct3D level draws the tiled frame once at full size (ReNut's EndTiling does
+// the same: "left out: the tiles' ring segment, D3D's WorkerDpc callback that replays it per tile"), so the tail
+// keeps its device work and leaves the block out: the tiling words cleared, the segment lists ended, the batch's
+// fence. The result is the original's: non-zero when the command memory ran out while the tiles were recorded.
+THEFT4_RENUT_HOOK(sub_829DDF28) {
+  THEFT4_RENUT_YIELD(sub_829DDF28)
+  const uint32_t device = ctx.r3.u32;
+  g_count.tilings.fetch_add(1, std::memory_order_relaxed);
+  const uint8_t flags1 = Load8(base, device + kFlags1);
+  Store32(base, device + kInKickOff, 0);
+  Store32(base, device + kTileSegmentWords, 0);
+  if (flags1 & kFlag1OutOfCommandMemory) {
+    RewindRing(base, device);  // clears the flag, as the original after sub_829D6FD8
+    ctx.r3.u64 = 1;
+    return;
+  }
+  for (uint32_t i = 0; i < kSegmentListCount; ++i) {
+    const uint32_t list = device + kSegmentLists + i * kSegmentListSize;
+    Store32(base, list + 12, 0);  // sub_829D73D0 without the jump words a GPU would follow
+  }
+  KickFence(base, device);
+  RewindRing(base, device);
+  ctx.r3.u64 = 0;
 }
 
 THEFT4_RENUT_HOOK(sub_829CB7C8) {  // D3DDevice_Resolve

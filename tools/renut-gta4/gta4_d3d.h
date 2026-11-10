@@ -68,6 +68,15 @@ constexpr uint32_t kTilingSurfaces = 12720;     // SetRenderTarget reads 12720..
 
 // The ring and the command memory.
 constexpr uint32_t kInKickOff = 13216;        // KickOff and BlockOnFence return early while it is set [13232]
+// Predicated tiling (BeginTiling sub_829CD470, EndTiling sub_829CD908).
+constexpr uint32_t kPendingBlocks = 11000;    // command blocks handed to the GPU and not done: sub_829D7C68 adds,
+                                              // sub_829D8798 spins until it is 0
+constexpr uint32_t kTileCount = 12740;        // BeginTiling stores its Count
+constexpr uint32_t kTileRects = 12744;        // [count] D3DRECT
+constexpr uint32_t kTileSegmentWords = 13220; // cleared with kInKickOff by EndTiling's tail sub_829DDF28
+constexpr uint32_t kSegmentLists = 13232;     // 7 lists of 20 bytes (13232..13352); sub_829D73D0 ends one
+constexpr uint32_t kSegmentListCount = 7;
+constexpr uint32_t kSegmentListSize = 20;
 constexpr uint32_t kCommandBuffer = 13500;    // AllocateInlineData sub_829D76F0, the segment allocator sub_829D8138 [13516]
 constexpr uint32_t kSegmentBytes = 14896;     // Swap: the next segment's size (sub_829D8138's argument, / 4)
 constexpr uint32_t kMinusOneA = 14920;        // -1 in the type-2 path sub_829DF600 [14936]
@@ -113,7 +122,8 @@ constexpr uint32_t kSurfaceSize = 0x24;  // (height - 1) << 3 | (width - 1) << 1
   X(D3DDevice_DrawVertices, 829CCAC0, "counted, then the original (its packets go into the sink)")           \
   X(D3DDevice_DrawIndexedVertices, 829CCEA8, "counted, then the original")                                   \
   X(D3DDevice_BeginVertices, 829CC610, "counted, then the original")                                         \
-  X(D3DDevice_Clear, 829CD470, "counted, then the original")                                                 \
+  X(D3DDevice_BeginTiling, 829CD470, "counted, then the original (it is BeginTiling, not Clear: 18 s.6)")    \
+  X(EndTiling_SubmitTiles, 829DDF28, "EndTiling's tail without the GPU: no tile block, no worker callback")  \
   X(D3DDevice_Resolve, 829CB7C8, "counted, then the original")
 
 // Device work the creation hook calls (never hooked).
