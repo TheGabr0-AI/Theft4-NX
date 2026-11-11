@@ -51,7 +51,12 @@ for variant in "$@"; do
                     -DTHEFT4_SWITCH_VULKAN_LIBRARIES=$lra_build/nvk/libvulkan.a;expat;zstd;z;nx \
                     -DREXGLUE_OUTPUT_DIR=$lra_build/rexglue-out \
                     -DPython3_EXECUTABLE=$ROOT/tools/switch-game/native_python.sh -DTHEFT4_HOST_PYTHON=/usr/bin/python3" ;;
-    *) echo "unknown variant $variant (dk-debug, dk, nvk, lra)"; exit 2 ;;
+    # ReNut's renderer on plume's deko3d back end (18-renut-migration.md, step R5): no Vulkan driver, not the old
+    # deko3d renderer (both hook the same Direct3D functions). Its game shaders come from the PC build
+    # (tools/renut-gta4/renut_switch_shaders.ps1 -> out/renut-switch, game data), embedded in the NRO.
+    renut)    dir=switch-game-renut; nro=theft4-renut.nro; name="Theft4 ReNut"
+              opts="-DREXGLUE_SWITCH_NO_NVK=ON -DREXGLUE_SWITCH_DEKO3D=OFF -DTHEFT4_SWITCH_RENUT=ON" ;;
+    *) echo "unknown variant $variant (dk-debug, dk, nvk, lra, renut)"; exit 2 ;;
   esac
   build="$ROOT/out/build/$dir"
   echo "=== $variant: configure $(date +%T)"

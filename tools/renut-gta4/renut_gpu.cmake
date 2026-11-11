@@ -61,6 +61,52 @@ if(NOT PYTHON_EXECUTABLE)
     set(PYTHON_EXECUTABLE "${Python3_EXECUTABLE}")
 endif()
 
+# Step R5 (18-renut-migration.md): the Switch build, a cross build on the Windows host, as sa2-nx's
+# app/cmake/sa2_renut_gpu.cmake makes it: plume's deko3d back end, no Vulkan driver (REXGLUE_SWITCH_NO_NVK), uam for the
+# shader variants on the console. The host tools run on the PC: the host shaders' deko3d blobs (DXC, SPIRV-Cross, uam
+# built for the PC: tools/deko3d/deko3d_build_tools.sh) at build time; the game shaders are made beforehand from the
+# PC build's translator (tools/renut-gta4/renut_switch_shaders.ps1) into THEFT4_RENUT_SWITCH_SHADERS_DIR (game data).
+if(REXGLUE_PLATFORM_SWITCH)
+    set(PLUME_PLATFORM_SWITCH ON CACHE BOOL "" FORCE)
+    set(PLUME_SWITCH_DEVKITPRO "${DEVKITPRO}" CACHE PATH "" FORCE)
+    # plume checks that a driver archive exists even when it links none: the portlibs' NVK, never linked here.
+    set(PLUME_SWITCH_NVK_ROOT "${DEVKITPRO}/portlibs/switch" CACHE PATH "" FORCE)
+    set(PLUME_SWITCH_NVK_LIBRARY "${DEVKITPRO}/portlibs/switch/lib/libvulkan.a" CACHE FILEPATH "" FORCE)
+    set(PLUME_SWITCH_NO_NVK ON CACHE BOOL "" FORCE)
+    # This repository's uam (the old deko3d renderer's, SwitchWakerHD's patched 1.1.0 with banjo-nx's passes).
+    set(PLUME_SWITCH_UAM_DIR "${THEFT4_RENUT_REPO}/thirdparty/uam" CACHE PATH "" FORCE)
+    set(PLUME_DEKO3D ON CACHE BOOL "deko3d back end (Switch)" FORCE)
+    set(BANJO_DEKO3D_HOST_SHADERS ON)
+    set(BANJO_DEKO3D_TOOLS_DIR "${THEFT4_RENUT_REPO}/tools/deko3d")
+    set(BANJO_DEKO3D_SPIRV_CROSS "${THEFT4_RENUT_REPO}/out/deko3d_tools/spirv-cross-build/spirv-cross.exe" CACHE FILEPATH
+        "SPIRV-Cross for the deko3d host shaders (tools/deko3d/deko3d_build_tools.sh)")
+    set(BANJO_DEKO3D_UAM "${THEFT4_RENUT_REPO}/out/deko3d_tools/uam-build/uam.exe" CACHE FILEPATH
+        "uam built for the PC, for the deko3d host shaders (tools/deko3d/deko3d_build_tools.sh)")
+    foreach(_theft4_tool BANJO_DEKO3D_SPIRV_CROSS BANJO_DEKO3D_UAM)
+        if(NOT EXISTS "${${_theft4_tool}}")
+            message(FATAL_ERROR "No ${${_theft4_tool}}: run tools/deko3d/deko3d_build_tools.sh first")
+        endif()
+    endforeach()
+    set(THEFT4_RENUT_SWITCH_SHADERS_DIR "${THEFT4_RENUT_REPO}/out/renut-switch" CACHE PATH
+        "shader_cache_switch.cpp and deko3d_glsl_switch.cpp (tools/renut-gta4/renut_switch_shaders.ps1; game data)")
+    set(THEFT4_RENUT_SHADER_CACHE_CPP "${THEFT4_RENUT_SWITCH_SHADERS_DIR}/shader_cache_switch.cpp")
+    set(THEFT4_RENUT_GLSL_CPP "${THEFT4_RENUT_SWITCH_SHADERS_DIR}/deko3d_glsl_switch.cpp")
+    foreach(_theft4_input THEFT4_RENUT_SHADER_CACHE_CPP THEFT4_RENUT_GLSL_CPP)
+        if(NOT EXISTS "${${_theft4_input}}")
+            message(FATAL_ERROR "No ${${_theft4_input}}: run tools/renut-gta4/renut_switch_shaders.ps1 (needs the PC "
+                                "build's translator, tools/pc-eu-base with THEFT4_RENUT_ENGINE)")
+        endif()
+    endforeach()
+    # No dump and no translator run in this build: gpu.cmake only checks that the folder exists.
+    set(RENUT_SHADER_DUMP_DIR "${THEFT4_RENUT_SWITCH_SHADERS_DIR}")
+    set(RENUT_ASSETS_DIR "${THEFT4_RENUT_SWITCH_SHADERS_DIR}")
+    # gpu.cmake's step 3 with the PC build's table (renut_switch_shader_cache.py: no DXIL, no SPIR-V).
+    function(banjo_renut_shader_cache_override TARGET)
+        target_sources(${TARGET} PRIVATE "${THEFT4_RENUT_SHADER_CACHE_CPP}")
+        set_source_files_properties("${THEFT4_RENUT_SHADER_CACHE_CPP}" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    endfunction()
+endif()
+
 include("${THEFT4_RENUT_ROOT}/renut_engine/gpu/gpu.cmake")
 # The SDK links its own volk on the PC: plume's copy under private names (plume_vulkan.h).
 if(TARGET plume AND NOT REXGLUE_PLATFORM_SWITCH)
@@ -94,9 +140,14 @@ function(theft4_renut_gpu TARGET GENERATED_DIR)
     if(DEFINED REXGLUE_ENTRYPOINT_INCLUDE_DIR)
         target_include_directories(theft4_renut_gpu PRIVATE "${REXGLUE_ENTRYPOINT_INCLUDE_DIR}")
     endif()
-    target_link_libraries(theft4_renut_gpu PRIVATE rex::runtime rexui)
     if(REXGLUE_PLATFORM_SWITCH)
-        target_sources(theft4_renut_gpu PRIVATE "${engine}/gpu/banjo_renut_deko3d.cpp")
+        # The SDK builds no rexui for a Switch build without Vulkan: the application's THEFT4_RENUT_UI_LIBRARY (its
+        # window context, the immediate and ImGui drawers, Dear ImGui) instead.
+        target_link_libraries(theft4_renut_gpu PRIVATE rex::runtime ${THEFT4_RENUT_UI_LIBRARY})
+        target_sources(theft4_renut_gpu PRIVATE "${engine}/gpu/banjo_renut_deko3d.cpp" "${THEFT4_RENUT_GLSL_CPP}")
+        set_source_files_properties("${THEFT4_RENUT_GLSL_CPP}" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    else()
+        target_link_libraries(theft4_renut_gpu PRIVATE rex::runtime rexui)
     endif()
     if(COMMAND rexglue_apply_target_settings)
         rexglue_apply_target_settings(theft4_renut_gpu)
@@ -107,6 +158,18 @@ function(theft4_renut_gpu TARGET GENERATED_DIR)
     # The generated code's rules (tools/pc-eu-base: the hooks read and write guest state as it does).
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(theft4_renut_gpu PRIVATE -ffp-contract=off -fno-strict-aliasing)
+    endif()
+    if(REXGLUE_PLATFORM_SWITCH)
+        # sa2-nx: no Vulkan driver in this build, so Renut on deko3d whatever gta4_renderer / renut_gpu_backend say (per
+        # source: nothing else recompiles). Line tables for the console's crash reports and profiles (-g1, as sa2-nx).
+        set_property(SOURCE "${engine}/gpu/banjo_renut_select.cpp" "${RENUT_GPU_DIR}/backend/backend.cpp"
+                     TARGET_DIRECTORY theft4_renut_gpu APPEND PROPERTY COMPILE_DEFINITIONS SA2_SWITCH_NO_NVK=1)
+        target_compile_options(theft4_renut_gpu PRIVATE -g1)
+        # The SDK's headers need C++23 (std::byteswap); on the PC the SDK's target settings give it.
+        target_compile_features(theft4_renut_gpu PRIVATE cxx_std_23)
+        # The engine's Switch code tests REX_PLATFORM_SWITCH (sa2-nx's SDK name); this SDK's platform.h names it
+        # REX_PLATFORM_NX and defines both only inside its own folder.
+        target_compile_definitions(theft4_renut_gpu PRIVATE REX_PLATFORM_SWITCH=1)
     endif()
     target_link_libraries(${TARGET} PRIVATE theft4_renut_gpu)
     # The application's wiring is in its main.cpp. On that source only: a definition or an include directory on the

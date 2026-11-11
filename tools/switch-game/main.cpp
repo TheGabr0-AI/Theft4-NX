@@ -148,6 +148,13 @@ uint64_t FramesPublished();  // nx_lra_platform.cpp
 #include <rex/ui/window_nx.h>
 #include <rex/ui/windowed_app_context_nx.h>
 #endif
+#if THEFT4_NX_RENUT
+// Step R5 of docs/switch-port/18-renut-migration.md: ReNut's Direct3D-level renderer (thirdparty/renut) on plume's
+// deko3d back end, started as tools/pc-eu-base starts it on the PC.
+#include <rex/ui/imgui_drawer.h>
+#include <rex/ui/windowed_app_context_nx.h>
+#include "renut_engine/gpu/overlay/app_integration.h"
+#endif
 
 REXCVAR_DEFINE_BOOL(nx_null_gpu, true, "Switch",
                     "Give the runtime the null GPU (rex/system/null_graphics_system.h): the "
@@ -472,6 +479,11 @@ std::string g_config_read;  // the toml file(s) read, for the start-up summary
 std::unique_ptr<rex::ui::NxWindowedAppContext> g_ui_context;
 std::unique_ptr<rex::ui::Window> g_window;
 rex::graphics::vulkan::VulkanGraphicsSystem* g_vulkan_graphics = nullptr;
+#endif
+#if THEFT4_NX_RENUT
+// ReNut's renderer: the UI context its overlay pump posts to (this thread's loop runs it). Never destroyed.
+std::unique_ptr<rex::ui::NxWindowedAppContext> g_ui_context;
+bool g_renut_started = false;
 #endif
 std::atomic<bool> g_main_thread_returned{false};
 u64 g_module_base = 0;
@@ -3416,6 +3428,11 @@ void StopNullAudioWorker() {
     g_dk_graphics->Stop();  // M3: the recorder thread drains, tears down in order and is joined
   }
 #endif
+#if THEFT4_NX_RENUT
+  if (g_renut_started) {
+    renut::gpu::ShutdownRenderer();  // the overlay pump joined, the render thread told to stop (as the PC's OnShutdown)
+  }
+#endif
   if (mode == 'D') {
     StopFileIo();
     StopNullAudioWorker();
@@ -3897,6 +3914,40 @@ void StartupSummary() {
     GAME_INFO("graphics: none (nx_null_gpu = false): the run stops at the first Vd* export "
               "that needs a GPU");
   }
+#if THEFT4_NX_RENUT
+  {
+    // ReNut's renderer draws the game's Direct3D through plume's deko3d back end on the default NWindow (its swapchain
+    // takes the window: the console text goes). No SDK graphics system draws: the null graphics system stays only for
+    // the 60 Hz vertical blank interrupt GTA IV's Direct3D registers (sub_829DF308), as on the PC; its ring is never
+    // written (ReNut's ring is a sink). The renderer starts before Runtime::Setup, as the PC's OnFinalizePaths does.
+    {
+      std::lock_guard<std::timed_mutex> lock(g_console_mutex);
+      if (g_console_open) {
+        consoleExit(nullptr);
+        g_console_open = false;
+      }
+    }
+    // ReNut keeps its files "next to the executable" (the DKSH cache deko3d_shaders.bin, deko3d.log, an optional
+    // deko3d_glsl.bin that takes precedence over the built-in package): on Horizon the SDK's executable path is empty
+    // (no /proc/self/exe), so they are relative to the working folder, which is this one.
+    const int chdir_rc = chdir(kRootDir);
+    GAME_INFO("ReNut: working folder %s (%s): DKSH cache, deko3d.log and an optional deko3d_glsl.bin are there",
+              kRootDir, chdir_rc == 0 ? "set" : "NOT set");
+    g_ui_context = std::make_unique<rex::ui::NxWindowedAppContext>();
+    runtime->set_app_context(g_ui_context.get());
+    renut::gpu::ConfigureRuntime(config);
+    config.graphics = rex::system::CreateNullGraphicsSystem();
+    // No SDK menus on the console (no ImGuiDrawer here): the pump records nothing and presents nothing extra.
+    g_renut_started = renut::gpu::StartRenderer(*g_ui_context, []() -> rex::ui::ImGuiDrawer* { return nullptr; });
+    if (g_renut_started) {
+      GAME_INFO("graphics: ReNut's Direct3D-level renderer on plume's deko3d back end (no PM4 ring, no EDRAM); "
+                "null graphics system for the vertical blank only; console closed");
+    } else {
+      GAME_ERROR("graphics: ReNut's renderer did not start (deko3d device or swapchain: see the [deko3d] lines and "
+                 "deko3d.log beside the NRO)");
+    }
+  }
+#endif
   // Run 14: XamInputGetState answered "not connected" (0x48F) where the PC
   // has a pad, and the game never called XamInputGetCapabilities.
   if (REXCVAR_GET(nx_input)) {
@@ -4056,6 +4107,11 @@ void StartupSummary() {
     CheckFrameCaptures(heartbeat.start);
     if (g_ui_context) {
       g_ui_context->PumpFromUIThread();  // posted functions, then the paint
+    }
+#endif
+#if THEFT4_NX_RENUT
+    if (g_ui_context) {
+      g_ui_context->PumpFromUIThread();  // ReNut's overlay pump posts here
     }
 #endif
     ConsoleRefresh();

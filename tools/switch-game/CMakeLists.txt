@@ -363,6 +363,54 @@ if(REXGLUE_SWITCH_DEKO3D)
     target_link_libraries(switch-game PRIVATE theft4-gta4-deko3d theft4-plume-deko3d)
 endif()
 
+# Step R5 of docs/switch-port/18-renut-migration.md: ReNut's Direct3D-level renderer (thirdparty/renut, the renderer the
+# PC build draws GTA IV with) on plume's deko3d back end, as sa2-nx's Switch build carries it. Its own configuration: it
+# hooks the Direct3D functions the old deko3d renderer's hooks also take (no REXGLUE_SWITCH_DEKO3D, no LRA), and links
+# no Vulkan driver (REXGLUE_SWITCH_NO_NVK):
+#   -DREXGLUE_SWITCH_NO_NVK=ON -DTHEFT4_SWITCH_RENUT=ON
+# Inputs made on the PC beforehand (game data, out/renut-switch): tools/renut-gta4/renut_switch_shaders.ps1.
+option(THEFT4_SWITCH_RENUT "ReNut's renderer on plume's deko3d back end (gta4_renderer = renut)" OFF)
+if(THEFT4_SWITCH_RENUT)
+    if(NOT REXGLUE_SWITCH_NO_NVK OR REXGLUE_SWITCH_DEKO3D OR THEFT4_SWITCH_LRA)
+        message(FATAL_ERROR "THEFT4_SWITCH_RENUT: configure with -DREXGLUE_SWITCH_NO_NVK=ON and without "
+                            "REXGLUE_SWITCH_DEKO3D / THEFT4_SWITCH_LRA (they hook the same Direct3D functions)")
+    endif()
+    # The generated code must call the hooked functions by their hookable names (18 section 2's trap).
+    execute_process(
+        COMMAND "${THEFT4_HOST_PYTHON}" "${THEFT4_ROOT}/tools/renut-gta4/weak_calls.py"
+                --gen "${THEFT4_GENERATED_DIR}" --check
+        RESULT_VARIABLE _theft4_weak_calls)
+    if(NOT _theft4_weak_calls EQUAL 0)
+        message(FATAL_ERROR "THEFT4_SWITCH_RENUT: the generated code still calls hooked Direct3D functions "
+                            "directly: run python tools/renut-gta4/weak_calls.py")
+    endif()
+    # The part of rexui the renderer uses (the SDK builds no rexui for a Switch build without Vulkan): the window
+    # context of this loop (NxWindowedAppContext), the immediate and ImGui drawers its overlay drawer and menus go
+    # through, and one Dear ImGui (ReNut's copy, 1.92.5 as the SDK's).
+    set(_sdk "${THEFT4_ROOT}/glue/rexglue-sdk-main")
+    set(_renut_imgui "${THEFT4_ROOT}/thirdparty/renut/imgui")
+    add_library(theft4-renut-ui STATIC
+        "${_renut_imgui}/imgui.cpp" "${_renut_imgui}/imgui_draw.cpp" "${_renut_imgui}/imgui_tables.cpp"
+        "${_renut_imgui}/imgui_widgets.cpp"
+        "${_sdk}/src/ui/graphics_util.cpp" "${_sdk}/src/ui/imgui_dialog.cpp" "${_sdk}/src/ui/imgui_drawer.cpp"
+        "${_sdk}/src/ui/immediate_drawer.cpp" "${_sdk}/src/ui/menu_item.cpp" "${_sdk}/src/ui/presenter.cpp"
+        "${_sdk}/src/ui/window.cpp" "${_sdk}/src/ui/windowed_app_context.cpp" "${_sdk}/src/ui/window_nx.cpp")
+    target_compile_features(theft4-renut-ui PRIVATE cxx_std_23)
+    target_compile_definitions(theft4-renut-ui PRIVATE REX_PLATFORM_SWITCH=1)
+    target_compile_options(theft4-renut-ui PRIVATE -fno-strict-aliasing -fno-char8_t)
+    target_include_directories(theft4-renut-ui PUBLIC "${_renut_imgui}" "${_sdk}/include" PRIVATE "${_sdk}/src")
+    target_link_libraries(theft4-renut-ui PUBLIC rexcore fmt::fmt spdlog::spdlog)
+    set(THEFT4_RENUT_UI_LIBRARY theft4-renut-ui)
+    set(REXGLUE_PLATFORM_SWITCH ON)
+    set(THEFT4_SDK_DIR "${_sdk}")
+    set(Python3_EXECUTABLE "${THEFT4_HOST_PYTHON}")
+    include("${THEFT4_ROOT}/tools/renut-gta4/renut_gpu.cmake")
+    theft4_renut_gpu(switch-game "${THEFT4_GENERATED_DIR}")
+    target_link_libraries(switch-game PRIVATE theft4-renut-ui)
+    set_property(SOURCE main.cpp APPEND PROPERTY COMPILE_DEFINITIONS "THEFT4_NX_RENUT=1")
+    set_property(SOURCE main.cpp APPEND PROPERTY INCLUDE_DIRECTORIES "${THEFT4_ROOT}/tools/renut-gta4")
+endif()
+
 # Every way out of the process goes through main.cpp's __wrap_* first, which
 # logs the code and the caller before the real function runs.
 # Run 22: libnx's fatalThrow, diagAbortWithResult and svcBreak too (crash log

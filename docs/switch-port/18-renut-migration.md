@@ -393,6 +393,43 @@ terminal window): the docks with the cranes at 160 s and the deck's "NO SMOKING"
 blue as ReNut's frames (mean 16-25 against 17-27, frames not identical). The dark image is the game's; run 65's
 brighter ship shot was the old renderer's. Not frame-exact: a lockstep comparison is still to be made.
 
+## 6c. Step R5: the Switch build (2026-11-11)
+
+**How it is put together** (as sa2-nx's Switch build carries the same renderer, `app/cmake/sa2_renut_gpu.cmake`):
+
+| Part | Switch build |
+|---|---|
+| Configuration | `tools/switch-game`, its own build folder `out/build/switch-game-renut`: `-DREXGLUE_SWITCH_NO_NVK=ON -DTHEFT4_SWITCH_RENUT=ON` (`build_variants.sh renut`, NRO `theft4-renut.nro`, NACP "Theft4 ReNut"). It refuses `REXGLUE_SWITCH_DEKO3D` and `THEFT4_SWITCH_LRA`: the old renderers' hooks take the same Direct3D functions. The PC and the old Switch variants are unchanged |
+| GPU back end | thirdparty/renut's plume with `PLUME_DEKO3D` (banjo-nx's deko3d back end), `PLUME_SWITCH_NO_NVK` (no Vulkan driver linked; plume's Vulkan code compiles and cannot start), this repository's `thirdparty/uam` (localised as `uam_local.o`, as the old build does) |
+| Renderer selection | `SA2_SWITCH_NO_NVK` on `banjo_renut_select.cpp` and `backend.cpp`: ReNut on deko3d whatever `gta4_renderer` says (sa2-nx's rule: this NRO has no other renderer) |
+| Application side | `main.cpp` (`THEFT4_NX_RENUT`): the SDK's `NxWindowedAppContext` pumped by the main loop, `ConfigureRuntime`, the null graphics system for the 60 Hz vertical blank only (as on the PC), `StartRenderer` before `Runtime::Setup` (the PC's order), `ShutdownRenderer` at exit, the working folder set to `sdmc:/switch/theft4` (ReNut's "next to the executable" files: the SDK has no executable path on Horizon) |
+| UI pieces | the SDK builds no `rexui` for a Switch build without Vulkan: `theft4-renut-ui` compiles the graphics-free part (window context, NWindow window, immediate and ImGui drawers, presenter base) and ReNut's own Dear ImGui 1.92.5 (one copy in the NRO) |
+| Host shaders | `renut_host_shader` with `BANJO_DEKO3D_HOST_SHADERS`: DXC, SPIRV-Cross, `tools/deko3d/deko3d_glsl.py`, uam for the PC (`out/deko3d_tools`) into `<stem>.deko3d.h` (`tools/deko3d/deko3d_host_shader.py`, sa2-nx's) |
+| Game shaders | made on the PC beforehand, `tools/renut-gta4/renut_switch_shaders.ps1` into `out/renut-switch` (game data, local): see below |
+| Shader table | `renut_switch_shader_cache.py`: the PC build's table of the 1,370 shaders with the DXIL and SPIR-V arrays empty (deko3d reads neither: `shader_library.cpp`), 496 KB of source instead of 5.9 MB |
+
+**Game shaders for deko3d (PC, 2026-11-11).** The PC build's translator (Renut's XenosRecomp) run again over the
+1,370 containers with `BANJO_DEKO3D_SPIRV_DIR`: its shader cache came out byte-identical to the PC build's (same
+translator, same inputs), and **1,370 of 1,370** SPIR-V for deko3d (`-DBANJO_DEKO3D`, D3D clip space), 0 failed. Then
+SPIRV-Cross, `deko3d_glsl.py` and uam (the default variant of each, as a compile check): **1,370 of 1,370 compiled**
+(vertex shaders: median 3,584 bytes of DKSH, at most 39,680; pixel shaders: median 2,048, at most 18,176). banjo-nx's
+GLSL passes (`deko3d_glsl_opt.py --check`, all 27 of sa2-nx's default set): 0 shaders kept as they were for a uam
+failure. Package: 1,370 shaders, 12 MB of GLSL in 1,242 KB (`deko3d_glsl.bin`, embedded by `deko3d_glsl_switch.cpp`).
+A package of the same shaders without the passes is kept beside it (`out/renut-switch/plain/deko3d_glsl.bin`, 1,225
+KB): put next to the NRO as `deko3d_glsl.bin` it takes precedence over the built-in one (`banjo_renut_deko3d.cpp`),
+which tells a fault of the passes from one of the renderer without a new build.
+
+**Compile errors met and fixed (Switch build, first round):**
+
+| Error | Cause | Fix |
+|---|---|---|
+| every host shader: `dxc-linux` not runnable (code 126) | MSYS2's CMake on the Windows host leaves `CMAKE_HOST_WIN32` off, so `gpu.cmake` took the Linux DXC | the Windows DXC also for an MSYS / Cygwin host (`gpu.cmake`, marked theft4) |
+| `threading_switch.h` not found | sa2-nx's SDK header; this SDK has none | the four helpers the renderer calls (thread priority, pin to a core of the process's mask, current core, unpin = no, as sa2-nx) on libnx's system calls (`compat/me/me_platform_compat.h`, `gta4_renut_compat.cpp`) |
+| `std::byteswap` not a member of `std` | the renderer's target had no C++ standard on the Switch (the PC gets C++23 from the SDK's target settings) | `cxx_std_23` on `theft4_renut_gpu` |
+
+After them: the renderer (44 objects), plume with the deko3d back end, uam and the UI pieces compile with 0 errors and
+0 warnings; `main.cpp` too.
+
 ## 7. Licences
 
 - reNut (masterspike52) has no licence file. **Settled on 2026-11-10:** this project's owner confirms

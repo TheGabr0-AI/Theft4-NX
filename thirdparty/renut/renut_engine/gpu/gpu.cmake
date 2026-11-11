@@ -75,7 +75,8 @@ if(NOT RENUT_DXC_BIN_ROOT)
     set(RENUT_DXC_BIN_ROOT "${RENUT_XENOS_RECOMP_DIR}/thirdparty/dxc-bin")
 endif()
 set(RENUT_DXC_BIN_DIR "${RENUT_DXC_BIN_ROOT}/bin/x64")
-if(CMAKE_HOST_WIN32)
+# theft4 (2026-11-11): MSYS2's CMake (the Switch cross build on a Windows host) does not set CMAKE_HOST_WIN32.
+if(CMAKE_HOST_WIN32 OR CMAKE_HOST_SYSTEM_NAME MATCHES "^(MSYS|CYGWIN|Windows)")
     set(RENUT_DXC "${RENUT_DXC_BIN_DIR}/dxc.exe")
 else()
     # The Linux binary finds libdxcompiler next to it.
@@ -120,13 +121,17 @@ function(renut_host_shader TARGET STEM PROFILE)
     # builds with plume's deko3d back end (docs/deko3d-renderer.md).
     if(BANJO_DEKO3D_HOST_SHADERS)
         set(out "${RENUT_GPU_GEN_DIR}/host_shaders/${STEM}.deko3d.h")
-        set(tool "${CMAKE_SOURCE_DIR}/../tools/deko3d_host_shader.py")
+        # theft4 (2026-11-11): the tools' folder is the application's (tools/deko3d here; sa2-nx's ../tools).
+        if(NOT BANJO_DEKO3D_TOOLS_DIR)
+            set(BANJO_DEKO3D_TOOLS_DIR "${CMAKE_SOURCE_DIR}/../tools")
+        endif()
+        set(tool "${BANJO_DEKO3D_TOOLS_DIR}/deko3d_host_shader.py")
         add_custom_command(
             OUTPUT "${out}"
             COMMAND ${CMAKE_COMMAND} -E make_directory "${RENUT_GPU_GEN_DIR}/host_shaders"
             COMMAND "${PYTHON_EXECUTABLE}" "${tool}" --dxc ${RENUT_DXC} --spirv-cross "${BANJO_DEKO3D_SPIRV_CROSS}"
                     --uam "${BANJO_DEKO3D_UAM}" --profile ${PROFILE} --stem ${STEM} --src "${src}" --out "${out}"
-            DEPENDS "${src}" ${host_includes} "${tool}" "${CMAKE_SOURCE_DIR}/../tools/deko3d_glsl.py"
+            DEPENDS "${src}" ${host_includes} "${tool}" "${BANJO_DEKO3D_TOOLS_DIR}/deko3d_glsl.py"
             COMMENT "Compiling host shader ${STEM}.hlsl (${PROFILE}, deko3d)"
             VERBATIM)
         target_sources(${TARGET} PRIVATE "${out}")

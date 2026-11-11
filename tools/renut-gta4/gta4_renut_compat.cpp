@@ -53,6 +53,24 @@ extern "C" const bool g_banjo_store_cards = false;
 // The Switch profiler's counters (frame_stats.cpp counts the render thread's frames): no-ops on the PC, as sa2-nx's
 // src/me/me_pc_stubs.cpp.
 extern "C" void RexSwitchPerfCount(unsigned) {}
+#else
+// On the console too: switch-game's profiler (nx_profiler.cpp) has no counter for the renderer's frames.
+extern "C" void RexSwitchPerfCount(unsigned) {}
+
+// me/me_platform_compat.h: the thread helpers sa2-nx's SDK has (threading_switch.cpp), on libnx's system calls.
+extern "C" bool RexSwitchSetCurrentThreadPriorityOk(int priority) {
+  return priority >= 0 && priority < 64 && R_SUCCEEDED(svcSetThreadPriority(CUR_THREAD_HANDLE, u32(priority)));
+}
+
+extern "C" bool RexSwitchPinCurrentThreadToCore(int core) {
+  u64 process_mask = 0;
+  if (core < 0 || core > 3 || R_FAILED(svcGetInfo(&process_mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)) ||
+      !(process_mask & (u64(1) << core)))
+    return false;  // a core the process may not use
+  return R_SUCCEEDED(svcSetThreadCoreMask(CUR_THREAD_HANDLE, core, u32(1) << core));
+}
+
+extern "C" int RexSwitchCurrentCore(void) { return int(svcGetCurrentProcessorNumber()); }
 #endif
 
 namespace sa2::enh {
