@@ -628,10 +628,92 @@ P1 stutter and audio, P2 frame rate, P3 only if a run shows the need.
 play 3-10 fps with the compile stalls, 23.5-27.6 k draws/s in its best windows, 2,700-3,100 draws a frame, GPU 52-65
 ms a frame **on a frame whose deferred lighting is black** (not comparable until it is right).
 
-**Order from here:** (1) run 69: the deferred frame; if still dark, its `[trace]` lines name the step. (2) The stutter:
+**Order from here (written before run 69's logs; §6h updates it):** (1) run 69: the deferred frame; if still dark, its
+`[trace]` lines name the step. (2) The stutter:
 variants ready before play (offline DKSH cache from the run 69 pipeline list; meanwhile `deko3d_shaders.bin` kept between
 runs). (3) Audio once the compiles are off the play path; the NEON mixer's state. (4) The game-level hooks into the ReNut
 variant. (5) Frame rate, one measured change a run: GPU time a frame first (55-65 ms), then the render thread.
+
+## 6h. Run 69 read: multisampled images unreadable by the shaders on deko3d; run 70 (2026-11-11)
+
+**Run 69** (`7ebdce7`, logs `out/console-runs/69-logs`, 42 captures, 863 s, 0 faults, exit with +): no visible change
+from run 68, as the user saw; audio present from the start this time. The new code ran: `multisampled colour resolves
+drawn` (past 1,000, the 2x G-buffer tiles among them), the depth restore, the Zcull drop. The card was not cleaned
+(`DKSH cache deko3d_shaders.bin: 360 variants` at the start, `pipeline_list.bin` 538 pipelines): see "The card" below.
+
+**Where the frame is lost (the `[trace]` lines, a gameplay frame, against the PC's at the same step):**
+
+| Step | PC (D3D12) | Switch run 69 |
+|---|---|---|
+| G-buffer drawn (2x targets read back through the 2D engine) | (the PC's multisampled read-back gives 0 even when right) | `40226670` 845,859 of 921,600 texels set, sensible means: **drawn** |
+| Resolved G-buffer colour (`40226620`, `402266B0`, `40226780`) | 921,600 of 921,600 set | **0 of 921,600**, every tile, every traced frame |
+| Resolved G-buffer depth `DA1A6320` and its words | 921,599 set | **0** |
+| Words target `40226810` (restore source) | means 255 / 127 / 124 / 128 | `0x0000007F` everywhere: depth 0 |
+| 4x targets (exposure chain) read through the 2D engine / resolved by the shader | - | set / **0** |
+| Single-sampled targets resolved by the same kind of shader (`resolve_copy_ps`, `depth_resolve_ps`) | set | **set** |
+
+Every read of a multisampled image **by a shader** (the texture unit) returned 0; the 2D engine read the same images
+right; single-sampled images read right. The resolve path of run 68 (the 2D blit) and run 69 (the drawn resolve) both
+end in such reads for the depth (`depth_resolve_ms_ps`), so the restored depth was 0 in both runs and the lighting had
+nothing: the same picture. Zcull played no part.
+
+**Why (from deko3d's source, read 2026-11-11):** a multisampled render target with `DkImageFlags_HwCompression` gets
+the multisample compressed kinds (`C32_MS2_2CRA`, `ZF32_MS2_2CZ`, ... in `pickImageMemoryKind`); deko3d has no public
+decompress (only its present path decompresses, colour only), and its descriptors of such images carry `msaa_mode`.
+Which of the two the texture unit fails on is not written anywhere; both are removed:
+
+- `plume_deko3d.cpp`: a **multisampled render target is not compressed** (single-sampled targets keep it);
+- its **descriptors are "decayed"** (`dkImageDescriptorInitialize(..., decayMS = true)`: a plain 2D texture of the
+  sample grid, W x samplesX by H x samplesY, deko3d's own facility and the layout `dkCmdBufResolveImage` reads);
+- the two host shaders that read multisampled images read that grid under `BANJO_DEKO3D`: `resolve_ms_ps.hlsl` the
+  mean of the pixel's block (2x: 2 x 1, 4x: 2 x 2, 8x: 4 x 2), `depth_resolve.hlsli` sample 0 (the block's first
+  texel, as the Xenos resolves depth) with the grid in `push.scale` (`ResolveDepth`). D3D12 and Vulkan unchanged.
+  Commit `e6d8b94`.
+
+**A build trap found on the way (`cc64728`):** the first run 70 build remade the two `.deko3d.h` headers but recompiled
+only `draw.o`; `video.o`, which embeds every host shader, kept run 69's (`sampler2DMS`): the compiler's dependency files
+do not carry the generated headers on the MSYS2 build. `gpu.cmake` now gives `video.cpp`, `overlay_ui.cpp` and
+`overlay_drawer.cpp` an explicit dependency on every generated host shader header. Checked in the final ELF: the five
+host shader blobs that read targets found whole (`resolve_ms_ps`, `depth_resolve_ms_ps`, `depth_resolve_ps`,
+`resolve_copy_ps`, `depth_restore_ps`), and in `Deko3DDescriptorSet::setTexture` the `decayMS` argument is computed
+(`cset w3, ne` on the sample count; run 69's was 0).
+
+**Verified on the PC:** build; the opening cutscene lit as before (deck from above with the credits at 90 s, D3D12
+default); `tests/renut/test_gta4_d3d.py` OK. The deko3d path cannot run on the PC. **To verify on the console:** the
+`[trace]` lines of run 70 must show `40226620` / `DA1A6320` set; the ground, Niko, the ship and the cars lit.
+
+**The rest of run 69, measured:**
+- Shader compiles: 5 in the whole run (the warm DKSH cache of 360 variants and the 538-pipeline list prebuilt at the
+  start). The run 68 stutter of 295 compiles is gone with the cache kept; an offline cache is not needed for this
+  build (the game's shader package and pipeline keys do not change), only for a first start on a clean card.
+- Frame rate in gameplay: 15-17 fps outside the traced frames, GPU 55-62 ms a frame (GPU bound); the windows of 2-5 fps
+  (stretched to 17-21 s) are the traced frames' read-backs (one every 30 s, `BlockOnFence` 2 s each): a measurement's
+  cost, gone without the trace.
+- Audio: 99-100 % of real time in the intro and menus, 66-77 % in gameplay with the output running dry (up to 69 times
+  in a window): CPU bound. Every guest and host thread runs on cores 0-2 (`mask 7`); ReNut's background workers (uam,
+  prebuild, ring cleaner, frame limiter) on core 2 with the guest threads. Core 3 (the forwarder's fourth) is unused;
+  renut-nx's experience: compiles there made audio stutter, only the uam thread at the lowest priority stays there.
+  Not changed in run 70 (no measured gain to offer); next, with the frame right.
+- Game-level hooks (aspect, presentation options): not movable as files: the aspect hooks depend on LRA's touch and
+  frontend layer, the presentation options are helpers `gta4_native_hooks.cpp` calls, and that file hooks the Direct3D
+  functions ReNut hooks. They need their game functions hooked again in `tools/renut-gta4`.
+
+**The card** (`sdmc:/switch/theft4/`, the NRO's working folder; read from the code and run 69's log):
+
+| File | Written / read by | What | Run 70 |
+|---|---|---|---|
+| `theft4-renut.nro` | - | the program | replace |
+| `game.toml` | read at start | cvars | replace with run 70's |
+| `deko3d_shaders.bin` | ReNut (`banjo_renut_deko3d.cpp`) | DKSH cache: uam's compiled variants, header `BDKC` + compiler tag (a foreign or damaged file is started over by itself) | **keep** (still valid: same shaders, same uam) |
+| `pipeline_list.bin` | ReNut (`render/pipeline.cpp`, cvar `renut_pipeline_list`) | the pipelines built, prebuilt at the next start | **keep** |
+| `deko3d_glsl.bin` (only if present) | ReNut, takes precedence over the NRO's package | an alternative shader package (`plain/`, an A/B) | must **not** be there |
+| `deko3d.log`, `game.log`, `game-crash.log`, `game-exit.log`, `game.prev.log` | written | logs | rename or move away before the start |
+| `captures/` | written (`gta4_renut_capture_s`) | PNGs | empty before the start |
+| `game/` | read | the game's data (`default.xex`, RPFs) | keep |
+| `user/`, `saves/` | read and written | profile, saves, achievements | keep |
+| `deko3d/` (`gta4_deko3d_runtime.bin`, `gta4_deko3d_glsl.bin`) | the old deko3d renderer (runs 37-65) | its shader package | not read by ReNut: may stay or go |
+| `runtime-cache/` | the old NVK/Vulkan builds | Vulkan shader cache | not read by ReNut (logged only): may stay or go |
+| `cache/`, `cache1/` | GTA IV's cache partitions (`nx_mount_cache`, off) | game cache | not mounted: leave |
 
 ## 7. Licences
 

@@ -97,6 +97,16 @@ quelle 1x e delle texture). Righe da cercare per prime: `multisampled colour res
 `copy and 2D engines` (con il resolve disegnato i `blits` devono restare quasi fermi). Gli fps del primo avvio
 contano anche le compilazioni uam (`uam N compiles (avg ...)`): si valutano a parte.
 
+**Dal run 70: la scheda per le NRO ReNut** (tabella completa in `18-renut-migration.md` §6h). In `sdmc:/switch/theft4/`
+si **tengono** `deko3d_shaders.bin` (cache DKSH delle varianti compilate da uam: con la cache calda il run 69 ha
+compilato 5 varianti contro le 295 del run 68 a freddo) e `pipeline_list.bin` (le pipeline da precostruire all'avvio):
+li scrive l'NRO ReNut stessa, si invalidano da soli se il compilatore cambia, e restano validi finché il pacchetto degli
+shader del gioco non cambia. Si cancellano solo se una NRO cambia il pacchetto o uam (lo dice il README del run).
+`deko3d_glsl.bin` accanto all'NRO **non** deve esserci (sostituirebbe il pacchetto incluso). Ignorati da ReNut:
+`deko3d/` (vecchio renderer), `runtime-cache/` (vecchie build Vulkan), `cache/` e `cache1/` (non montate). Prima di ogni
+avvio: log vecchi rinominati, `captures/` vuota. Le finestre a 2-5 fps che coincidono con i frame tracciati
+(`banjo_renut_diag_resolve_trace`) sono il costo della misura, non del gioco.
+
 **Smoke:** `switch-smoke.nro` della stessa cartella del run fa anche il
 passo 8 (deko3d contro NVK, `13-deko3d-spike.md`, ~1–2 minuti, schermo fermo
 sull'ultima immagine della sonda Vulkan); il risultato sono le righe `gpu
