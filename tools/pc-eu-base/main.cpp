@@ -222,7 +222,10 @@ class EuBaseApp final : public rex::ReXApp {
 
   void OnShutdown() override {
 #if THEFT4_RENUT_ENGINE
-    if (theft4::renut::Selected()) renut::gpu::ShutdownRenderer();
+    if (theft4::renut::Selected()) {
+      theft4::renut::StopCaptures();  // the capture thread joined first: it reads the frames the renderer serves
+      renut::gpu::ShutdownRenderer();
+    }
 #endif
     StopHeartbeat();
     rex::diagnostics::LogExportCallSummary("at exit");

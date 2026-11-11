@@ -7,4 +7,8 @@ namespace theft4::renut {
 // emulated GPU. False: every hook runs the game's original function.
 bool Selected();
 
+// Ends and joins the gta4_renut_capture_s thread (gta4_renut_compat.cpp), if one runs. Called before
+// renut::gpu::ShutdownRenderer: the thread reads the frames the renderer serves.
+void StopCaptures();
+
 }  // namespace theft4::renut

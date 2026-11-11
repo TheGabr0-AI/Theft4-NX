@@ -154,6 +154,7 @@ uint64_t FramesPublished();  // nx_lra_platform.cpp
 #include <rex/ui/imgui_drawer.h>
 #include <rex/ui/windowed_app_context_nx.h>
 #include "renut_engine/gpu/overlay/app_integration.h"
+#include "../renut-gta4/gta4_renut_select.h"  // StopCaptures
 #endif
 
 REXCVAR_DEFINE_BOOL(nx_null_gpu, true, "Switch",
@@ -3430,6 +3431,7 @@ void StopNullAudioWorker() {
 #endif
 #if THEFT4_NX_RENUT
   if (g_renut_started) {
+    theft4::renut::StopCaptures();  // the capture thread joined first: it reads the frames the renderer serves
     renut::gpu::ShutdownRenderer();  // the overlay pump joined, the render thread told to stop (as the PC's OnShutdown)
   }
 #endif

@@ -4,11 +4,13 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
@@ -207,31 +209,63 @@ bool WritePng(const std::filesystem::path& path, const rex::ui::RawImage& image)
 
 std::once_flag g_capture_once;
 
+// The capture thread is joined at shutdown (StopCaptures, before the renderer goes), never detached:
+// docs/switch-port/09-rules.md section 3. On the console std::thread::detach() throws std::system_error (ENOSYS: this
+// libnx has no __syscall_thread_detach, so pthread_detach always fails), and run 67 ended there, in std::terminate at
+// the first Swap. The thread object lives on the heap and is deleted only after its join, so a session that ends
+// without StopCaptures never destroys a joinable std::thread (std::terminate too).
+std::mutex g_capture_mutex;
+std::condition_variable g_capture_wake;
+bool g_capture_stop = false;            // under g_capture_mutex
+std::thread *g_capture_thread = nullptr;  // under g_capture_mutex
+
+void CaptureMain(int every) {
+  const std::filesystem::path dir = std::string(REXCVAR_GET(gta4_renut_capture_dir));
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  const auto start = std::chrono::steady_clock::now();
+  for (int n = 1;; ++n) {
+    {
+      std::unique_lock lock(g_capture_mutex);
+      if (g_capture_wake.wait_until(lock, start + std::chrono::seconds(every * n), [] { return g_capture_stop; }))
+        return;
+    }
+    rex::ui::RawImage image;
+    if (!::renut::gpu::CaptureFrame(image, 3000) || !image.width) {
+      REXLOG_WARN("gta4_renut_capture_s: no frame at {} s", every * n);
+      continue;
+    }
+    const auto file = dir / fmt::format("renut-{:04}s-f{:06}.png", every * n,
+                                        g_sa2_game_frames.load(std::memory_order_relaxed));
+    REXLOG_INFO("gta4_renut_capture_s: {} ({}x{}){}", file.string(), image.width, image.height,
+                WritePng(file, image) ? "" : " NOT WRITTEN");
+  }
+}
+
 void StartCaptures() {
   const int every = REXCVAR_GET(gta4_renut_capture_s);
   if (every <= 0)
     return;
-  std::thread([every] {
-    const std::filesystem::path dir = std::string(REXCVAR_GET(gta4_renut_capture_dir));
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    const auto start = std::chrono::steady_clock::now();
-    for (int n = 1;; ++n) {
-      std::this_thread::sleep_until(start + std::chrono::seconds(every * n));
-      rex::ui::RawImage image;
-      if (!::renut::gpu::CaptureFrame(image, 3000) || !image.width) {
-        REXLOG_WARN("gta4_renut_capture_s: no frame at {} s", every * n);
-        continue;
-      }
-      const auto file = dir / fmt::format("renut-{:04}s-f{:06}.png", every * n,
-                                          g_sa2_game_frames.load(std::memory_order_relaxed));
-      REXLOG_INFO("gta4_renut_capture_s: {} ({}x{}){}", file.string(), image.width, image.height,
-                  WritePng(file, image) ? "" : " NOT WRITTEN");
-    }
-  }).detach();  // a test tool for the whole session; it only sleeps and reads frames the renderer serves
+  std::lock_guard lock(g_capture_mutex);
+  if (!g_capture_stop && !g_capture_thread)
+    g_capture_thread = new std::thread(CaptureMain, every);  // a test tool; it only waits and reads served frames
 }
 
 }  // namespace
+
+void StopCaptures() {
+  std::thread *thread = nullptr;
+  {
+    std::lock_guard lock(g_capture_mutex);
+    g_capture_stop = true;
+    thread = std::exchange(g_capture_thread, nullptr);
+  }
+  g_capture_wake.notify_all();
+  if (thread) {
+    thread->join();  // at most one capture in flight: CaptureFrame waits 3 s at most
+    delete thread;
+  }
+}
 }  // namespace theft4::renut
 
 namespace sa2::render {
