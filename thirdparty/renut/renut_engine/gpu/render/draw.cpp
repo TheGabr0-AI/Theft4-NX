@@ -4089,6 +4089,9 @@ bool SameTargets(const Targets &a, const Targets &b) {
 // read another target's and lit nothing: every pixel of the G-buffer stayed black (the PC, 2026-11-11).
 // One pass for the depth (stencil cleared), one a stencil bit (a pixel shader cannot write the stencil on every back
 // end: deko3d). Single-sampled targets of the same sample count only.
+static void TraceSurfaceRawLocked(const char *when, HostSurface *surface);
+static void TraceTextureRawLocked(const char *when, u32 texture_va);
+
 plume::RenderPipeline *DepthRestorePipelineLocked(plume::RenderFormat depth_format, uint32_t pass) {
   auto &s = State();
   if (!s.depth_restore_ps || !s.present_vs || !s.utility_layout)
@@ -4143,6 +4146,8 @@ void MaybeRestoreDepthLocked(HostSurface *depth) {
                 depth->guest_va, color->guest_va, u32(depth->samples), u32(color->samples), slot);
     return;
   }
+  if (banjo::renut_gpu::ResolveTraceOn())
+    TraceSurfaceRawLocked("restore-source", color);  // theft4: the words the depth is restored from
   TransitionSurfaceLocked(color, plume::RenderTextureLayout::SHADER_READ);
   Targets t;
   t.depth = depth;
@@ -4160,7 +4165,7 @@ void MaybeRestoreDepthLocked(HostSurface *depth) {
   cmd->setGraphicsDescriptorSet(s.sampler_set.get(), 1);
   cmd->setGraphicsDescriptorSet(s.texture_set.get(), 2);
   UtilityPush push{};
-  push.scale[0] = push.scale[1] = 1.0f;
+  push.scale[0] = push.scale[1] = depth->scale.Factor();  // depth_restore_ps: the half-tile swap in guest pixels
   push.texture_index = slot;
   push.sampler_index = kPointClampSamplerSlot;
   push.param0 = GpuTextureFormat(depth->format_word & 0x3F) == GpuTextureFormat::Fmt24_8_Float ? 1.0f : 0.0f;
@@ -5777,6 +5782,18 @@ static void TraceTextureRawLocked(const char *when, u32 texture_va) {
   RGPU_INFO("[trace]   raw {} texture {:08X} ({}x{} fmt {}): {} of {} texels not zero, bytes mean {:.1f} {:.1f} "
             "{:.1f} {:.1f}, centre {:08X}", when, texture_va, r.width, r.height, u32(t->host_format), r.nonzero,
             r.texels, r.channel_mean[0], r.channel_mean[1], r.channel_mean[2], r.channel_mean[3], r.centre);
+  if (t->words && t->words->texture) {  // theft4: a depth resolve's guest words (depth_resolve.hlsli)
+    HostTexture *w = t->words.get();
+    const plume::RenderTextureLayout wbefore = w->layout;
+    TransitionTextureLocked(w, plume::RenderTextureLayout::COPY_SOURCE);
+    const std::string wname = fmt::format("words-{:08X}-{}", texture_va, when);
+    RawReadSummary wr;
+    if (ReadTextureRawLocked(w->texture.get(), w->host_format, w->alloc_width, w->alloc_height, false, wr,
+                             wname.c_str()))
+      RGPU_INFO("[trace]   raw {} words of {:08X}: {} of {} texels not zero", when, texture_va, wr.nonzero, wr.texels);
+    if (wbefore != plume::RenderTextureLayout::UNKNOWN)
+      TransitionTextureLocked(w, wbefore);
+  }
 }
 
 void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *source_rect,

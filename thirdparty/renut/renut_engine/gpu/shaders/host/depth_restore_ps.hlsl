@@ -27,9 +27,22 @@ float DecodeFloat20e4(uint v)
     return asfloat(((exponent + 112) << 23) | (mantissa << 3));
 }
 
+// EDRAM tiles are 80 samples wide; a depth tile holds its two 40-sample halves the other way round from a colour tile
+// (GTA IV's own shader that writes the depth words as colour, PS B3D105989610E354, reads them 40 pixels to the side for
+// it). So the depth at pixel x is the colour at x + 40 in the left half of a tile, x - 40 in the right one. In guest
+// pixels: g_Push.scale.x is the render scale (host pixels a guest pixel).
+int SwapHalfTile(int host_x)
+{
+    const float scale = max(g_Push.scale.x, 1e-3);
+    const int guest = int(floor(float(host_x) / scale));
+    const int swapped = (guest % 80) < 40 ? guest + 40 : guest - 40;
+    return host_x + int(round(float(swapped - guest) * scale));
+}
+
 float main(PSInput input) : SV_Depth
 {
-    const int2 texel = int2(input.position.xy) + int2(g_Push.translate);
+    int2 texel = int2(input.position.xy) + int2(g_Push.translate);
+    texel.x = SwapHalfTile(texel.x);
     const float4 c = g_Textures[NonUniformResourceIndex(g_Push.textureIndex)].Load(int3(texel, 0));
     const uint4 b = uint4(saturate(c) * 255.0 + 0.5);
     const uint word = b.r | (b.g << 8) | (b.b << 16) | (b.a << 24);

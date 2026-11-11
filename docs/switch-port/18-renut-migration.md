@@ -365,6 +365,22 @@ run 65's console shots had them in shards). The interior at 100 s has no visible
 **Still wrong:** in the exterior shots, blocks and stripes of the sky's colour over the geometry (letter-like shapes
 at 70 s, a chequer at 80 s); the sea is still black; the image is darker than run 65's. Next.
 
+### R3, fourth round (2026-11-11, PC only): the EDRAM depth tiles' swapped halves
+
+The restore of the third round left blocks and stripes of the sky over the geometry, about 40 pixels wide, at depth
+edges. GTA IV's shader that writes the depth words as colour (PS `B3D105989610E354`, read through
+reblue-XenosRecomp's HLSL dump) fetches them at x + 40 in the left half of each 80-pixel column and x - 40 in the right
+half: in the Xenos EDRAM a depth tile holds its two 40-sample halves the other way round from a colour tile. It also
+writes 0x80 (no depth) or 0xFF in the stencil byte. The host restore now reads the colour at the swapped column
+(`depth_restore_ps.hlsl` `SwapHalfTile`, in guest pixels, so any render scale).
+
+**Result (PC, D3D12, `out/pc-renut/cap39`, local): the opening scenes are drawn right.** 60 s: the ship in the harbour
+at night, its deck, masts, rigging and lamps, the lit skyline; 70 s: the hold seen from above, the characters; 80 s:
+Niko and the captain on deck with the credits; 90 s: the pier with its numbered wall. No stripes, no holes, the
+characters whole (run 65's console shots had them in shards and the hull with pieces missing).
+Open: the overall brightness against a reference of the same frames (the emulated GPU on the PC, or the console);
+run 65's ship shot is brighter, but that renderer is not a reference.
+
 ## 7. Licences
 
 - reNut (masterspike52) has no licence file. **Settled on 2026-11-10:** this project's owner confirms
