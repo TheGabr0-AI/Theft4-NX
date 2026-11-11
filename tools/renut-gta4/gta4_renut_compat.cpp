@@ -71,6 +71,17 @@ extern "C" bool RexSwitchPinCurrentThreadToCore(int core) {
 }
 
 extern "C" int RexSwitchCurrentCore(void) { return int(svcGetCurrentProcessorNumber()); }
+
+// device.cpp's sa2_renut_core_layout calls sa2-nx's SDK (system/xthread.cpp) at the first Swap. This SDK has no such
+// function and places the guest threads itself (rex::thread::nx_guest_core_mask): SA2's layout, made for SA2's
+// threads, is not ported. 0 threads moved, so the renderer's log line says "(0 threads set)".
+extern "C" uint32_t RexSetGuestThreadCoreLayout(int, uint32_t, int) { return 0; }
+
+// plume with PLUME_SWITCH_NO_NVK (the only Switch configuration of this renderer: CMake refuses it with NVK) expects
+// the parent to define the two ICD entry points as "no driver" (sa2-nx's SDK does under REXGLUE_SWITCH_NO_NVK; this
+// one does not). plume's VulkanInterface then finds no vkCreateInstance and stays invalid; deko3d is the back end.
+extern "C" void* vk_icdGetInstanceProcAddr(void*, const char*) { return nullptr; }
+extern "C" int32_t vk_icdNegotiateLoaderICDInterfaceVersion(uint32_t*) { return -9; }  // VK_ERROR_INCOMPATIBLE_DRIVER
 #endif
 
 namespace sa2::enh {
