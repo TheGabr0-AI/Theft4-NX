@@ -44,6 +44,7 @@
 
 #include "host_shaders/depth_resolve_ms_ps.spirv.h"
 #include "host_shaders/depth_resolve_ps.spirv.h"
+#include "host_shaders/depth_restore_ps.spirv.h"  // theft4
 #include "host_shaders/present_ps.spirv.h"
 #include "host_shaders/present_vs.spirv.h"
 #include "host_shaders/rectangle_list_gs.spirv.h"
@@ -55,6 +56,7 @@
 #if defined(PLUME_DEKO3D)  // banjo-nx (2026-10-17): the deko3d back end's (tools/deko3d_host_shader.py)
 #include "host_shaders/depth_resolve_ms_ps.deko3d.h"
 #include "host_shaders/depth_resolve_ps.deko3d.h"
+#include "host_shaders/depth_restore_ps.deko3d.h"  // theft4
 #include "host_shaders/present_ps.deko3d.h"
 #include "host_shaders/present_vs.deko3d.h"
 #include "host_shaders/rectangle_list_gs.deko3d.h"
@@ -67,6 +69,7 @@
 #if defined(_WIN32)
 #include "host_shaders/depth_resolve_ms_ps.dxil.h"
 #include "host_shaders/depth_resolve_ps.dxil.h"
+#include "host_shaders/depth_restore_ps.dxil.h"  // theft4
 #include "host_shaders/present_ps.dxil.h"
 #include "host_shaders/present_vs.dxil.h"
 #include "host_shaders/rectangle_list_gs.dxil.h"
@@ -290,6 +293,8 @@ bool BuildDepthResolvePipelines(VideoState &s) {
       CreateHostShader(s.device.get(), RENUT_HOST_SHADER(depth_resolve_ps), "depth_resolve_ps");
   s.depth_resolve_ps[1] = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(depth_resolve_ms_ps),
                                            "depth_resolve_ms_ps");
+  // theft4 (2026-11-11): optional (draw.cpp RestoreDepthFromColorLocked); its pipelines are made on first use.
+  s.depth_restore_ps = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(depth_restore_ps), "depth_restore_ps");
   for (uint32_t i = 0; i < 2; ++i) {
     if (!s.depth_resolve_ps[i])
       return false;

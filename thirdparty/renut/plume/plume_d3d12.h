@@ -320,6 +320,7 @@ namespace plume {
         uint32_t arraySize = 0;
         uint32_t arrayIndex = 0;
         uint32_t shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        uint32_t planeSlice = 0;  // theft4 (2026-11-11): 1 for the stencil view of a depth-stencil texture
 
         D3D12TextureView(const D3D12Texture *texture, const RenderTextureViewDesc &desc);
         ~D3D12TextureView() override;

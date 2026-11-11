@@ -392,6 +392,36 @@ void ColorAliasesLocked(const HostSurface *surface, std::vector<HostSurface *> &
 
 HostSurface *GetHostSurfaceSlow(u32 surface_va, const d3d::SurfaceDesc *desc);
 
+uint64_t g_surface_write_clock = 0;
+
+HostSurface *ColorOverDepthLocked(HostSurface *depth) {
+  if (!depth || !depth->depth)
+    return nullptr;
+  const uint64_t since = std::max(depth->write_clock, depth->restored_clock);
+  // TargetKey: base 0-11, pitch 12-25, samples 26-27, depth 28, scale 29-31: the view without the depth bit.
+  constexpr uint64_t kView = 0x0FFFFFFFull | (7ull << 29);
+  uint64_t own = 0;
+  bool found = false;
+  for (const auto &[key, target] : g_targets) {
+    if (target.get() == depth) {
+      own = key;
+      found = true;
+      break;
+    }
+  }
+  if (!found)
+    return nullptr;
+  HostSurface *best = nullptr;
+  for (const auto &[key, target] : g_targets) {
+    if (!target || target->depth || !target->texture || (key & kView) != (own & kView) ||
+        target->format != plume::RenderFormat::R8G8B8A8_UNORM || target->write_clock <= since)
+      continue;
+    if (!best || target->write_clock > best->write_clock)
+      best = target.get();
+  }
+  return best;
+}
+
 HostSurface *GetHostSurfaceLocked(u32 surface_va) {
   if (!surface_va)
     return nullptr;
@@ -555,7 +585,9 @@ uint32_t SurfaceSampleSlotLocked(HostSurface *surface) {
 // banjo-nx (2026-10-18): the bindless slot of a depth/stencil target's stencil view (read as uint by the depth
 // resolve), or kInvalidDescriptor (no stencil, D3D12, or no view). Tried once a surface.
 uint32_t SurfaceStencilSlotLocked(HostSurface *surface) {
-  if (!surface || !surface->texture || !UsesVulkanBindings() || !plume::RenderFormatIsStencil(surface->format))
+  // theft4 (2026-11-11): D3D12 too (plume's D3D12 back end makes the stencil plane's view now): GTA IV's lighting
+  // tests the stencil the G-buffer marked, which reaches it through the depth resolve's words.
+  if (!surface || !surface->texture || !plume::RenderFormatIsStencil(surface->format))
     return kInvalidDescriptor;
   if (surface->stencil_slot != UINT32_MAX)
     return surface->stencil_slot;

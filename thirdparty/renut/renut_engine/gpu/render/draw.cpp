@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <array>
+#include <filesystem>  // theft4: gta4_renut_diag_dump_dir
+#include <fstream>
 #include <chrono>
 #include <atomic>
 #include <bit>
@@ -61,6 +63,9 @@ REXCVAR_DEFINE_BOOL(banjo_renut_diag_no_stream_convert, false, "Banjo/Renut",
 REXCVAR_DEFINE_STRING(banjo_renut_diag_stream_dump_vs, "", "Banjo/Renut",
                       "Diagnostic: log the vertex streams of draws with this vertex shader (hex hash): guest and "
                       "converted words of the first vertices ([streamdump], first 16 binds)");
+REXCVAR_DEFINE_STRING(gta4_renut_diag_dump_dir, "", "GTA4/Renut",
+                      "Diagnostic (with banjo_renut_diag_resolve_trace): the bytes of every resolve's source and "
+                      "destination of the traced frames, in files of this folder (tools/renut-gta4/raw2png.py)");
 REXCVAR_DEFINE_INT32(banjo_renut_diag_draw_log_s, 0, "Banjo/Renut",
                      "Diagnostic: this many seconds after the first draw, log every draw of the next two frames "
                      "([drawlog]: shaders, counts, target, state; 0 = off)");
@@ -4077,6 +4082,110 @@ bool SameTargets(const Targets &a, const Targets &b) {
   return true;
 }
 
+// theft4 (2026-11-11): a depth target restored from the 32-bit colour target over the same EDRAM when that colour was
+// written after the depth (ColorOverDepthLocked; shaders/host/depth_restore_ps.hlsl). GTA IV writes its G-buffer's
+// depth words back as colour at the depth buffer's EDRAM base after the G-buffer is resolved, then binds the depth
+// buffer for the lighting, which tests the stencil and depth those words hold. Without it the lighting's stencil tests
+// read another target's and lit nothing: every pixel of the G-buffer stayed black (the PC, 2026-11-11).
+// One pass for the depth (stencil cleared), one a stencil bit (a pixel shader cannot write the stencil on every back
+// end: deko3d). Single-sampled targets of the same sample count only.
+plume::RenderPipeline *DepthRestorePipelineLocked(plume::RenderFormat depth_format, uint32_t pass) {
+  auto &s = State();
+  if (!s.depth_restore_ps || !s.present_vs || !s.utility_layout)
+    return nullptr;
+  std::unique_ptr<plume::RenderPipeline> &slot = s.depth_restore_pipelines[uint32_t(depth_format) * 16 + pass];
+  if (!slot) {
+    plume::RenderGraphicsPipelineDesc desc;
+    desc.pipelineLayout = s.utility_layout.get();
+    desc.vertexShader = s.present_vs.get();
+    desc.pixelShader = s.depth_restore_ps.get();
+    desc.primitiveTopology = plume::RenderPrimitiveTopology::TRIANGLE_LIST;
+    desc.cullMode = plume::RenderCullMode::NONE;
+    desc.renderTargetCount = 0;
+    desc.depthTargetFormat = depth_format;
+    desc.depthEnabled = true;
+    desc.depthFunction = plume::RenderComparisonFunction::ALWAYS;
+    desc.depthWriteEnabled = pass == 0;
+    desc.stencilEnabled = true;
+    desc.stencilReadMask = 0xFF;
+    desc.stencilWriteMask = pass == 0 ? 0xFFu : (1u << (pass - 1));
+    desc.stencilReference = pass == 0 ? 0u : 0xFFu;
+    plume::RenderStencilFaceDesc face;
+    face.passOp = plume::RenderStencilOp::REPLACE;
+    face.depthFailOp = plume::RenderStencilOp::REPLACE;
+    face.failOp = plume::RenderStencilOp::KEEP;
+    face.compareFunction = plume::RenderComparisonFunction::ALWAYS;
+    desc.stencilFrontFace = face;
+    desc.stencilBackFace = face;
+    slot = s.device->createGraphicsPipeline(desc);
+    if (!slot) {
+      RGPU_WARN("Depth restore pipeline (format {}, pass {}) creation failed", u32(depth_format), pass);
+      return nullptr;
+    }
+    slot->setName("theft4 depth restore");
+  }
+  return slot.get();
+}
+
+void MaybeRestoreDepthLocked(HostSurface *depth) {
+  HostSurface *color = ColorOverDepthLocked(depth);
+  if (!color)
+    return;
+  depth->restored_clock = color->write_clock;  // tried once for this colour write, done or not
+  auto &s = State();
+  const bool single = color->samples == plume::RenderSampleCount::COUNT_1 &&
+                      depth->samples == plume::RenderSampleCount::COUNT_1 && color->scale == depth->scale;
+  const uint32_t slot = single ? SurfaceSampleSlotLocked(color) : kInvalidDescriptor;
+  if (slot == kInvalidDescriptor || !DepthRestorePipelineLocked(depth->format, 0)) {
+    static uint32_t logged = 0;
+    if (logged++ < 4)
+      RGPU_WARN("Depth target {:08X} not restored from colour target {:08X} (x{} / x{} samples, slot {})",
+                depth->guest_va, color->guest_va, u32(depth->samples), u32(color->samples), slot);
+    return;
+  }
+  TransitionSurfaceLocked(color, plume::RenderTextureLayout::SHADER_READ);
+  Targets t;
+  t.depth = depth;
+  t.width = t.guest_width = std::min(color->width, depth->width);
+  t.height = t.guest_height = std::min(color->height, depth->height);
+  t.scale = depth->scale;
+  if (!BindTargets(t))
+    return;
+  plume::RenderCommandList *cmd = s.command_list;
+  const plume::RenderRect host = ScaleRect(plume::RenderRect(0, 0, int32_t(t.width), int32_t(t.height)), t.scale);
+  cmd->setViewports(plume::RenderViewport(0.0f, 0.0f, float(host.right), float(host.bottom)));
+  cmd->setScissors(host);
+  cmd->setGraphicsPipelineLayout(s.utility_layout.get());
+  cmd->setGraphicsDescriptorSet(s.texture_set.get(), 0);
+  cmd->setGraphicsDescriptorSet(s.sampler_set.get(), 1);
+  cmd->setGraphicsDescriptorSet(s.texture_set.get(), 2);
+  UtilityPush push{};
+  push.scale[0] = push.scale[1] = 1.0f;
+  push.texture_index = slot;
+  push.sampler_index = kPointClampSamplerSlot;
+  push.param0 = GpuTextureFormat(depth->format_word & 0x3F) == GpuTextureFormat::Fmt24_8_Float ? 1.0f : 0.0f;
+  for (uint32_t pass = 0; pass <= 8; ++pass) {
+    plume::RenderPipeline *pipeline = DepthRestorePipelineLocked(depth->format, pass);
+    if (!pipeline)
+      break;
+    cmd->setPipeline(pipeline);
+    push.param1 = pass == 0 ? -1.0f : float(pass - 1);
+    cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
+    cmd->drawInstanced(3, 1, 0, 0);
+  }
+  depth->stencil_used = true;
+  NoteSurfaceWrite(depth);
+  depth->restored_clock = depth->write_clock;
+  // The draw path binds its own layout, pipeline and viewport again.
+  g_bound.pipeline = nullptr;
+  g_bound.layout = false;
+  g_bound.viewport_set = false;
+  static uint32_t logged = 0;
+  if (logged++ < 4)
+    RGPU_INFO("Depth target {:08X} ({}x{}) restored from colour target {:08X} (theft4 colour-to-depth)",
+              depth->guest_va, t.width, t.height, color->guest_va);
+}
+
 bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayConstants *replay) {
   ++g_trace_draws;
   auto &s = State();
@@ -4726,6 +4835,8 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
   }
   if (reuse_on)
     preuse = {hint.seq, PipelineLookupsLocked(), prebuild_epoch, pipeline};
+  if (targets.depth)
+    MaybeRestoreDepthLocked(targets.depth);  // theft4 (2026-11-11): colour written over its EDRAM since
   if (!pipeline || !BindTargets(targets))
     return false;
   plume::RenderCommandList *cmd = s.command_list;
@@ -4830,13 +4941,13 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
   // banjo-nx (2026-10-19, banjo_renut_resolve_skip): the targets this draw can write.
   for (u32 i = 0; i < targets.color_count && i < key.color_count; ++i)
     if ((key.color_mask >> (4 * i)) & 0xF)
-      ++targets.colors[i]->writes;
+      NoteSurfaceWrite(targets.colors[i]);
   if (targets.depth) {
     const u32 dc = key.depth_control;
     const bool depth_writes = (dc & 2) && (dc & 4);
     const bool stencil_writes = (dc & 1) && ((key.stencil_ref_mask >> 16) & 0xFF) != 0;
     if (depth_writes || stencil_writes)
-      ++targets.depth->writes;
+      NoteSurfaceWrite(targets.depth);
     if (dc & 1)
       targets.depth->stencil_used = true;  // banjo-nx (2026-10-19, banjo_deko3d_depth_handover)
   }
@@ -5030,6 +5141,10 @@ void ClearTargets(const Targets &t, u32 flags, const plume::RenderRect &rect, co
     DepthHandOverBeforeBindLocked(t.depth, &rect, flags);
   if (t.depth && (flags & 0x20))
     t.depth->stencil_used = true;
+  // theft4 (2026-11-11): a clear of the depth or the stencil alone keeps the other, which colour written over the same
+  // EDRAM since holds (MaybeRestoreDepthLocked).
+  if (t.depth && (flags & 0x30) != 0x30)
+    MaybeRestoreDepthLocked(t.depth);
   if (!BindTargets(t))
     return;
   plume::RenderCommandList *cmd = State().command_list;
@@ -5042,7 +5157,7 @@ void ClearTargets(const Targets &t, u32 flags, const plume::RenderRect &rect, co
   for (uint32_t i = 0; i < t.color_count; ++i) {
     if (!(flags & (1u << i)))
       continue;
-    ++t.colors[i]->writes;  // banjo-nx (banjo_renut_resolve_skip)
+    NoteSurfaceWrite(t.colors[i]);  // banjo-nx (banjo_renut_resolve_skip)
     cmd->clearColor(i, clear_color, &host_rect, 1);
     ColorAliasesLocked(t.colors[i], found);
     for (HostSurface *alias : found) {
@@ -5052,7 +5167,7 @@ void ClearTargets(const Targets &t, u32 flags, const plume::RenderRect &rect, co
     }
   }
   if (t.depth && (flags & 0x30)) {
-    ++t.depth->writes;  // banjo-nx (banjo_renut_resolve_skip)
+    NoteSurfaceWrite(t.depth);  // banjo-nx (banjo_renut_resolve_skip)
     cmd->clearDepthStencil((flags & 0x10) != 0, (flags & 0x20) != 0, depth, stencil & 0xFF,
                            &host_rect, 1);
   }
@@ -5068,7 +5183,7 @@ void ClearTargets(const Targets &t, u32 flags, const plume::RenderRect &rect, co
     if (alias_rect.right <= alias_rect.left || alias_rect.bottom <= alias_rect.top || !BindTargets(a))
       continue;
     const plume::RenderRect alias_host = ScaleRect(alias_rect, a.scale);
-    ++alias->writes;  // banjo-nx (banjo_renut_resolve_skip)
+    NoteSurfaceWrite(alias);  // banjo-nx (banjo_renut_resolve_skip)
     cmd->clearColor(0, clear_color, &alias_host, 1);
   }
 }
@@ -5538,8 +5653,26 @@ struct RawReadSummary {
   double channel_mean[4] = {};  // of the 4-byte formats' bytes, 0-255; of R32's value for 4-byte floats
   uint32_t centre = 0;
 };
+// theft4 (2026-11-11): gta4_renut_diag_dump_dir: each readback's bytes in a file of that folder (traced frames only):
+// a 20-byte header (width, height, plume format, bytes a texel, texels a row; little-endian u32), then the rows.
+static void DumpRawLocked(const char *name, const u8 *data, uint32_t width, uint32_t height, plume::RenderFormat format,
+                          uint32_t texel, uint32_t row_texels) {
+  static const std::string dir = REXCVAR_GET(gta4_renut_diag_dump_dir);
+  if (dir.empty() || !name)
+    return;
+  static uint32_t seq = 0;
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  const std::string path = fmt::format("{}/{:06}-f{}-{}.raw", dir, seq++, TextureFrameLocked(), name);
+  std::ofstream f(path, std::ios::binary);
+  const uint32_t header[5] = {width, height, uint32_t(format), texel, row_texels};
+  f.write(reinterpret_cast<const char *>(header), sizeof(header));
+  f.write(reinterpret_cast<const char *>(data), std::streamsize(uint64_t(row_texels) * texel * height));
+}
+
 static bool ReadTextureRawLocked(plume::RenderTexture *texture, plume::RenderFormat format, uint32_t width,
-                                 uint32_t height, bool multisampled, RawReadSummary &out) {
+                                 uint32_t height, bool multisampled, RawReadSummary &out,
+                                 const char *dump_name = nullptr) {
   auto &s = State();
   const uint32_t texel = plume::RenderFormatSize(format);
   if (!texture || !texel || !width || !height || !Video::EnsureCommandListLocked())
@@ -5576,6 +5709,7 @@ static bool ReadTextureRawLocked(plume::RenderTexture *texture, plume::RenderFor
   const auto *data = static_cast<const u8 *>(readback->map());
   if (!data)
     return false;
+  DumpRawLocked(dump_name, data, width, height, format, texel, row_texels);
   out = {};
   out.width = width;
   out.height = height;
@@ -5612,8 +5746,9 @@ static void TraceSurfaceRawLocked(const char *when, HostSurface *surface) {
   TransitionSurfaceLocked(surface, ms ? plume::RenderTextureLayout::RESOLVE_SOURCE
                                       : plume::RenderTextureLayout::COPY_SOURCE);
   RawReadSummary r;
+  const std::string name = fmt::format("target-{:08X}-{}", surface->guest_va, when);
   if (!ReadTextureRawLocked(surface->texture.get(), surface->format, surface->scale.Size(surface->width),
-                            surface->scale.Size(surface->height), ms, r)) {
+                            surface->scale.Size(surface->height), ms, r, name.c_str())) {
     RGPU_INFO("[trace]   raw {} target {:08X}: not read", when, surface->guest_va);
     return;
   }
@@ -5630,7 +5765,9 @@ static void TraceTextureRawLocked(const char *when, u32 texture_va) {
   const plume::RenderTextureLayout before = t->layout;
   TransitionTextureLocked(t, plume::RenderTextureLayout::COPY_SOURCE);
   RawReadSummary r;
-  const bool read = ReadTextureRawLocked(t->texture.get(), t->host_format, t->alloc_width, t->alloc_height, false, r);
+  const std::string name = fmt::format("texture-{:08X}-{}", texture_va, when);
+  const bool read =
+      ReadTextureRawLocked(t->texture.get(), t->host_format, t->alloc_width, t->alloc_height, false, r, name.c_str());
   if (before != plume::RenderTextureLayout::UNKNOWN)
     TransitionTextureLocked(t, before);
   if (!read) {

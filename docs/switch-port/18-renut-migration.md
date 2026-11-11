@@ -337,6 +337,34 @@ lights, the pier's numbered posts and the clouds show; mean brightness of the 60
 **Still wrong:** everything below the horizon (the sea) is black, and the buildings show only their lit windows and
 lamps: the surfaces the deferred lighting should light are dark. Next.
 
+### R3, third round (2026-11-11, PC only): the lighting's depth and stencil restored from colour
+
+**What the frame does (verified in the draw log, frame 13805):** after the G-buffer (2x, tiled) is resolved and its
+EDRAM cleared, GTA IV draws one screen-sized triangle (VS `B9320A..`, PS `B3D105..`) that writes the resolved depth
+words back **as colour** into surface `40226810` (8_8_8_8, EDRAM base 0, pitch 1280, 1x), then binds the depth surface
+`400007C0` (D24FS8, the same base, pitch and sample count) for the lighting: a full-screen sun/ambient pass with
+stencil EQUAL, then light volumes marked in the stencil (colour mask 0) and drawn with stencil NOT EQUAL and depth
+LESS. On the console the two surfaces are one memory. ReNut keeps colour and depth in separate host targets, so
+`400007C0` held another target's depth (it shares its key with the 1280x1280 shadow map) and the lighting's stencil
+tests lit nothing: the dump of the frame (`gta4_renut_diag_dump_dir`, `tools/renut-gta4/raw2png.py`) showed a right
+G-buffer (albedo with the ship, Niko and the city; clean normals) and a lit target with only the sky and the far
+windows.
+
+**Fix:** a host pass restores a depth target from the 32-bit colour target over the same EDRAM view when that colour
+was written after the depth (`render/draw.cpp` `MaybeRestoreDepthLocked`, `shaders/host/depth_restore_ps.hlsl`): the
+colour texel is the EDRAM word (R | G << 8 | B << 16 | A << 24, the inverse of ReNut's depth-resolve words), depth from
+its upper 24 bits (20e4 float for D24FS8, unorm for D24S8), stencil from its low byte, one pass for the depth and one a
+stencil bit (deko3d has no stencil export from a pixel shader). Every target write now has a clock
+(`NoteSurfaceWrite`) to order colour and depth writes. And the stencil had to reach the words in the first place:
+ReNut's depth resolve wrote it only with Vulkan bindings; plume's D3D12 back end now makes a stencil-plane view
+(`X32_TYPELESS_G8X24_UINT`, plane 1, mapped to every component) and the resolve uses it on D3D12 too.
+
+**Result (PC, D3D12, `out/pc-renut/cap36`, local):** the lighting works. The ship's deck and superstructure, the
+lamp, and **the characters whole and lit** (Niko and the captain at 70-100 s: faces, hands and clothes in one piece;
+run 65's console shots had them in shards). The interior at 100 s has no visible fault. D3D12 debug layer: no errors.
+**Still wrong:** in the exterior shots, blocks and stripes of the sky's colour over the geometry (letter-like shapes
+at 70 s, a chequer at 80 s); the sea is still black; the image is darker than run 65's. Next.
+
 ## 7. Licences
 
 - reNut (masterspike52) has no licence file. **Settled on 2026-11-10:** this project's owner confirms

@@ -72,6 +72,10 @@ struct HostSurface {
   // banjo-nx (2026-10-19, banjo_renut_resolve_skip): bumped by every draw that can write it (a colour write mask; for
   // depth, a depth write or stencil writes) and every clear of it; part of a resolve's signature.
   uint64_t writes = 0;
+  // theft4 (2026-11-11, colour-to-depth restore): when it was last written, on g_surface_write_clock (NoteSurfaceWrite),
+  // and for a depth target the colour write it was last restored from (RestoreDepthFromColorLocked).
+  uint64_t write_clock = 0;
+  uint64_t restored_clock = 0;
 
   // The view and bindless slot shaders read the target through (depth
   // resolves); made on first use, see SurfaceSampleSlotLocked.
@@ -104,6 +108,18 @@ struct HostSurface {
 // and resolve destinations of another scale are rebuilt on their next use.
 RenderScale ResolutionScale();
 void LatchResolutionScaleLocked();
+
+// theft4 (2026-11-11): a clock of target writes (draws that can write a target, clears), for the order of a colour
+// target's and a depth target's writes over the same EDRAM (ColorOverDepthLocked).
+extern uint64_t g_surface_write_clock;
+inline void NoteSurfaceWrite(HostSurface *surface) {
+  ++surface->writes;
+  surface->write_clock = ++g_surface_write_clock;
+}
+// theft4 (2026-11-11): the 32-bit colour target over the same EDRAM view as depth target 'depth' (base, pitch, samples,
+// scale) written after the depth's last write and its last restore, the latest one; nullptr if none. On the Xenos the
+// two are one memory, so the depth target holds that colour's words.
+HostSurface *ColorOverDepthLocked(HostSurface *depth);
 
 // The host target for the D3DSurface at 'surface_va', created or rebuilt as
 // needed. nullptr for 0 or when the target cannot be created.

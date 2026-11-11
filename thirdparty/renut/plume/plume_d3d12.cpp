@@ -1146,10 +1146,12 @@ namespace plume {
                             srvDesc.Texture2DArray.MostDetailedMip = interfaceTextureView->mipSlice;
                             srvDesc.Texture2DArray.FirstArraySlice = interfaceTextureView->arrayIndex;
                             srvDesc.Texture2DArray.ArraySize = interfaceTextureView->arraySize;
+                            srvDesc.Texture2DArray.PlaneSlice = interfaceTextureView->planeSlice;  // theft4
                         } else {
                             srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
                             srvDesc.Texture2D.MipLevels = interfaceTextureView->mipLevels;
                             srvDesc.Texture2D.MostDetailedMip = interfaceTextureView->mipSlice;
+                            srvDesc.Texture2D.PlaneSlice = interfaceTextureView->planeSlice;  // theft4
                         }
                     }
 
@@ -2870,6 +2872,17 @@ namespace plume {
         this->arraySize = std::min(desc.arraySize, texture->desc.arraySize - desc.arrayIndex);
         this->arrayIndex = desc.arrayIndex;
         this->shader4ComponentMapping = toD3D12(desc.componentMapping);
+        // theft4 (2026-11-11): an S8_UINT view of a depth-stencil texture is its stencil plane (plane 1), whose value D3D12
+        // returns in the second component: mapped to every component, so a shader reads it in .r as Vulkan's does.
+        if (desc.format == RenderFormat::S8_UINT &&
+            (texture->desc.format == RenderFormat::D32_FLOAT_S8_UINT || texture->desc.format == RenderFormat::D24_UNORM_S8_UINT)) {
+            this->format = texture->desc.format == RenderFormat::D32_FLOAT_S8_UINT ? DXGI_FORMAT_X32_TYPELESS_G8X24_UINT
+                                                                                  : DXGI_FORMAT_X24_TYPELESS_G8_UINT;
+            this->planeSlice = 1;
+            this->shader4ComponentMapping = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(
+                D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_1, D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_1,
+                D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_1, D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_1);
+        }
     }
 
     D3D12TextureView::~D3D12TextureView() { }

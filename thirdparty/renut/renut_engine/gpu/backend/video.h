@@ -179,6 +179,10 @@ struct VideoState {
   std::unique_ptr<plume::RenderPipeline> depth_resolve_pipeline[2];
   // banjo-nx (2026-10-19, banjo_renut_depth_words_lazy): the same with the words target's writes masked off.
   std::unique_ptr<plume::RenderPipeline> depth_resolve_float_pipeline[2];
+  // theft4 (2026-11-11): depth targets restored from colour over the same EDRAM (draw.cpp RestoreDepthFromColorLocked):
+  // the shader, and its pipelines by depth format * 16 + pass (0 depth, 1-8 the stencil bits); null shader: not done.
+  std::unique_ptr<plume::RenderShader> depth_restore_ps;
+  std::unordered_map<uint32_t, std::unique_ptr<plume::RenderPipeline>> depth_restore_pipelines;
   // Host mip levels of scaled resolve destinations (textures.cpp); null when
   // it failed to build, which leaves them single-level.
   std::unique_ptr<plume::RenderShader> texture_mip_ps;
