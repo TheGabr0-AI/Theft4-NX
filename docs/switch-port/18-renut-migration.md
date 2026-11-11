@@ -487,6 +487,54 @@ again (same size, 53,797,376 bytes: the Windows branch of `GuestPtr` is unchange
 change the Windows preprocessor does not reach. **To verify on the console:** the
 device created and the first frames; what comes after the device is untested on the Switch (run 66 never got there).
 
+## 6e. Run 67 read, the second stop fixed, run 68 (2026-11-11)
+
+**Run 67** (`ebc999f`, logs `out/console-runs/67-logs`, one start): **further than run 66**. Everything of run 66's
+start-up, then past `Direct3D_CreateDevice`: guest devices type 1 at `0x4006BB00` and type 2 at `0x40071300`, the
+render thread (priority 0x2C, core 1), the swap chain at 1280x720, the first Swap (`sa2_renut_core_layout ... (0 threads
+set)`, as expected with this SDK), the HDR colour surface `40076EB0` (format 10) and the depth surface `400007C0`
+(format 33) created, the display frame limiter thread, the first two shaders compiled by uam (stage 0 and 4). Then
+`ERROR TERMINATION: std::terminate (uncaught St12system_error: Function not implemented)` at about 15.7 s, `abort`
+from `OnTerminate` (`tools/switch-game/main.cpp:1168`, `addr2line` on `run67-build/switch-game-renut.elf`) and
+`_exit(1)`. No fault (fault ring 0): not a memory access; run 66's address check (`far` minus the arena base) has
+nothing to read.
+
+**Cause.** The thread that logged the first Swap's core-layout line is the one that runs the termination (same
+`t...` id): the guest main thread, inside `D3DDevice_Swap_hook` (`renut_engine/gpu/d3d/hooks/device.cpp:916`), which calls
+`sa2::render::OnPresented` -> `std::call_once(g_capture_once, StartCaptures)` (`tools/renut-gta4/gta4_renut_compat.cpp`).
+With `gta4_renut_capture_s = 15` (run 67's `game.toml`) StartCaptures made the capture thread and called
+`std::thread::detach()`. In the ELF, `pthread_detach` tests the weak `__syscall_thread_detach`, which this libnx does
+not define (the linker turned the call into a `nop`): it **always returns ENOSYS (88)**, and libstdc++'s `detach()`
+throws `std::system_error(ENOSYS)`, uncaught in the hook. `__syscall_thread_create`, `__syscall_thread_join` and the TLS
+calls are defined (`pthread_create`, `pthread_join`, `pthread_key_*` work). In the whole run 67 ELF `std::thread::detach`
+has one caller, StartCaptures; `pthread_detach` has one more, plume's `Deko3DDevice::initialize()` (the uam thread,
+`plume_deko3d.cpp:883`), which ignores the result: there it does nothing, and the thread lives for the session (not
+changed; `09-rules.md` §3 lists it). The PC never failed because Windows has detach. The rule broken is `09-rules.md` §3
+(no detach on NX), written for libnx after nfsmw-nx; the capture thread (step R3's test tool) was written without it.
+
+**Fix** (`e1d4c18`, `5b15e0a`): the capture thread waits on a condition variable with a stop flag (no `sleep_until`)
+and `theft4::renut::StopCaptures()` (`gta4_renut_select.h`) joins it, called before `renut::gpu::ShutdownRenderer()` on
+the Switch (`ExitGame`, `tools/switch-game/main.cpp`) and on the PC (`OnShutdown`, `tools/pc-eu-base/main.cpp`). The
+`std::thread` lives on the heap and is deleted only after its join: an exit that skips StopCaptures (a crash, the PC's
+`std::_Exit` at the window close) never destroys a joinable thread. After the join one line: `gta4_renut_capture_s:
+capture thread joined in N ms`. Nothing else changes: the captures, their cvars and the renderer are as before.
+
+**Checked, not causes:** the `(service trap)` lines (936; runs 61 and 65 had 1,050 in play); the heap going from
+2,933 to 1,940 MB free (mostly the 768 MiB guest pool reserved after the deko3d device); the missing
+`xbox360\audio\config\*` files (the game probes optional names; same in earlier runs); the forwarder's address space
+(every host address of the run under 2^39: arena `0x30FDA00000`, module `0x70E6...`, pool `0x6749400000`; the guest
+translation works on 64-bit host addresses) and its 4 cores (ReNut pins its threads to cores 1 and 2 after checking the
+process's core mask, `RexSwitchPinCurrentThreadToCore`; the pins succeeded: "now on core 1", "core 2").
+
+**Verified on the PC:** Switch build (`THEFT4_BUILD_JOBS=1`, 5 steps): `run68-build/theft4-renut.nro` 49,039,557 bytes,
+SHA-256 `108ca380…42969`, commit `5b15e0a` in the start-up line, ELF 0 undefined symbols, `std::thread::detach` with no
+caller left (`pthread_detach` only from plume), `StopCaptures` called by `ExitGame`, run 66's table translation still in
+`Sa2CreateDevice`, the GLSL package (1,370 shaders) byte for byte in the NRO. `tests/renut/test_gta4_d3d.py` OK (XDK
+part skipped). PC build OK; **PC game run** (D3D12, `--gta4_renderer=renut --gta4_renut_capture_s=10`, 55 s, then a
+window close): 5-6 PNGs written by the new thread, exit code 0 in about 0.5 s. The join is not exercised on the PC
+(`ReXApp::OnClosing` ends in `std::_Exit(0)` before `OnShutdown`, as before). **To verify on the console:** frames after
+the first Swap, the capture PNGs, the `capture thread joined` line at the exit with +.
+
 ## 7. Licences
 
 - reNut (masterspike52) has no licence file. **Settled on 2026-11-10:** this project's owner confirms

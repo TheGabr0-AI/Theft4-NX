@@ -77,6 +77,12 @@ switch-game-renut.elf <pc - base> <lr - base> <caller...>` sull'ELF della stessa
 indirizzi già meno la base del modulo. Un `far` meno la base dell'arena guest (riga `memory_switch: guest arena` di
 `game.log`) maggiore di 0xB01FFFFF è un indirizzo fuori dall'arena: un VA guest tradotto senza `rex_guest_table`
 (run 66). Dal run 67 la cartella del run ha anche `README.txt` e `SHA256SUMS.txt`; l'ELF serve solo sul PC.
+Un `ERROR TERMINATION: std::terminate (uncaught ...)` senza fault (run 67) non ha indirizzi da leggere: il thread che
+termina è quello con lo stesso id `t...` della riga `export stubs at exit`; si risale all'ultima riga di quel thread e
+alle funzioni che possono lanciare lì (sull'ELF, `objdump -d`: un `std::system_error` "Function not implemented" su
+Switch è una chiamata pthread senza implementazione in libnx, per esempio `pthread_detach`). **Dal run 68:** con
+`gta4_renut_capture_s` acceso, l'uscita con `+` deve scrivere `gta4_renut_capture_s: capture thread joined in N ms`;
+senza quella riga l'uscita non è passata da `ExitGame`.
 
 **Smoke:** `switch-smoke.nro` della stessa cartella del run fa anche il
 passo 8 (deko3d contro NVK, `13-deko3d-spike.md`, ~1–2 minuti, schermo fermo

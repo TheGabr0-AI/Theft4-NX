@@ -57,6 +57,14 @@ in `tools/switch-game`, `tools/switch-smoke`, né nelle librerie di terze parti
 linkate su Switch (spdlog, fmt, toml++, xxHash, snappy, o1heap: i `detach()` di
 toml++ sono metodi del suo formatter, non thread). Nessun `std::async`.
 
+**Run 67 (2026-11-11), ReNut:** in questa libnx manca `__syscall_thread_detach`, quindi `pthread_detach` restituisce
+**sempre** ENOSYS e `std::thread::detach()` lancia sempre `std::system_error` (non solo a thread finito). Il thread di
+cattura di `tools/renut-gta4/gta4_renut_compat.cpp` faceva `detach()` e la run 67 è finita in `std::terminate` al primo
+Swap; ora è joinato da `theft4::renut::StopCaptures` (`18-renut-migration.md` §6e). Controllo esteso a
+`thirdparty/renut` e `tools/renut-gta4`: resta solo `pthread_detach` del thread uam di plume (`plume_deko3d.cpp:883`),
+che ignora il risultato (thread di sessione, nessuna eccezione). Un `detach()` nuovo si trova con
+`objdump -d` sull'ELF: chiamanti di `_ZNSt6thread6detachEv` (devono essere zero).
+
 **Corretto in questo giro:** `threading_switch.cpp` `Thread::Terminate` (thread
 diverso dal chiamante) faceva `pthread_detach` e poi, in `post_execution`,
 `pthread_join` sullo stesso thread: una join dopo una detach è indefinita, e su
