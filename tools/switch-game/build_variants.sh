@@ -12,8 +12,11 @@
 # changes the deko3d library). Each variant sets its NACP name (the homebrew menu shows it) and its NRO path
 # through THEFT4_SWITCH_APP_NAME / THEFT4_SWITCH_NRO_OUTPUT; the two deko3d variants share one build dir and are
 # built one after the other (the ELF is copied out after each). At most -j3 and never two builds at once
-# (docs/switch-port/09-rules.md section 7).
+# (docs/switch-port/09-rules.md section 7). THEFT4_BUILD_JOBS lowers the parallelism for one call (default 3, the
+# maximum): THEFT4_BUILD_JOBS=1 when the PC has little free RAM (a generated-code unit takes 1-2 GB in GCC).
 set -euo pipefail
+jobs=${THEFT4_BUILD_JOBS:-3}
+case $jobs in 1|2|3) ;; *) echo "THEFT4_BUILD_JOBS=$jobs: 1, 2 or 3 (09-rules.md section 7)"; exit 2 ;; esac
 
 export DEVKITPRO=/opt/devkitpro DEVKITA64=/opt/devkitpro/devkitA64  # not the inherited C:/devkitPro: CMake 4 misreads it
 # The NVK build dir is configured with tools/switch-game/native_python.sh as Python3 (SPIRV-Tools needs a native
@@ -65,8 +68,8 @@ for variant in "$@"; do
         -DTHEFT4_SWITCH_APP_NAME="$name" -DTHEFT4_SWITCH_NRO_OUTPUT="$build/$nro"
   echo "=== $variant: build $(date +%T)"
   # /usr/bin/ninja, not devkitPro's first in PATH (it cannot re-run /usr/bin/cmake.exe)
-  /usr/bin/ninja -C "$build" -j3 switch-game-commit   # the commit stamp first (a build after a new commit needs two runs)
-  /usr/bin/ninja -C "$build" -j3 switch-game_nro
+  /usr/bin/ninja -C "$build" -j"$jobs" switch-game-commit   # the commit stamp first (a build after a new commit needs two runs)
+  /usr/bin/ninja -C "$build" -j"$jobs" switch-game_nro
   [ -s "$build/$nro" ] || { echo "$variant: $build/$nro missing or empty"; exit 4; }
   cp -f "$build/$nro" "$dest/$nro"
   cp -f "$build/switch-game.elf" "$dest/switch-game-$variant.elf"
