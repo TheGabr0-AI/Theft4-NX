@@ -115,6 +115,7 @@ function(renut_host_shader TARGET STEM PROFILE)
             COMMENT "Compiling host shader ${STEM}.hlsl (${PROFILE}, ${fmt})"
             VERBATIM)
         target_sources(${TARGET} PRIVATE "${out}")
+        _renut_host_shader_users("${out}")
     endforeach()
 
     # banjo-nx (2026-10-17): the deko3d back end's blob (tools/deko3d_host_shader.py: DXC, SPIRV-Cross, uam), for Switch
@@ -135,7 +136,17 @@ function(renut_host_shader TARGET STEM PROFILE)
             COMMENT "Compiling host shader ${STEM}.hlsl (${PROFILE}, deko3d)"
             VERBATIM)
         target_sources(${TARGET} PRIVATE "${out}")
+        _renut_host_shader_users("${out}")
     endif()
+endfunction()
+
+# theft4 (2026-11-11, run 70): the sources that embed the generated host shader headers recompile when one changes. The
+# compiler's dependency files did not carry them on the MSYS2 Switch build (video.o kept run 69's resolve shaders after
+# the headers were made again), so the dependency is stated here.
+function(_renut_host_shader_users HEADER)
+    foreach(user backend/video.cpp overlay/overlay_ui.cpp overlay/overlay_drawer.cpp)
+        set_property(SOURCE "${RENUT_GPU_DIR}/${user}" APPEND PROPERTY OBJECT_DEPENDS "${HEADER}")
+    endforeach()
 endfunction()
 
 # ---------------------------------------------------------------------------
