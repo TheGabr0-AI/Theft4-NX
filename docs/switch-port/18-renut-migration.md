@@ -381,6 +381,12 @@ characters whole (run 65's console shots had them in shards and the hull with pi
 Open: the overall brightness against a reference of the same frames (the emulated GPU on the PC, or the console);
 run 65's ship shot is brighter, but that renderer is not a reference.
 
+**Repeated boots (PC, D3D12, build of `00683a5`):** three boots in a row, 240 s each through the loading screens and
+the opening cutscene: 3 of 3 alive at the end, 0 faults, the one error line each is the missing title update
+(`update:\update.img`), the depth restore logged in each. Captures every 40 s (`out/pc-renut/boot1-3`, local): the
+same scenes drawn right in all three (deck, hold, pier, the docks with cranes at 160 s, the car on the wet quay at
+200 s); one capture at 40 s fell on a loading screen.
+
 ## 7. Licences
 
 - reNut (masterspike52) has no licence file. **Settled on 2026-11-10:** this project's owner confirms
