@@ -6,6 +6,7 @@
 
 #include <atomic>
 
+#include <rex/memory/guest_table.h>
 #include <rex/system/kernel_state.h>
 #include <rex/types.h>
 
@@ -46,6 +47,12 @@ inline T *GuestPtr(u32 guest_address) {
     return nullptr;
 #if REX_PLATFORM_WIN32 || (REX_PLATFORM_MAC && defined(__aarch64__))
   return REX_KERNEL_MEMORY()->TranslateVirtual<T *>(guest_address);  // heaps with host offsets there
+#elif REX_PLATFORM_NX
+  // theft4 (run 66): this SDK's Switch arena is not a linear 4 GB window (rex/memory/guest_table.h, memory design A):
+  // only 0x00000000-0x8FFFFFFF are virtual_membase + VA; the physical views (0x7F, 0xA0-0xFF, 0xE0 with +0x1000) and
+  // the 0x90 mirror go through the 16 MB slice table, as the generated code and TranslateVirtual do on NX. The plain
+  // sum below put the ring sink (VA 0xBFAA0000) past the arena's end: Direct3D_CreateDevice's memset faulted.
+  return reinterpret_cast<T *>(rex::memory::GuestToHost(guest_address));
 #else
   return reinterpret_cast<T *>(detail::GuestVirtualBase() + guest_address);  // TranslateVirtual's sum (no offsets)
 #endif
