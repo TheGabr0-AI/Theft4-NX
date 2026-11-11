@@ -445,6 +445,48 @@ Result: `out/console-runs/run66-build/theft4-renut.nro` (49,043,653 bytes, SHA-2
 ReNut"), `switch-game-renut.elf` (static PIE, 0 undefined symbols, the GLSL package `g_deko3dGlslPackage` 1,272,760
 bytes inside), commit `fead1cd` in the start-up line. Not run on the console yet: run 66 is its first run.
 
+## 6d. Run 66 read, the crash fixed, run 67 (2026-11-11)
+
+**Run 66** (`theft4-renut.nro` `fead1cd`, logs `out/console-runs/66-logs`): two starts, both stopped the same way
+14.5 s after the start, before any frame. The start-up ran right up to the device: ReNut chose deko3d ("this build
+links no Vulkan driver"), the deko3d device, the uam compile thread, the 3-image 1280x720 swap chain, the first image
+heap and shader code blocks, `Runtime::Setup`, the XEX, the guest main thread, `common.rpf` / `xbox360.rpf` /
+`audio.rpf` opened, the GLSL package read (1,370 shaders). Then, on the guest main thread, an unhandled write fault
+(`esr 0x92000045/46`, translation fault) in `memset`, called from `Sa2CreateDevice` (`renut_engine/gpu/d3d/hooks/device.cpp:1354`,
+lr `+0x9AAB0` through `addr2line` on `run66-build/switch-game-renut.elf`), size 1 MB (`x2`), destination
+`far = 0x2C08AA0000` = the arena's virtual base (`x26 = 0x2B49000000`) + **`0xBFAA0000`** (`x21`): the ring sink,
+a block `records::AllocPhysicalBlock` takes from the 64 KiB physical window. Same values in both starts (`far` minus
+`x26` = `0xBFAA0000`). Innocuous lines: "nx_gpu = vulkan, but this build has no Vulkan backend" (this NRO ignores
+`nx_gpu`: ReNut always), "runtime-cache NOT EMPTY" (not deleted: the run is still valid for a crash at the device),
+sys-clk RUNNING with the clocks read equal to the clocks wanted (the "default profile" case of `run-protocol.md`),
+"process MiB used 3185 / heap free 0" (libnx's heap takes the process's memory at the start; deko3d reports 2,933 MB
+free in that heap).
+
+**Cause.** `GuestPtr` (`renut_engine/gpu/guest/guest_memory.h`) made host pointers as `virtual_membase + VA` on every
+platform but Windows / macOS arm64: right where the guest space is one linear 4 GB view (sa2-nx's SDK on the Switch,
+Linux). This SDK's Switch arena is not (`rex/memory/guest_table.h`, memory design A; `core/memory_switch.cpp`
+`ReserveGuestArena`): 0x90000000 of virtual space, then 0x20001000 of physical memory, and a 16 MB slice table
+maps 0x00-0x8F to the virtual half (0x90-0x9F as the 0x80 mirror), 0x7F, 0xA0-0xBF, 0xC0-0xDF and 0xE0-0xFF (+0x1000)
+to the physical half. The plain sum put VA 0xBFAA0000 at base + 0xBFAA0000, past the arena's end (game.log: `0x2b49000000-0x2bf91fffff`, base + 0xB01FFFFF).
+The record heap did not fault because it goes through `Memory::TranslateVirtual`, which on NX is the table.
+
+**Fix** (`ebc999f`, marked theft4 in the file): on NX `GuestPtr` returns `rex::memory::GuestToHost(va)`, the
+translation of the generated code and of `TranslateVirtual` there (one table load and an add: the cheap translation
+of banjo-nx's proposal 11 is kept). `GuestPhysicalPtr` was already right (`physical_membase` is the arena's physical
+half), and `HostToGuestVirtual` returns the 0xA0000000 window, so a block's VA and pointer round-trip. Windows and macOS
+keep `TranslateVirtual`; the PC path does not change. In `run67-build/switch-game-renut.elf` the memset of
+`Sa2CreateDevice` now takes its destination from `rex_guest_table` (`adrp`+`add` = 0x3B71F80, `ldr [table, va >> 24]`,
+`add`): 0xBFAA0000 -> physical half + 0x1FAA0000, inside the arena.
+
+**Run 67 build** (`THEFT4_BUILD_JOBS=1 build_variants.sh out/console-runs/run67-build renut`; 16 steps, the generated
+code unchanged): `theft4-renut.nro` 49,039,557 bytes, SHA-256 `8d39473b…fdfd69`, NACP "Theft4 ReNut", commit
+`ebc999f` in the start-up line; ELF static PIE, 0 undefined symbols; the GLSL package (`BDKG` v1, 1,370 shaders,
+1,272,760 bytes) found byte for byte in the NRO. `tests/renut/test_gta4_d3d.py`: OK (XDK part skipped without
+`THEFT4_GAME_ROOT`). PC build after the change (`tools/pc-eu-base/build.bat`): 27 steps, 0 errors, the exe linked
+again (same size, 53,797,376 bytes: the Windows branch of `GuestPtr` is unchanged); no PC game run repeated for a
+change the Windows preprocessor does not reach. **To verify on the console:** the
+device created and the first frames; what comes after the device is untested on the Switch (run 66 never got there).
+
 ## 7. Licences
 
 - reNut (masterspike52) has no licence file. **Settled on 2026-11-10:** this project's owner confirms

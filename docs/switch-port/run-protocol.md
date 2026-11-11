@@ -67,6 +67,17 @@ Gli avvii fatti da nxlink usano un loader diverso dal forwarder: base nuova, mai
 mescolati nei confronti. sys-botbase si installa solo con il consenso esplicito
 dell'utente.
 
+**Dal run 66: NRO ReNut** (`theft4-renut.nro`, `build_variants.sh renut`, `18-renut-migration.md` §6c-§6d). Gli
+shader del gioco sono dentro l'NRO: sulla scheda vanno solo l'NRO e `game.toml` della cartella del run (niente
+`deko3d/`). Prima di ogni avvio, oltre ai tre controlli: cancellare `sdmc:/switch/theft4/deko3d_shaders.bin` (la cache
+DKSH che l'NRO scrive; il primo avvio compila le varianti sulla console e fa parte della misura). La riga
+`nx_gpu = vulkan, but this build has no Vulkan backend` è innocua: questa NRO usa sempre ReNut. Log in più da
+riportare: `deko3d.log` e `game.prev.log` (l'avvio precedente). Un crash si legge con `addr2line -f -C -i -e
+switch-game-renut.elf <pc - base> <lr - base> <caller...>` sull'ELF della stessa cartella: `game-crash.log` dà gli
+indirizzi già meno la base del modulo. Un `far` meno la base dell'arena guest (riga `memory_switch: guest arena` di
+`game.log`) maggiore di 0xB01FFFFF è un indirizzo fuori dall'arena: un VA guest tradotto senza `rex_guest_table`
+(run 66). Dal run 67 la cartella del run ha anche `README.txt` e `SHA256SUMS.txt`; l'ELF serve solo sul PC.
+
 **Smoke:** `switch-smoke.nro` della stessa cartella del run fa anche il
 passo 8 (deko3d contro NVK, `13-deko3d-spike.md`, ~1–2 minuti, schermo fermo
 sull'ultima immagine della sonda Vulkan); il risultato sono le righe `gpu
