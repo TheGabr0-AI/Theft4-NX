@@ -531,7 +531,12 @@ namespace plume {
             flags |= DkImageFlags_UsageRender;
             // Colour targets compressed; depth too with Deko3DOptions::depthCompression (SwitchWakerHD's defaults left it
             // off as not verified).
-            if (!depth || g_deko3dOptions.depthCompression)
+            // theft4 (2026-11-11, run 69): not a multisampled target. Its compressed kinds are the multisample ones
+            // (C32_MS2_2CRA, ZF32_MS2_2CZ, ...: deko3d pickImageMemoryKind), and Renut's shaders read these targets
+            // (resolves, depth words); run 69 found every such read returning 0 on the console while the 2D engine read
+            // the same images right. deko3d has no public decompress (only its present path decompresses): such an
+            // image stays uncompressed (Generic_16BX2 for colour, ZF32 for depth).
+            if ((!depth || g_deko3dOptions.depthCompression) && !multisampled)
                 flags |= DkImageFlags_HwCompression;
         }
         if (desc.flags & (RenderTextureFlag::UNORDERED_ACCESS | RenderTextureFlag::STORAGE))
@@ -726,7 +731,12 @@ namespace plume {
             // Written into a local copy first: the GPU may read the descriptor block (other slots) while the CPU
             // writes it, so a slot is written whole, with one copy.
             DkImageDescriptor local;
-            dkImageDescriptorInitialize(&local, &view, loadStore, false);
+            // theft4 (2026-11-11, run 69): a multisampled image is described "decayed": a plain 2D texture of its
+            // sample grid (deko3d tic_generate.cpp: width x samplesX, height x samplesY, no msaa_mode), which the host
+            // shaders that read such images index themselves (resolve_ms_ps.hlsl, depth_resolve.hlsli under
+            // BANJO_DEKO3D). Run 69: every fetch through the multisample descriptor returned 0 on the console.
+            const bool decay = t->desc.multisampling.sampleCount != RenderSampleCount::COUNT_1;
+            dkImageDescriptorInitialize(&local, &view, loadStore, decay);
             memcpy(d, &local, sizeof(local));
             // banjo-nx (2026-10-19, GPU, txq): the size a texture query of this view returns at level 0: the image's
             // size at the view's first level; the depth of a 3D image there, else the view's layers (all from its first

@@ -5244,6 +5244,13 @@ bool ResolveDepth(HostSurface *surface, HostTexture *dest, const ClearRect &src,
   cmd->setGraphicsDescriptorSet(s.texture_set.get(), 2);  // banjo-nx: the stencil view, read as uint
   UtilityPush push{};
   push.scale[0] = push.scale[1] = 1.0f;
+  if (variant == 1) {
+    // theft4 (run 69): the sample grid of the multisampled target (samples in x, in y), which deko3d's shader reads
+    // through a decayed descriptor (depth_resolve.hlsli, DEPTH_RESOLVE_GRID); the other back ends' shaders ignore it.
+    const uint32_t n = u32(surface->samples);
+    push.scale[0] = n >= 8 ? 4.0f : n >= 2 ? 2.0f : 1.0f;
+    push.scale[1] = n >= 4 ? 2.0f : 1.0f;
+  }
   push.translate[0] = float(scale.Coord(src.x1) - scale.Coord(dest_x));
   push.translate[1] = float(scale.Coord(src.y1) - scale.Coord(dest_y));
   push.texture_index = source_slot;

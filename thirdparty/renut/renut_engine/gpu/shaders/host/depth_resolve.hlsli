@@ -14,7 +14,14 @@
 #define UTILITY_OWN_TEXTURE_TABLE
 #include "utility.hlsli"
 
-#if DEPTH_RESOLVE_MS
+// theft4 (run 69): on deko3d a multisampled target is read through a decayed descriptor, a 2D texture of its sample
+// grid (resolve_ms_ps.hlsl explains why); g_Push.scale gives the grid (samples in x, in y) and sample 0 is the first
+// texel of the pixel's block.
+#if DEPTH_RESOLVE_MS && defined(BANJO_DEKO3D)
+#define DEPTH_RESOLVE_GRID 1
+Texture2D<float> g_Depth[] : register(t0, space0);
+Texture2D<uint> g_Stencil[] : register(t0, space2);
+#elif DEPTH_RESOLVE_MS
 Texture2DMS<float> g_Depth[] : register(t0, space0);
 Texture2DMS<uint> g_Stencil[] : register(t0, space2);
 #else
@@ -57,7 +64,12 @@ PSOutput main(PSInput input)
     const int2 texel = int2(input.position.xy) + int2(g_Push.translate);
     const uint index = NonUniformResourceIndex(g_Push.textureIndex);
     uint stencil = 0;
-#if DEPTH_RESOLVE_MS
+#if DEPTH_RESOLVE_GRID
+    const int2 at = texel * int2(max(g_Push.scale, float2(1.0, 1.0)) + 0.5);
+    const float depth = g_Depth[index].Load(int3(at, 0));
+    if (g_Push.param1 != 0.0)
+        stencil = g_Stencil[NonUniformResourceIndex(g_Push.samplerIndex)].Load(int3(at, 0)) & 0xFF;
+#elif DEPTH_RESOLVE_MS
     const float depth = g_Depth[index].Load(texel, 0);
     if (g_Push.param1 != 0.0)
         stencil = g_Stencil[NonUniformResourceIndex(g_Push.samplerIndex)].Load(texel, 0) & 0xFF;
