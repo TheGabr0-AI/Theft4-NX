@@ -131,6 +131,10 @@ enum class GpuColorFormat : u32 {
   Fmt16_16_16_16 = 5,
   Fmt16_16_Float = 6,
   Fmt16_16_16_16_Float = 7,
+  // theft4 (2026-11-11): the two "AS" formats, the EDRAM bits of 2 and 3 resolved to wider texels (GTA IV draws its
+  // lit scene through 0xC and switches the same surface between 3 and 0xC).
+  Fmt2_10_10_10_As_10_10_10_10 = 10,
+  Fmt2_10_10_10_Float_As_16_16_16_16 = 12,
   Fmt32_Float = 14,
   Fmt32_32_Float = 15,
 };

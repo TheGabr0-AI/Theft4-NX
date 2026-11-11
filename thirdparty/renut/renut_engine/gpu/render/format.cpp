@@ -15,9 +15,15 @@ plume::RenderFormat ColorTargetFormat(GpuColorFormat format) {
   case GpuColorFormat::Fmt8_8_8_8:
   case GpuColorFormat::Fmt8_8_8_8_Gamma:
     return plume::RenderFormat::R8G8B8A8_UNORM;
+  // theft4 (2026-11-11): 0xA and 0xC are the same EDRAM bits as 2 and 3 (only a resolve reads them wider), so the
+  // same host format: one target for the surface whichever of the two its header names. They fell to the default
+  // (8-bit unorm) before: GTA IV's lit scene (7e3, drawn through 0xC) was clamped to [0, 1] at 8 bits, and its switch
+  // to 3 gave another target.
   case GpuColorFormat::Fmt2_10_10_10:
+  case GpuColorFormat::Fmt2_10_10_10_As_10_10_10_10:
     return plume::RenderFormat::R16G16B16A16_UNORM;
   case GpuColorFormat::Fmt2_10_10_10_Float:
+  case GpuColorFormat::Fmt2_10_10_10_Float_As_16_16_16_16:
   case GpuColorFormat::Fmt16_16_16_16_Float:
     return plume::RenderFormat::R16G16B16A16_FLOAT;
   case GpuColorFormat::Fmt16_16:

@@ -322,6 +322,21 @@ Also changed in this round:
   retired at each switch. Not yet shown to matter (the lit passes may draw through another surface); to check with the
   exposure.
 
+### R3, second round (2026-11-11, PC only): the lit scene's colour format
+
+**Cause (verified):** ReNut's table of colour target formats (`render/format.cpp`) had no entry for the Xenos formats
+0xA (2_10_10_10_AS_10_10_10_10) and 0xC (2_10_10_10_FLOAT_AS_16_16_16_16), so both fell to its default, 8-bit unorm.
+GTA IV draws its lit scene into `40076EB0` through 0xC (the draw log's bound surface: colour info `000C02D0` for the
+180 draws of the lighting) and switches the same surface's header to 3 (2_10_10_10_FLOAT) several times a frame. So the
+HDR scene was clamped to [0, 1] at 8 bits, and each switch to 3 gave a second host target (16-bit float), which was
+retired at the switch back. On the console both are the same EDRAM bits; only a resolve reads 0xC wider. Now 0xA maps
+as 2 and 0xC as 3: one host target, 16-bit float.
+
+**Result (PC, D3D12, `out/pc-renut/cap33`, local):** the opening credits are readable over the 3D scene, the city's
+lights, the pier's numbered posts and the clouds show; mean brightness of the 60-100 s captures 28-38 (was 12).
+**Still wrong:** everything below the horizon (the sea) is black, and the buildings show only their lit windows and
+lamps: the surfaces the deferred lighting should light are dark. Next.
+
 ## 7. Licences
 
 - reNut (masterspike52) has no licence file. **Settled on 2026-11-10:** this project's owner confirms
