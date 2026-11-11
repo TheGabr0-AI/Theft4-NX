@@ -535,6 +535,66 @@ window close): 5-6 PNGs written by the new thread, exit code 0 in about 0.5 s. T
 (`ReXApp::OnClosing` ends in `std::_Exit(0)` before `OnShutdown`, as before). **To verify on the console:** frames after
 the first Swap, the capture PNGs, the `capture thread joined` line at the exit with +.
 
+## 6f. Run 68: the first start that reaches gameplay; the deferred frame black; run 69 (2026-11-11)
+
+**Run 68** (`5b15e0a`, logs `out/console-runs/68-logs`, 13 captures): **the first ReNut start on the Switch that gets
+through**: logos, the intro's artwork, the opening cutscene with its audio (a little crackly), the skip, gameplay with
+the minimap and a camera that answers the right stick; 332 s, 0 faults, exit with + (`capture thread joined in 3 ms`:
+run 67's fix verified). On the screen only the **forward** parts of GTA IV's frame: the sky and the moon, the far LOD
+buildings' windows, the bridge's lights, the water's reflections, the HUD. Everything the deferred lighting draws is
+black: the ground and the near buildings (their silhouettes hide the sky: depth is there), the ship in the cutscene,
+Niko and the cars. The black part is not a fixed half of the screen: its edge is the horizon and moves with the camera
+(y = 300, 455, 595 in three captures), so not a viewport, scissor or tile rect. The card was not cleaned between runs
+67 and 68 (only `game.toml` copied, the user's note); the log shows it changed nothing that matters: the DKSH cache
+held the 2 variants run 67 compiled before its stop (`DKSH cache deko3d_shaders.bin: 2 variants`) and `runtime-cache`
+was empty (`runtime-cache 0`): a cold start in practice. 7 fps in gameplay (render thread
+200 ms a frame, GPU 59 ms; uam compiled 220 variants at 390 ms each in the first minutes): a separate matter.
+
+**What runs as on the PC (same lines in both logs):** the surfaces (the 2x G-buffer `40226670` / `40226700` /
+`402267D0` RGBA8 with depth `402265E0` D32F_S8, the 1x words target `40226810`, depth `400007C0`, HDR `40076EB0`
+RGBA16F), the depth restore (`400007C0` restored from `40226810`), no `banjo_deko3d_depth24` target (every depth target
+D32F_S8, as on the PC), no device fault, no pipeline or shader failure (220 uam compiles, 0 failed). So the restore's
+depth reached the frame (the geometry hides the sky) and the **lighting's result** was black.
+
+**The PC reference** (D3D12, `banjo_renut_diag_resolve_trace`, a traced frame at 120 s in the cutscene): GTA IV
+resolves the 2x G-buffer in **three tiles** (rows 0-256, 256-512, 512-720), each tile one depth resolve and four
+colour resolves of a **region** of a multisampled target. On deko3d two steps of that path are the back end's own:
+
+1. **Region resolves of a multisampled target** (`render/draw.cpp`, the resolve's `multisampled` branch ->
+   `plume_deko3d_commands.cpp` `resolveTextureRegion`): a whole-image resolve went to `dkCmdBufResolveImage`, a region
+   to `dkCmdBufBlitImage` of the multisampled image ("it averages the samples it covers"). deko3d's source
+   (`source/dk_image.cpp`, read 2026-11-11) says otherwise: the blit reads a multisampled image as its grid of samples
+   (2x: 2W x H, source coordinates times 2), sets no resolve mode and filters one point of it; only
+   `dkCmdBufResolveImage` offsets to the sample block's centre and steps by it, and it takes whole images only. The
+   run 68 log counts about 5 such blits a frame. **Fix:** every multisampled colour resolve is drawn
+   (`shaders/host/resolve_ms_ps.hlsl`: each pixel the mean of its samples, what D3D12's `ResolveSubresourceRegion` and
+   Vulkan's resolve give for unorm and float formats), through `DrawResolveCopy` (same formats and conditions as the
+   single-sampled drawn resolve; anything else keeps the old path). cvar `gta4_renut_draw_ms_resolves`: -1 (default)
+   deko3d only, 1 every back end (a PC test of the same path), 0 never. One log line at the 1st, 1,000th and
+   100,000th drawn multisampled resolve.
+2. **Zcull after the restore** (`render/draw.cpp` `MaybeRestoreDepthLocked`): the restore writes the depth from the
+   pixel shader (`gl_FragDepth`). Zcull is built from the rasterised depth; deko3d's source handles no shader depth
+   write and leaves Zcull to the application (`DkInvalidateFlags_Zcull`; it drops it only when another depth target
+   is bound). So it keeps describing the depth before the restore (by this reasoning, not measured), and the light
+   volumes test LESS against reverse Z right after: a stale "far" Zcull would reject them. **Fix:** `plume::Deko3DInvalidateZcull` (new, `plume_deko3d.h`)
+   after the restore's passes, as plume already does after a copy or an upload into a depth target. Zcull's stencil
+   side plays no part: deko3d programs depth-only Zcull (`zetaType = 2`) and fixed stencil criteria.
+
+Which of the two blacked the lighting (or both) the console must show: no PC back end has either. **Verified on the
+PC (D3D12):** the build; `--gta4_renut_draw_ms_resolves=1` (every multisampled resolve drawn, the G-buffer tiles
+included: `40226670 x2 rect (0,0)-(1280,256)` in the log, 100,000 drawn in 110 s): the opening cutscene lit and whole
+as with the native resolve (the deck with the NO SMOKING wall and the credits at 80 s, the cabin with Niko and Roman
+lit at 100 s); `tests/renut/test_gta4_d3d.py` OK. Not on the PC: Zcull (D3D12 has none), deko3d's own compile of
+`resolve_ms_ps` (uam, at the Switch build).
+
+**Open, not addressed here:** game pixel shaders that write `oDepth` into a target Zcull covers would need the same
+drop (the renderer does not know which do); the frame rate (7 fps, render thread bound); the crackly audio (the
+audio worker starved at that frame rate: first look at it once the frame is right).
+
+**Run 69** (see `run-index.md`): one start, the capture every 15 s, and `banjo_renut_diag_resolve_trace` (one traced
+frame every 30 s: every resolve and target change with the bytes' summary) so that a frame still dark says at which
+step it goes black.
+
 ## 7. Licences
 
 - reNut (masterspike52) has no licence file. **Settled on 2026-11-10:** this project's owner confirms

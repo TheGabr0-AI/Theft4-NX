@@ -84,6 +84,19 @@ Switch è una chiamata pthread senza implementazione in libnx, per esempio `pthr
 `gta4_renut_capture_s` acceso, l'uscita con `+` deve scrivere `gta4_renut_capture_s: capture thread joined in N ms`;
 senza quella riga l'uscita non è passata da `ExitGame`.
 
+**Dal run 68 (il gioco arriva al gameplay): run grafici ReNut.** Le catture (`gta4_renut_capture_s`) sono la prova
+principale: si guardano tutte e si dice per ciascuna cosa c'è e cosa manca, separando le parti **forward** del frame
+di GTA IV (cielo, luna, finestre dei LOD lontani, acqua, HUD/minimappa) da quelle **differite** (suolo, palazzi vicini,
+personaggi, auto: G-buffer 2x in tre tile, ricostruzione della depth, illuminazione). Un bordo nero che segue
+l'orizzonte e si sposta con la telecamera non è un viewport tagliato: è la parte differita. Il confronto si fa con il
+PC (D3D12) allo stesso punto del filmato iniziale (catture ogni 10 s; il numero di frame nel nome **non** identifica la
+scena, dipende dagli fps). Con `banjo_renut_diag_resolve_trace = true` le righe `[trace]` di un frame ogni 30 s danno,
+per ogni resolve e cambio di target, quanti texel non sono zero e le medie dei byte: il primo passaggio che diventa
+nero è lì (le letture dei target multisample del PC escono a zero anche quando la scena è giusta: lì valgono solo
+quelle 1x e delle texture). Righe da cercare per prime: `multisampled colour resolves drawn`, `restored from colour`,
+`copy and 2D engines` (con il resolve disegnato i `blits` devono restare quasi fermi). Gli fps del primo avvio
+contano anche le compilazioni uam (`uam N compiles (avg ...)`): si valutano a parte.
+
 **Smoke:** `switch-smoke.nro` della stessa cartella del run fa anche il
 passo 8 (deko3d contro NVK, `13-deko3d-spike.md`, ~1–2 minuti, schermo fermo
 sull'ultima immagine della sonda Vulkan); il risultato sono le righe `gpu
