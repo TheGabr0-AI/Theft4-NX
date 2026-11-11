@@ -4593,3 +4593,12 @@ measure); audio 63 % of real time, dry 32 times in the last window (no audio cha
 **No fix is made in the recorder** (the direction is `18-renut-migration.md`). What this gives the new renderer: the
 first thing to compare once it draws is these shots; ReNut takes vertices, indices and constants from the device at
 the draw, so shards there too would point at the guest data or the shaders, whole characters at the recorder's path.
+
+## 2026-11-11: ReNut on the PC, the black 3D frame closed (AP; PC only, no console run)
+
+`18-renut-migration.md` §6b, "R3, first round". The 3D scene on ReNut's renderer was black because sa2-nx's draw path
+tested two ranges of device bytes by number in SA2's layout (the render target words and the texture words) to reuse
+a draw's targets and textures: in GTA IV's device those bytes are other words, a change of render targets went unseen
+and every pass after the G-buffer drew into the previous target. Both ranges now come from the layout; a test fails on
+any range named by number. **PC, D3D12:** the scene reaches the screen (night sky, city), still much darker than run
+65's shots; exposure next. Nothing of this has run on the console.

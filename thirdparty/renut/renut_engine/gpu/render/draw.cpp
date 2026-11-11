@@ -3966,7 +3966,8 @@ bool DrawsWithoutPixelShader(const GuestDevice &device, const Targets &t, const 
 // banjo-nx (2026-10-18, matching RenderDoc captures of Ryujinx to the game's shaders): banjo_renut_diag_draw_log_s
 // seconds after the first draw, every draw of the next two frames: its shaders, counts, target and state, in order.
 void DrawLog(const DrawCall &call, const Geometry &geometry, const ShaderRecord *vs, const ShaderRecord *ps,
-             const Targets &targets, const PipelineKey &key, const SharedConstants &sc, u32 export_count) {
+             const Targets &targets, const PipelineKey &key, const SharedConstants &sc, u32 export_count,
+             const ViewportState *viewport = nullptr, const FloatConstants *vsc = nullptr, u32 bound_rt0 = 0) {
   static const int32_t at = REXCVAR_GET(banjo_renut_diag_draw_log_s);
   if (at <= 0)
     return;
@@ -3995,6 +3996,47 @@ void DrawLog(const DrawCall &call, const Geometry &geometry, const ShaderRecord 
             c0 ? int(c0->format) : -1, targets.color_count, targets.depth ? int(targets.depth->format) : -1,
             key.depth_control, key.blend_control[0], key.color_mask, key.alpha_to_coverage, sc.vertex_fetch_bytes,
             export_count);
+  // theft4 (2026-11-11, the black 3D frame): where the draw lands. The viewport and scissor as set on the host, the
+  // guest size of the targets, the tiles and the transform switches, and the surfaces' guest words.
+  if (viewport) {
+    const plume::RenderViewport &v = viewport->viewport;
+    const plume::RenderRect &r = viewport->scissor;
+    RGPU_INFO("[drawlog]   vp {:.1f},{:.1f} {:.1f}x{:.1f} z {:.3f}-{:.3f} scissor {},{}-{},{} screen {} scale {:.3f},{:.3f} "
+              "off {:.1f},{:.1f} guest {}x{} host {}x{} tiles {} c0 {:08X} depth {:08X} samples {}",
+              v.x, v.y, v.width, v.height, v.minDepth, v.maxDepth, r.left, r.top, r.right, r.bottom,
+              int(viewport->screen_space), viewport->screen_scale[0], viewport->screen_scale[1],
+              viewport->screen_offset[0], viewport->screen_offset[1], targets.guest_width, targets.guest_height,
+              targets.width, targets.height, g_tiles.size(), c0 ? c0->guest_va : 0,
+              targets.depth ? targets.depth->guest_va : 0, c0 ? u32(c0->samples) : targets.depth ? u32(targets.depth->samples) : 0u);
+    const auto *rt0 = bound_rt0 ? GuestPtr<const d3d::SurfaceDesc>(bound_rt0 + sizeof(d3d::Resource)) : nullptr;
+    RGPU_INFO("[drawlog]   bound rt0 {:08X} colour info {:08X} host {}", bound_rt0, rt0 ? u32(rt0->ColorInfo) : 0u,
+              static_cast<const void *>(c0));
+  }
+  // theft4 (2026-11-11): the vertex shader's float constants as the draw reads them: how many of the registers it uses
+  // are all zero, and the first four used ones.
+  if (vsc && vs && vs->entry) {
+    u32 used = 0, zero = 0;
+    std::string first;
+    for (u32 r = 0; r < 256; ++r) {
+      if (!((vs->entry->floatConstants[r / 32] >> (r % 32)) & 1))
+        continue;
+      ++used;
+      const u8 *bytes = vsc->Register(r);
+      float f[4];
+      bool all_zero = true;
+      for (u32 i = 0; i < 4; ++i) {
+        u32 w;
+        std::memcpy(&w, bytes + 4 * i, 4);
+        w = __builtin_bswap32(w);
+        std::memcpy(&f[i], &w, 4);
+        all_zero &= w == 0;
+      }
+      zero += all_zero;
+      if (used <= 4)
+        first += fmt::format(" c{}=({:.3g},{:.3g},{:.3g},{:.3g})", r, f[0], f[1], f[2], f[3]);
+    }
+    RGPU_INFO("[drawlog]   vs constants: {} used, {} zero;{}", used, zero, first);
+  }
 }
 
 // sa2-nx (2026-10-20, sa2_renut_chain_reuse): the previous chain draw's targets and viewport (DrawStateLocked).
@@ -4131,14 +4173,18 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
     return false;  // missing from the shader cache (captured for the next build)
 
   // sa2-nx (2026-10-20, sa2_renut_chain_reuse): the previous chain draw's targets when the device's target words (bytes
-  // 12816-12835) did not change, no target was built, retired or rebound since (the surface epoch), and the targets'
+  // 12816-12835 in SA2) did not change, no target was built, retired or rebound since (the surface epoch), and the targets'
   // descriptor words (which GetHostSurfaceLocked reads in guest memory) are the same.
   static const bool targets_reuse_on = REXCVAR_GET(sa2_renut_chain_reuse);
   static const bool targets_verify = targets_reuse_on && REXCVAR_GET(sa2_renut_chain_reuse_verify);
   const ChainHint &chain = g_chain_hint;
   Targets targets;
   bool targets_reused = false;
-  if (targets_reuse_on && chain.seq && chain.seq == g_targets_reuse.seq + 1 && !ChainChanged(chain, 12816, 12835) &&
+  // theft4 (2026-11-11): the target words by the layout (GTA IV: 12432-12451). sa2-nx had SA2's bytes, 12816-12835: in
+  // GTA IV's device those are texture words, so a change of render targets went unseen and the next draws kept the
+  // targets before it: the lighting and every post-processing pass drew into the wrong target (the black 3D frame).
+  if (targets_reuse_on && chain.seq && chain.seq == g_targets_reuse.seq + 1 &&
+      !ChainChanged(chain, d3d::kDeviceOffsetRenderTargets, d3d::kDeviceOffsetDepthStencil + 3) &&
       g_targets_reuse.epoch == SurfaceEpochLocked()) {
     targets_reused = true;
     for (u32 i = 0; targets_reused && i <= d3d::kMaxRenderTargets; ++i) {
@@ -4249,7 +4295,7 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
   g_handover_targets = &targets;  // banjo-nx (2026-10-19, banjo_deko3d_depth_handover)
   // sa2-nx (2026-10-20, sa2_renut_chain_reuse): the previous chain draw's texture and sampler words when FillTextures'
   // memo would answer every bound slot as it did then: the device's fetch constants and texture words unchanged
-  // (bytes 1152-1775, 12920-13023), the same slots, frame, texture and depth epochs and depth target, and each bound
+  // (bytes 1152-1775, 12920-13023 in SA2), the same slots, frame, texture and depth epochs and depth target, and each bound
   // texture's header words the same. The memo hit's work is done again for each slot (its transitions and counters).
   struct TexturesReuse {
     uint64_t seq = 0, frame = 0, epoch = 0, depth_epoch = 0;
@@ -4262,7 +4308,9 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
   };
   static TexturesReuse treuse;
   bool textures_reused = targets_reuse_on && chain.seq && chain.seq == treuse.seq + 1 && treuse.mask == texture_mask &&
-                         !ChainChanged(chain, 1152, 1775) && !ChainChanged(chain, 12920, 13023) &&
+                         !ChainChanged(chain, 1152, 1775) &&
+                         // theft4 (2026-11-11): the texture words by the layout (GTA IV: 12536-12639; sa2-nx: SA2's 12920-13023)
+                         !ChainChanged(chain, d3d::kDeviceOffsetTextures, d3d::kDeviceOffsetTextures + 4 * d3d::kTextureFetchSlots - 1) &&
                          treuse.frame == TextureFrameLocked() && treuse.epoch == g_texture_epoch &&
                          treuse.depth_epoch == g_depth_epoch && treuse.depth == targets.depth;
   for (u32 r = 0; textures_reused && r < d3d::kTextureFetchSlots; ++r) {
@@ -4777,7 +4825,8 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
   static const bool draw_log = !REXCVAR_GET(sa2_renut_lean_diagnostics) ||
                                REXCVAR_GET(banjo_renut_diag_draw_log_s) > 0;
   if (draw_log)
-    DrawLog(call, geometry, vs, ps, targets, key, sc, export_count);
+    DrawLog(call, geometry, vs, ps, targets, key, sc, export_count, &viewport, &vs_constants,
+            device.U32(d3d::kDeviceOffsetRenderTargets));
   // banjo-nx (2026-10-19, banjo_renut_resolve_skip): the targets this draw can write.
   for (u32 i = 0; i < targets.color_count && i < key.color_count; ++i)
     if ((key.color_mask >> (4 * i)) & 0xF)
@@ -4971,8 +5020,8 @@ namespace {
 void ClearTargets(const Targets &t, u32 flags, const plume::RenderRect &rect, const float color[4],
                   float depth, u32 stencil) {
   if (banjo::renut_gpu::ResolveTraceOn()) {
-    RGPU_INFO("[trace] clear {:X} rect ({},{})-({},{}) of {}x{}", flags, rect.left, rect.top, rect.right, rect.bottom,
-              t.width, t.height);
+    RGPU_INFO("[trace] clear {:X} rect ({},{})-({},{}) of {}x{} after {} draws", flags, rect.left, rect.top, rect.right,
+              rect.bottom, t.width, t.height, g_trace_draws);  // theft4: the draws since the last change of targets
   }
   if (rect.right <= rect.left || rect.bottom <= rect.top)
     return;
@@ -5479,6 +5528,120 @@ static uint64_t ResolveSignature(const HostSurface *surface, const ClearRect &sr
   return h ? h : 1;
 }
 
+// theft4 (2026-11-11, the black 3D frame): level 0 of a host texture or target read back byte for byte, without a
+// shader or a descriptor (ReadRenderTargetLocked's compute readback gave different counts for the same target twice in a
+// row). A multisampled target is resolved into a single-sampled copy first. The caller has put 'texture' in
+// 'source_layout' (COPY_SOURCE, or RESOLVE_SOURCE when multisampled). A 4-byte-per-texel summary in 'out'.
+struct RawReadSummary {
+  uint32_t width = 0, height = 0, texel_bytes = 0;
+  uint64_t nonzero = 0, texels = 0;
+  double channel_mean[4] = {};  // of the 4-byte formats' bytes, 0-255; of R32's value for 4-byte floats
+  uint32_t centre = 0;
+};
+static bool ReadTextureRawLocked(plume::RenderTexture *texture, plume::RenderFormat format, uint32_t width,
+                                 uint32_t height, bool multisampled, RawReadSummary &out) {
+  auto &s = State();
+  const uint32_t texel = plume::RenderFormatSize(format);
+  if (!texture || !texel || !width || !height || !Video::EnsureCommandListLocked())
+    return false;
+  plume::RenderCommandList *cmd = s.command_list;
+  std::unique_ptr<plume::RenderTexture> single;
+  plume::RenderTexture *source = texture;
+  if (multisampled) {
+    plume::RenderTextureDesc desc = plume::RenderTextureDesc::Texture2D(width, height, 1, format);
+    desc.flags |= plume::RenderTextureFlag::RENDER_TARGET;
+    single = s.device->createTexture(desc);
+    if (!TextureCreated(single.get()))
+      return false;
+    cmd->barriers(plume::RenderBarrierStage::COPY,
+                  plume::RenderTextureBarrier(single.get(), plume::RenderTextureLayout::RESOLVE_DEST));
+    cmd->resolveTexture(single.get(), texture);
+    cmd->barriers(plume::RenderBarrierStage::COPY,
+                  plume::RenderTextureBarrier(single.get(), plume::RenderTextureLayout::COPY_SOURCE));
+    source = single.get();
+  }
+  const uint32_t row_texels = (width * texel + 255u) / 256u * 256u / texel;
+  const uint64_t bytes = uint64_t(row_texels) * texel * height;
+  std::unique_ptr<plume::RenderBuffer> readback = s.device->createBuffer(plume::RenderBufferDesc::ReadbackBuffer(bytes));
+  if (!readback)
+    return false;
+  cmd->copyTextureRegion(plume::RenderTextureCopyLocation::PlacedFootprint(readback.get(), format, width, height, 1,
+                                                                          row_texels),
+                         plume::RenderTextureCopyLocation::Subresource(source));
+  g_bound.framebuffer = nullptr;
+  g_bound.pipeline = nullptr;
+  g_bound.layout = false;
+  g_bound.viewport_set = false;
+  detail::SubmitAndWaitLocked(s);
+  const auto *data = static_cast<const u8 *>(readback->map());
+  if (!data)
+    return false;
+  out = {};
+  out.width = width;
+  out.height = height;
+  out.texel_bytes = texel;
+  uint64_t sums[4] = {};
+  for (uint32_t y = 0; y < height; ++y) {
+    const u8 *row = data + uint64_t(y) * row_texels * texel;
+    for (uint32_t x = 0; x < width; ++x) {
+      const u8 *t = row + uint64_t(x) * texel;
+      bool any = false;
+      for (uint32_t b = 0; b < texel; ++b)
+        any |= t[b] != 0;
+      out.nonzero += any;
+      if (texel == 4)
+        for (uint32_t c = 0; c < 4; ++c)
+          sums[c] += t[c];
+    }
+  }
+  out.texels = uint64_t(width) * height;
+  for (uint32_t c = 0; c < 4; ++c)
+    out.channel_mean[c] = double(sums[c]) / double(out.texels);
+  std::memcpy(&out.centre, data + (uint64_t(height / 2) * row_texels + width / 2) * texel, std::min(texel, 4u));
+  readback->unmap();
+  Video::RetireLocked(std::move(readback));
+  if (single)
+    Video::RetireLocked(std::move(single));
+  return true;
+}
+
+static void TraceSurfaceRawLocked(const char *when, HostSurface *surface) {
+  if (!surface || !surface->texture || surface->depth)
+    return;
+  const bool ms = surface->samples != plume::RenderSampleCount::COUNT_1;
+  TransitionSurfaceLocked(surface, ms ? plume::RenderTextureLayout::RESOLVE_SOURCE
+                                      : plume::RenderTextureLayout::COPY_SOURCE);
+  RawReadSummary r;
+  if (!ReadTextureRawLocked(surface->texture.get(), surface->format, surface->scale.Size(surface->width),
+                            surface->scale.Size(surface->height), ms, r)) {
+    RGPU_INFO("[trace]   raw {} target {:08X}: not read", when, surface->guest_va);
+    return;
+  }
+  RGPU_INFO("[trace]   raw {} target {:08X} ({}x{} fmt {} x{}): {} of {} texels not zero, bytes mean {:.1f} {:.1f} "
+            "{:.1f} {:.1f}, centre {:08X}", when, surface->guest_va, r.width, r.height, u32(surface->format),
+            u32(surface->samples), r.nonzero, r.texels, r.channel_mean[0], r.channel_mean[1], r.channel_mean[2],
+            r.channel_mean[3], r.centre);
+}
+
+static void TraceTextureRawLocked(const char *when, u32 texture_va) {
+  HostTexture *t = FindHostTextureLocked(texture_va);
+  if (!t || !t->texture || t->dimension != TextureDimension::Tex2D || t->stacked)
+    return;
+  const plume::RenderTextureLayout before = t->layout;
+  TransitionTextureLocked(t, plume::RenderTextureLayout::COPY_SOURCE);
+  RawReadSummary r;
+  const bool read = ReadTextureRawLocked(t->texture.get(), t->host_format, t->alloc_width, t->alloc_height, false, r);
+  if (before != plume::RenderTextureLayout::UNKNOWN)
+    TransitionTextureLocked(t, before);
+  if (!read) {
+    RGPU_INFO("[trace]   raw {} texture {:08X}: not read", when, texture_va);
+    return;
+  }
+  RGPU_INFO("[trace]   raw {} texture {:08X} ({}x{} fmt {}): {} of {} texels not zero, bytes mean {:.1f} {:.1f} "
+            "{:.1f} {:.1f}, centre {:08X}", when, texture_va, r.width, r.height, u32(t->host_format), r.nonzero,
+            r.texels, r.channel_mean[0], r.channel_mean[1], r.channel_mean[2], r.channel_mean[3], r.centre);
+}
+
 void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *source_rect,
                         u32 dest_texture_va, const d3d::TextureFetchConstant *dest_format,
                         i32 dest_x, i32 dest_y, u32 dest_level, u32 dest_slice,
@@ -5502,10 +5665,13 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
   if (banjo::renut_gpu::ResolveTraceOn() && surface) {
     const ClearRect r = source_rect ? *source_rect : ClearRect{0, 0, -1, -1};
     RGPU_INFO("[trace] resolve {} {:08X} ({}x{} fmt {} samples {}) -> texture {:08X} at ({},{}) level {} slice {}, "
-              "rect ({},{})-({},{}), flags {:X} ({}{})",
+              "rect ({},{})-({},{}), flags {:X} ({}{}) after {} draws",
               surface->depth ? "depth" : "colour", source_va, surface->width, surface->height, u32(surface->format),
               u32(surface->samples), dest_texture_va, dest_x, dest_y, dest_level, dest_slice, r.x1, r.y1, r.x2, r.y2,
-              flags, (flags & 0x100) ? "clear colour after " : "", (flags & 0x200) ? "clear depth after" : "");
+              flags, (flags & 0x100) ? "clear colour after " : "", (flags & 0x200) ? "clear depth after" : "",
+              g_trace_draws);  // theft4: the draws since the last change of targets
+    // theft4 (2026-11-11, the black 3D frame): the source target byte for byte before the resolve.
+    TraceSurfaceRawLocked("before", surface);
   }
   plume::RenderCommandList *cmd = s.command_list;
   static uint32_t depth_logged = 0;
@@ -5659,6 +5825,10 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
     const u32 clear_flags = ((flags & 0x100) ? 1u : 0u) | ((flags & 0x200) ? 0x30u : 0u);
     ClearTargets(t, clear_flags, rect, clear_color ? clear_color : kBlack, clear_depth,
                  clear_stencil);
+  }
+  if (banjo::renut_gpu::ResolveTraceOn() && surface) {  // theft4 (2026-11-11): what the resolve left
+    TraceTextureRawLocked("after", dest_texture_va);
+    TraceSurfaceRawLocked("after", surface);
   }
 }
 

@@ -8,6 +8,9 @@
 #include "plume_d3d12.h"
 
 #include <unordered_set>
+#include <mutex>  // theft4: the debug message callback
+#include <unordered_map>
+#include <cstdlib>
 
 #include <dxgi1_5.h>
 
@@ -3849,6 +3852,33 @@ namespace plume {
             rtDummyLocalPipelineLayout = createPipelineLayout(pipelineLayoutDesc);
         }
 
+        // theft4 (2026-11-11): the debug layer's messages (THEFT4_D3D12_DEBUG) to stderr, the first 4 of each kind.
+        if (const char *env = getenv("THEFT4_D3D12_DEBUG"); env && env[0] == '1') {
+            ID3D12InfoQueue1 *theft4Queue = nullptr;
+            if (SUCCEEDED(d3d->QueryInterface(IID_PPV_ARGS(&theft4Queue)))) {
+                DWORD cookie = 0;
+                theft4Queue->RegisterMessageCallback(
+                    [](D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY severity, D3D12_MESSAGE_ID id, LPCSTR text, void *) {
+                        if (severity == D3D12_MESSAGE_SEVERITY_INFO || severity == D3D12_MESSAGE_SEVERITY_MESSAGE) {
+                            return;
+                        }
+                        static std::mutex mutex;
+                        static std::unordered_map<int, uint32_t> seen;
+                        static uint32_t total = 0;
+                        std::lock_guard<std::mutex> lock(mutex);
+                        if (++seen[int(id)] > 4 || ++total > 600) {
+                            return;
+                        }
+                        fprintf(stderr, "d3d12 %s %d: %s\n", severity <= D3D12_MESSAGE_SEVERITY_ERROR ? "ERROR" : "warning",
+                                int(id), text);
+                        fflush(stderr);
+                    },
+                    D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &cookie);
+                fprintf(stderr, "theft4: D3D12 message callback %s\n", cookie ? "registered" : "not registered");
+            } else {
+                fprintf(stderr, "theft4: no ID3D12InfoQueue1 (debug layer missing?)\n");
+            }
+        }
 #   ifdef D3D12_DEBUG_LAYER_ENABLED
         // Add it to the debug layer info queue if available.
         ID3D12InfoQueue *infoQueue;
@@ -4210,6 +4240,19 @@ namespace plume {
         // Create DXGI Factory.
         UINT dxgiFactoryFlags = 0;
 
+        // theft4 (2026-11-11): THEFT4_D3D12_DEBUG=1 turns the debug layer on in this build too, its messages to stderr
+        // (D3D12Device below), with no break: a test of the renderer's resource states on the PC.
+        if (const char *env = getenv("THEFT4_D3D12_DEBUG"); env && env[0] == '1') {
+            ID3D12Debug1 *theft4Debug = nullptr;
+            if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&theft4Debug)))) {
+                theft4Debug->EnableDebugLayer();
+                if (env[1] == 'g') {
+                    theft4Debug->SetEnableGPUBasedValidation(TRUE);
+                }
+                dxgiFactoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
+                fprintf(stderr, "theft4: D3D12 debug layer on%s\n", env[1] == 'g' ? " with GPU-based validation" : "");
+            }
+        }
 #   ifdef D3D12_DEBUG_LAYER_ENABLED
         ID3D12Debug1 *debugController;
         if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController)))) {

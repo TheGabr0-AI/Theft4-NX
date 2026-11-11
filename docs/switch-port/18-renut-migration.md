@@ -269,6 +269,59 @@ all there (`banjo_renut_diag_draw_log_s`: 971 depth-only draws, 588 into the 3-t
 targets themselves (not their resolves) right after the G-buffer pass, to tell rasterization (viewport, depth test,
 tiled rendering's extent) from the targets' handling (the 2x multisampled G-buffer, the resolves of the three tiles
 into one texture).
+
+### R3, first round (2026-11-11, PC only): the black 3D frame found and closed
+
+**Cause (verified):** sa2-nx's draw path reuses the previous draw's render targets and texture bindings when the device
+bytes they come from did not change (`sa2_renut_chain_reuse`), and it named those bytes **by number, in SA2's device
+layout**: 12816-12835 for the four render targets and the depth surface, 12920-13023 for the 26 texture words. In GTA
+IV's device (2.0.6274) the targets are at 12432-12451 and the textures at 12536-12639; 12816-13023 are other words.
+So a change of render targets went unseen: after the G-buffer, every pass (the lighting, the down-samples, the
+luminance chain, the tone mapping) drew into the target bound before it, and the targets the game resolved and showed
+stayed empty. The fix: both ranges by the layout's constants (`render/draw.cpp`); `tests/renut/test_gta4_d3d.py`
+(`CHAIN`) now fails on any `ChainChanged` range that names a private device byte by number (it flags the four of
+sa2-nx's original file).
+
+**How it was found** (each step a hypothesis tested on the running game, PC, D3D12):
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| draws clipped (viewport, scissor, tiling) | `[drawlog]` with the host viewport, scissor, guest and host size, tiles | rejected: G-buffer 1280x720 at 2x, 3 tiles, viewport (0.5,0.5) 1280x720 z 0-1; shadow map 1280x1280 z 1-0 (reverse Z) |
+| resolves before the draws | resolve and clear lines with the draws since the last change of targets | rejected: 541 G-buffer draws, then EndTiling's resolves |
+| vertex constants missing | the vertex shader's constants at the draw | rejected: world matrices with GTA IV's coordinates (c3 = -346, -1370, 17.3, 1) |
+| vertex streams wrong | `banjo_renut_diag_stream_dump_vs` | rejected: positions, normals and UVs plausible, byte swap right |
+| the G-buffer not written | byte-for-byte readback of the targets before and after each resolve | rejected: RT0 516,209 texels lit, resolved depth 598,438, RT1 normals |
+| **the passes after the G-buffer write elsewhere** | `[drawlog]` with the render target the device has bound | **confirmed:** draws with 320x180, 80x45 and 1x1 surfaces bound reached the 1280x720 host target; the final colour surface (`40076EB0`) read back empty after the 724 draws before its resolve |
+
+**Result (PC, D3D12):** the 3D scene reaches the screen. Captures at 50-90 s: the night sky with clouds and lights, the
+city with the bridge (`out/pc-renut/cap31`, `cap32`, local). A run with `sa2_renut_chain_reuse_verify` (each reused
+target, viewport, key and pipeline compared with one made anew) logged no difference.
+
+**Not right yet:** the image is far darker than the console's (run 65's ship shot at dusk: blue-grey sky and sea; here
+the sky is near black and the sea black). The 1x1 average-luminance target was saturated before this fix; exposure
+and tone mapping are the next thing to check, then run 65's comparison shots (characters, ship hull).
+
+Also changed in this round:
+
+- **Resolve rect (round 2's clip undone):** round 2 clipped the rect to the guest surface. While tiling the surface is
+  one tile (1280x256) and the rects are in screen coordinates, so the second and third tiles' resolves became empty
+  ((0,256)-(1280,256)). Now only a negative right or bottom edge (the (0,0)-(-1,-1) of the frame's last resolve) means
+  "to the edge"; the renderer clamps to the host target, which covers every tile.
+- Tools: `[drawlog]` lines with the viewport, the bound surface and the vertex constants;
+  `banjo_renut_diag_resolve_trace` lines with the draws since the last change of targets and a byte-for-byte readback
+  of each resolve's source and destination (resolve, then copy to a buffer: no shader, no descriptor);
+  `gta4_renut_diag_surfaces` (each surface's header words and target key); `THEFT4_D3D12_DEBUG=1` (environment: the
+  D3D12 debug layer in the release build, its messages in `logs/plume_stderr.log`; `1g` adds GPU-based validation).
+  With the debug layer on, a run through the 3D scene reported only clears without an optimised clear value.
+- **Open, not understood:** ReNut's own `ReadRenderTargetLocked` (compute readback through a bindless slot) gave
+  different counts for the same target read twice in a row (48,305 and 13,183 lit texels). It is only used by SA2's
+  photo capture; the byte-for-byte readback above does not use it.
+- GTA IV rewrites the header of `40076EB0` (the HDR colour surface, EDRAM base 0x2D0) between colour format 3
+  (2_10_10_10_FLOAT, drawing) and 0xC (2_10_10_10_FLOAT_AS_16_16_16_16, resolving), several times a frame. The format
+  is part of ReNut's target key, so the two are different host targets and the format-3 one, with no other user, is
+  retired at each switch. Not yet shown to matter (the lit passes may draw through another surface); to check with the
+  exposure.
+
 ## 7. Licences
 
 - reNut (masterspike52) has no licence file. **Settled on 2026-11-10:** this project's owner confirms

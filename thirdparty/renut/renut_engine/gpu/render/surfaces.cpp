@@ -51,6 +51,10 @@ REXCVAR_DEFINE_INT32(sa2_renut_msaa, 0, "SA2/Renderer",
                      "CPU time and memory (8x: about 30 MB more for each 1280x720 target). Read at start")
     .range(0, 8)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// theft4 (2026-11-11): a test of the targets' keys (the black 3D frame).
+REXCVAR_DEFINE_BOOL(gta4_renut_diag_surfaces, false, "GTA4/Renut",
+                    "Diagnostic: log each surface's header words and the host target key they give ([surface], the "
+                    "first 96: new surfaces and rewritten headers)");
 
 namespace renut::gpu {
 
@@ -441,6 +445,17 @@ HostSurface *GetHostSurfaceSlow(u32 surface_va, const d3d::SurfaceDesc *desc) {
   }
   const uint64_t key = TargetKey(*desc, depth, format, scale);
   auto [bound, first_use] = g_surface_keys.try_emplace(surface_va, key);
+  if (first_use || bound->second != key) {
+    // theft4 (2026-11-11, the black 3D frame): each surface's header words and the host target they key, once.
+    static const bool log_surfaces = REXCVAR_GET(gta4_renut_diag_surfaces);
+    static uint32_t logged = 0;
+    if (log_surfaces && logged++ < 96) {
+      RGPU_INFO("[surface] {:08X}: info {:08X} colour/depth info {:08X} hi {:08X} size {:08X} ({}x{}) format {:08X} "
+                "edram {:08X} -> key {:016X}{}", surface_va, u32(desc->SurfaceInfo), u32(desc->ColorInfo),
+                u32(desc->HiControl), u32(desc->Size), d3d::SurfaceWidth(desc->Size), d3d::SurfaceHeight(desc->Size),
+                u32(desc->Format), u32(desc->EdramSize), key, first_use ? "" : " (header rewritten)");
+    }
+  }
   if (first_use) {
     ++g_target_users[key];
     ++g_surface_epoch;

@@ -200,6 +200,48 @@ def part_wiring():
     print('WIRING   THEFT4_RENUT option, gta4_renderer (default xenos), no emulated GPU when chosen')
 
 
+def part_chain_ranges():
+    # 2026-11-11: sa2-nx's draw path tested device bytes by number (SA2's layout) to reuse a draw's targets and textures;
+    # in GTA IV's device those numbers are other words, and the black 3D frame came from it. Every ChainChanged range
+    # in the engine is either the public part (the same in every 2.0 device: below 11000) or named by the layout.
+    import re
+    engine = os.path.join(ROOT, 'thirdparty', 'renut', 'renut_engine', 'gpu')
+    found = 0
+    def call_args(text, start):  # the arguments of the call whose '(' is at start, split at top-level commas
+        depth, args, cur = 0, [], ''
+        for ch in text[start:]:
+            if ch == '(':
+                depth += 1
+                if depth == 1:
+                    continue
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    return args + [cur]
+            elif ch == ',' and depth == 1:
+                args.append(cur)
+                cur = ''
+                continue
+            cur += ch
+        return args
+    for path in glob.glob(os.path.join(engine, '**', '*.cpp'), recursive=True):
+        text = read(path)
+        for m in re.finditer(r'\bChainChanged\(', text):
+            args = call_args(text, m.end() - 1)
+            if len(args) != 3:
+                continue
+            found += 1
+            for value in args[1:]:
+                value = value.strip()
+                if re.fullmatch(r'(0x[0-9A-Fa-f]+|\d+)', value):
+                    check(int(value, 0) < 11000, 'CHAIN: %s tests private device byte %s by number' %
+                          (os.path.relpath(path, ROOT), value))
+                else:
+                    check('d3d::' in value, 'CHAIN: %s tests %s, not a layout constant' % (os.path.relpath(path, ROOT), value))
+    check(found >= 6, 'CHAIN: the ChainChanged calls were not found (%d)' % found)
+    print('CHAIN    %d ChainChanged ranges: public bytes or layout constants' % found)
+
+
 def main():
     table = part_header()
     index = listings() if os.path.isdir(GEN) and glob.glob(os.path.join(GEN, 'gta4_recomp.*.cpp')) else None
@@ -214,6 +256,7 @@ def main():
         part_calls()
     part_xdk()
     part_wiring()
+    part_chain_ranges()
     if failures:
         print('\n'.join('FAIL ' + f for f in failures))
         sys.exit(1)

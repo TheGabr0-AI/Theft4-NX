@@ -642,24 +642,21 @@ BANJO_RENUT_HOOK_RAW(sub_829CB7C8) {
   const u32 clear_stencil = LoadU32(ctx.r1.u32 + 92);
   ClearRect rect;
   bool has_rect = rect_va && ReadRect(rect_va, rect);
-  // theft4 (2026-11-11): the rect is clipped to the source surface, as the console's resolve does. GTA IV's last
-  // resolve of each 3D frame (the frame into its front buffer) passes (0,0)-(-1,-1): taken as it was, nothing was
-  // copied and the presented frame was black. The source is render target 0-3 or, with index 4, the depth surface.
+  // theft4 (2026-11-11): GTA IV's last resolve of each 3D frame (the frame into its front buffer) passes
+  // (0,0)-(-1,-1), the right and bottom edges as unsigned: to the surface's edge. Taken as signed, nothing was copied.
+  // The renderer clamps the rect to the host target (ResolveLocked), so a negative edge becomes "to the edge" here and
+  // nothing else changes: while tiling the rect is in screen coordinates (EndTiling's second and third tiles are
+  // (0,256)-(1280,512) and (0,512)-(1280,768)), larger than the tile-sized guest surface, and the host target covers
+  // every tile. Clipping it to the guest surface (round 2) emptied those two tiles' resolves.
   if (has_rect) {
-    const u32 index = flags & 7;
-    const u32 surface = index == 4 ? LoadU32(device + d3d::kDeviceOffsetDepthStencil)
-                        : index < 4 ? LoadU32(device + d3d::kDeviceOffsetRenderTargets + index * 4)
-                                    : 0;
-    if (surface) {
-      const u32 size = LoadU32(surface + 0x24);  // (width - 1) << 18 | (height - 1) << 3 (GTA IV's EndTiling)
-      const u32 width = ((size >> 18) & 0x3FFF) + 1, height = ((size >> 3) & 0x7FFF) + 1;
-      rect.x1 = i32(std::min(u32(std::max(rect.x1, 0)), width));
-      rect.y1 = i32(std::min(u32(std::max(rect.y1, 0)), height));
-      rect.x2 = i32(std::min(u32(rect.x2), width));  // as unsigned: -1 is the whole width
-      rect.y2 = i32(std::min(u32(rect.y2), height));
-      if (rect.x1 == 0 && rect.y1 == 0 && u32(rect.x2) == width && u32(rect.y2) == height)
-        has_rect = false;  // the whole surface
-    }
+    rect.x1 = std::max(rect.x1, 0);
+    rect.y1 = std::max(rect.y1, 0);
+    if (rect.x2 < 0)
+      rect.x2 = 0x7FFFFFFF;
+    if (rect.y2 < 0)
+      rect.y2 = 0x7FFFFFFF;
+    if (rect.x1 == 0 && rect.y1 == 0 && rect.x2 == 0x7FFFFFFF && rect.y2 == 0x7FFFFFFF)
+      has_rect = false;  // the whole surface
   }
   i32 dest_x = 0, dest_y = 0;
   if (const auto *p = point_va ? GuestPtr<const be_u32>(point_va) : nullptr) {
