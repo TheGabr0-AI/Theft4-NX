@@ -60,6 +60,15 @@ inline bool Active() {
 #define BANJO_RENUT_HOOK_RAW_SHARED(subroutine) \
   extern "C" void renut_native_##subroutine([[maybe_unused]] PPCContext& __restrict ctx, uint8_t* base)
 
+// theft4 (2026-11-10): GTA IV has no second renderer hooking the same Direct3D functions in the build that links
+// Renut's (tools/pc-eu-base THEFT4_RENUT excludes the native renderer's hooks), so a "shared" hook is the hook.
+#if THEFT4_RENUT
+#undef BANJO_RENUT_HOOK_SHARED
+#define BANJO_RENUT_HOOK_SHARED(subroutine, function) BANJO_RENUT_HOOK(subroutine, function)
+#undef BANJO_RENUT_HOOK_RAW_SHARED
+#define BANJO_RENUT_HOOK_RAW_SHARED(subroutine) BANJO_RENUT_HOOK_RAW(subroutine)
+#endif
+
 // For banjo-nx's own renderer hooks, first thing in their body: with Renut's renderer chosen, Renut's side at a shared
 // address (BANJO_RENUT_YIELD_SHARED) or the game's original (BANJO_RENUT_YIELD), and nothing of banjo-nx's renderer.
 #define BANJO_RENUT_YIELD_SHARED(subroutine)                                           \

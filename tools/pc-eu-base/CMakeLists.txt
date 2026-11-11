@@ -155,7 +155,16 @@ if(THEFT4_RENUT)
     message(FATAL_ERROR "THEFT4_RENUT: the generated code still calls hooked Direct3D functions "
                         "directly: run python tools/renut-gta4/weak_calls.py")
   endif()
-  target_sources(theft4-eu-base PRIVATE "${THEFT4_ROOT}/tools/renut-gta4/gta4_renut_device.cpp")
+  # THEFT4_RENUT_ENGINE (step R2): ReNut's renderer itself (thirdparty/renut, tools/renut-gta4/renut_gpu.cmake).
+  # OFF: step R1's hook layer alone (gta4_renut_device.cpp: the game's Direct3D without a GPU, no picture), which
+  # defines the same hooks.
+  option(THEFT4_RENUT_ENGINE "Link ReNut's renderer; OFF = step R1's hook layer without a picture" ON)
+  if(THEFT4_RENUT_ENGINE)
+    include("${THEFT4_ROOT}/tools/renut-gta4/renut_gpu.cmake")
+    theft4_renut_gpu(theft4-eu-base "${THEFT4_GENERATED_DIR}")
+  else()
+    target_sources(theft4-eu-base PRIVATE "${THEFT4_ROOT}/tools/renut-gta4/gta4_renut_device.cpp")
+  endif()
   target_include_directories(theft4-eu-base PRIVATE "${THEFT4_ROOT}/tools/renut-gta4")
   target_compile_definitions(theft4-eu-base PRIVATE THEFT4_RENUT=1)
   # The link map names the function of a fault address (renut-faults.txt).

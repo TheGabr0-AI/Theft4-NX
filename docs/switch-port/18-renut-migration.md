@@ -72,7 +72,12 @@ generated listing: 65 instructions in 21 functions):
 | SetPredication | `829CD300` | - | - | (device, mask); EndTiling calls it around each tile's resolve |
 | D3DDevice_InsertCallback | `829D8810` | 8254EEE8 | 821FB688 | writes the callback packet through `sub_829D7E08` |
 | CreatePixelShader / CreateVertexShader | `829D1708` / `829D1818` | 8255DBF8 / 8255E658 | ... | the native renderer's hooks |
-| **Not located yet** | Clear / ClearF (829CD470 is not it), IsFencePending, SynchronizeToPresentationInterval (candidate `829D5158`), SetRingBufferParameters, CreateVertexDeclaration, D3DResource_Destroy (candidate `829D8D40`, called only by D3DResource_Release `829D92E8`), the gamma ramp's place in the device | | | needed from R2 on |
+| D3DDevice_ClearF | `829D49A0` | 82563978 | 822811A0 | BeginTiling calls it with flags 0x3F; no other Clear in the library calls the clear packers (`829CB258` / `829CB6F0` are the resolve's) |
+| D3DDevice_CreateVertexDeclaration | `829D1598` | 8255E198 | 8264EA90 | counts 12-byte elements to Stream 0xFF, allocates 56 + 12 n, fills through `829D14A8` |
+| D3DResource_Destroy | `829D8D40` | 8254A200 | 822084F0 | only caller D3DResource_Release `829D92E8`; fence wait by resource type (7, 8, 9, 11, 13, 15, 17), then the free |
+| EndVertices | `829CCAB0` | (inline) | - | `m_pRing = device + 13428`: the ring end BeginVertices stored |
+| Presentation interval, gamma ramp | +13592, +14988 | +14000, +15408 | - | Swap loads +13592 and passes it to SynchronizeToPresentationInterval (`829D5158` / `829D50D8`, Swap's only callees of that kind); Swap passes `device + 14988` (768 words) to the display |
+| **Not located yet** | IsFencePending, SetRingBufferParameters (no caller found in the image: GTA IV may not use them; the renderer works without hooks on them) | | | |
 
 **A trap found and closed:** `tools/switch-codegen/direct_calls.py` had turned the calls of every unhooked function into
 `__imp__sub_X`. The ring and fence functions had no hook then: **122 calls bypassed any hook on them** (KickOff alone
@@ -203,6 +208,45 @@ What R1 does prove: Direct3D 2.0.6274's creation, ring, fence and Swap functions
 device runs without a GPU through boot and the loading screens, and the device's bound state reads true through
 `gta4_d3d.h`, and the 3D scene's frames run on it. **It does not draw: it is the hook layer, not the renderer.**
 
+## 6b. Step R2: ReNut's renderer in the PC build (2026-11-11)
+
+**What is in the tree.** `thirdparty/renut/` (sa2-nx `adf3a4e`, first committed unchanged as `df941c7`; every change
+since is marked `theft4` and guarded by `THEFT4_RENUT_ENGINE` where sa2-nx's behaviour is kept for comparison):
+
+| Part | Change for GTA IV |
+|---|---|
+| `renut_engine/gpu/d3d/d3d.h`, `d3d_native.h`, `hooks/device.cpp` | every private device offset GTA IV's (2.0.6274; values in `tools/renut-gta4/gta4_d3d.h`, re-read by the test); snapshot 12,704 bytes |
+| `hooks/device.cpp` | the 10 device hooks at GTA IV's addresses; creation as step R1 ran it (interrupt handler, prebuilt commands, ResetAllState, the 41 words); flip count kept equal to the swap count; EndTiling's tail (`829DDF28`) and the block submission (`829D77D8`); a 2 s fence-wait report |
+| `hooks/draw.cpp` | DrawVertices, DrawIndexedVertices, BeginVertices, ClearF (`829D49A0`), Resolve (`829CB7C8`), **BeginTiling / EndTiling** (`829CD470` / `829CD908`: the tiled frame drawn once at full size, as Renut does for N&B; sa2-nx does not tile) |
+| `hooks/shader.cpp`, `hooks/resource.cpp` | GTA IV creates shaders with `CreateVertexShader` / `CreatePixelShader` (`829D1818` / `829D1708`, container at the N&B offsets), declarations with `829D1598`; D3DResource_Destroy `829D8D40` |
+| `reblue-XenosRecomp/.../shader_common.h` | **NORMAL1 and TANGENT1** get input locations 23 and 24: 4 of GTA IV's 1,370 containers read them, and DXC refused their partly located inputs |
+| `backend/queued.cpp` | the snapshot deltas' unread private words at GTA IV's place (10880-11776) |
+| `guest/guest_records.cpp`, the ring sink, the inline vertex scratch | 1 MB each instead of 64 / 4 / 4 MB: GTA IV fills the console's physical memory, and with 64 MB taken its own allocations failed at boot |
+| `plume/plume_vulkan.h` | volk under private names on the PC too (the SDK links its own volk) |
+| `overlay/app_integration.cpp`, `render/draw.cpp` | this SDK (v0.9) has no `ImGuiDrawer::HasDialogs` and no store cards (GTA IV's code marks none: `banjo_renut_store_cards` off) |
+
+`tools/renut-gta4/`: `renut_gpu.cmake` (the OBJECT library, the translator as a host tool, the DXC of
+`tools/XenosRecomp`), `gta4_renut_compat.cpp` + `compat/` (what the engine asks of SA2's application: enhancement keys,
+render height, frame count, read hook, store cards off, and **`gta4_renut_capture_s`**: a PNG of the presented frame
+every N seconds). `tools/pc-eu-base`: `THEFT4_RENUT_ENGINE` (ON) and `THEFT4_RENUT_SHADER_DUMP_DIR` (the local folder
+of extracted containers); `main.cpp` starts the renderer as sa2-nx's application does. Step R1's hook layer stays
+(`-DTHEFT4_RENUT_ENGINE=OFF`).
+
+**Shaders.** reblue-XenosRecomp translates GTA IV's 1,370 extracted containers into the shader cache in the build tree:
+**1,370 of 1,370** after the two input locations (before: 1,366).
+
+**PC result (D3D12, AMD RX 560X, `--gta4_renderer=renut`):**
+
+| What | Seen |
+|---|---|
+| Boot, devices, render thread | both devices created, render thread started, no fault, no allocation failure |
+| Pacing | 601 game frames in 10 s (sa2-nx's vertical blank pacing at GTA IV's interval) |
+| Loading screens | **drawn right**: the loading artwork at 20 s (`renut-0020s`), the "THE COUSINS BELLIC" title at 30 s |
+| 3D scene (from ~40 s) | the game runs it (441,352 draws in 10 s, ~735 a frame; render thread 4.4 ms, GPU 9.1 ms a frame) but **the presented frame is black**; three fence waits of more than 2 s while the scene loads |
+
+**Where R2 stops:** the 3D frame does not reach the screen. The next step is the frame's last part: which resolve or
+copy writes the texture GTA IV passes to Swap as its front buffer, and why ReNut's present finds it black (R3/R4: the
+deferred targets, the depth read-backs, the resolve of a tiled frame).
 ## 7. Licences
 
 - reNut (masterspike52) has no licence file. **Settled on 2026-11-10:** this project's owner confirms

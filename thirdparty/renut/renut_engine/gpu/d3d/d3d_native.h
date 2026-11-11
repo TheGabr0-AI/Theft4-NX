@@ -102,6 +102,11 @@ inline i64 TruncateToI64(double value) {
 // placed by the shift of the fields around them and not read from SA2's code:
 // only the functions sa2-nx does not hook use them (tiling, command buffers).
 namespace off {
+// theft4 (2026-11-10): GTA IV's values (Direct3D 2.0.6274; tools/renut-gta4/gta4_d3d.h). The bracketed values are
+// N&B's. Read from GTA IV's code: the fence words, the flags, the bound objects, the predication words (EndTiling
+// sub_829CD908), the tiling surfaces, count, rects and origins (BeginTiling sub_829CD470), the command buffer, the
+// side buffer. Placed by the shift of the fields around them and NOT read from the code: ScissorRect, TilingExtent,
+// CommandBufferTagMask and the three automatic buffers (only N&B's natives, which GTA IV does not use, read them).
 constexpr u32 Ring = 0x30;                 // m_pRing
 constexpr u32 RingLimit = 0x34;            // m_pRingLimit
 constexpr u32 RingGuarantee = 0x38;        // m_pRingGuarantee
@@ -128,35 +133,35 @@ constexpr u32 ModeControl = 0x2948;
 constexpr u32 BlendControl1 = 0x2958;
 constexpr u32 BlendControl2 = 0x295C;
 constexpr u32 BlendControl3 = 0x2960;
-constexpr u32 FenceCompletion = 11024;     // -> the completed-fence word [0x2A90]
-constexpr u32 FenceTag = 11036;            // the current fence [0x2A9C]
-constexpr u32 CommandBufferTagMask = 11040;   // Common bits a recorded buffer tracks [0x2AA0] +128
-constexpr u32 TilePredication = 11060;     // SetPredication / SetCommandBufferPredication args [0x2AB4] +128
-constexpr u32 RunPredication = 11064;      // [0x2AB8] +128
-constexpr u32 Flags = 11068;               // bytes 11068-11071, see below [0x2ABC]
-constexpr u32 Flags1 = 11069;
-constexpr u32 Flags2 = 11070;
-constexpr u32 Flags3 = 11071;
-constexpr u32 ScissorRect = 13052;         // SetScissorRect's RECT [0x3184] (SA2's Present)
-constexpr u32 IndexBuffer = 12812;         // [0x3094]
-constexpr u32 RenderTargets = 12816;       // [4] [0x3098]
-constexpr u32 DepthStencil = 12832;        // [0x30A8]
-constexpr u32 StreamSources = 12836;       // [16] [0x30AC]
-constexpr u32 StreamStrides = 12904;       // u8[16], stride / 4 [0x30F0]
-constexpr u32 Textures = 12920;            // [26] [0x3100]
-constexpr u32 Predication = 13084;         // tile predication of the next draws, ~0 none [0x31A4] +376
-constexpr u32 RunPredicationState = 13088; // [0x31A8] +376
-constexpr u32 PredicationSet = 13092;      // 1 while SetPredication's mask is non-zero [0x31AC] +376
-constexpr u32 TilingSurfaces = 13104;      // the 4 targets and depth BeginTiling bound [0x31B8] +376
-constexpr u32 TileCount = 13124;           // [0x31CC] +376
-constexpr u32 TileRects = 13128;           // D3DRECT[TileCount] [0x31D0] +376
-constexpr u32 TileOrigins = 13368;         // per tile, x & ~31, y & ~31 [0x32C0] +376
-constexpr u32 TilingExtent = 13556;        // widest and tallest tile edge [0x337C] +376
-constexpr u32 CommandBuffer = 13920;       // the D3DCommandBuffer being recorded [0x34CC]
-constexpr u32 SideBuffer = 17136;          // [0x4158] (sub_8255C808)
-constexpr u32 AutoDepthStencil = 15228;    // InitializePresentationParameters' surfaces [0x39E8]
-constexpr u32 AutoFrontBuffer = 15232;     // [0x39EC] (SA2's Present)
-constexpr u32 AutoBackBuffer = 15236;      // [0x39F0] (SA2's Present)
+constexpr u32 FenceCompletion = 10896;     // -> the completed-fence word [0x2A90]
+constexpr u32 FenceTag = 10908;            // the current fence [0x2A9C]
+constexpr u32 CommandBufferTagMask = 10912;   // Common bits a recorded buffer tracks [0x2AA0] +128
+constexpr u32 TilePredication = 10932;     // SetPredication / SetCommandBufferPredication args [0x2AB4] +128
+constexpr u32 RunPredication = 10936;      // [0x2AB8] +128
+constexpr u32 Flags = 10940;               // bytes 11068-11071, see below [0x2ABC]
+constexpr u32 Flags1 = 10941;
+constexpr u32 Flags2 = 10942;
+constexpr u32 Flags3 = 10943;
+constexpr u32 ScissorRect = 12668;         // SetScissorRect's RECT [0x3184] (SA2's Present)
+constexpr u32 IndexBuffer = 12428;         // [0x3094]
+constexpr u32 RenderTargets = 12432;       // [4] [0x3098]
+constexpr u32 DepthStencil = 12448;        // [0x30A8]
+constexpr u32 StreamSources = 12452;       // [16] [0x30AC]
+constexpr u32 StreamStrides = 12520;       // u8[16], stride / 4 [0x30F0]
+constexpr u32 Textures = 12536;            // [26] [0x3100]
+constexpr u32 Predication = 12700;         // tile predication of the next draws, ~0 none [0x31A4] +376
+constexpr u32 RunPredicationState = 12704; // [0x31A8] +376
+constexpr u32 PredicationSet = 12708;      // 1 while SetPredication's mask is non-zero [0x31AC] +376
+constexpr u32 TilingSurfaces = 12720;      // the 4 targets and depth BeginTiling bound [0x31B8] +376
+constexpr u32 TileCount = 12740;           // [0x31CC] +376
+constexpr u32 TileRects = 12744;           // D3DRECT[TileCount] [0x31D0] +376
+constexpr u32 TileOrigins = 12984;         // per tile, x & ~31, y & ~31 [0x32C0] +376
+constexpr u32 TilingExtent = 13172;        // widest and tallest tile edge [0x337C] +376
+constexpr u32 CommandBuffer = 13500;       // the D3DCommandBuffer being recorded [0x34CC]
+constexpr u32 SideBuffer = 16712;          // [0x4158] (sub_8255C808)
+constexpr u32 AutoDepthStencil = 14808;    // InitializePresentationParameters' surfaces [0x39E8]
+constexpr u32 AutoFrontBuffer = 14812;     // [0x39EC] (SA2's Present)
+constexpr u32 AutoBackBuffer = 14816;      // [0x39F0] (SA2's Present)
 }  // namespace off
 
 // Flags (11068; N&B 0x2ABC) bits: 0x01 the draws that follow run in each tile's pass,

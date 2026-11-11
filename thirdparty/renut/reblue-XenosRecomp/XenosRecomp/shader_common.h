@@ -51,7 +51,12 @@
     X(TexCoord,  7, 19) \
     X(TexCoord,  8, 20) \
     X(TexCoord,  9, 21) \
-    X(TexCoord, 10, 22)
+    X(TexCoord, 10, 22) \
+    X(Normal,    1, 23) \
+    X(Tangent,   1, 24)
+// theft4 (2026-11-11): GTA IV's vertex shaders also read NORMAL1 and TANGENT1 (4 of its 1,370 containers: without a
+// location for them their inputs were partly located and DXC refused the SPIR-V). 25 locations: deko3d has 32
+// (DK_MAX_VERTEX_ATTRIBS), every PC Vulkan driver at least 28 in practice.
 
 // SPEC_CONSTANTS_ONLY keeps the HLSL below out of host C++ TUs, which IntelliSense would otherwise parse.
 #if (!defined(__cplusplus) || defined(__INTELLISENSE__)) && !defined(SHADER_COMMON_SPEC_CONSTANTS_ONLY)

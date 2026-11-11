@@ -42,6 +42,10 @@
 #include <rex/system/null_graphics_system.h>
 
 #include "gta4_renut_select.h"
+#if THEFT4_RENUT_ENGINE
+// ReNut's renderer (thirdparty/renut, step R2 of docs/switch-port/18-renut-migration.md).
+#include "renut_engine/gpu/overlay/app_integration.h"
+#endif
 #endif
 
 
@@ -142,9 +146,15 @@ class EuBaseApp final : public rex::ReXApp {
     // docs/switch-port/18-renut-migration.md: with gta4_renderer = "renut" the game's
     // Direct3D runs on ReNut's hooks (tools/renut-gta4), with no emulated GPU.
     if (theft4::renut::Selected()) {
+#if THEFT4_RENUT_ENGINE
+      // No SDK graphics system and no GPU plugin: the renderer is the app's (its own window swapchain and thread).
+      renut::gpu::ConfigureRuntime(config);
+      REXLOG_INFO("pc-eu-base: gta4_renderer = renut (ReNut's Direct3D-level renderer: no PM4 ring, no EDRAM)");
+#else
       config.gpu_plugin.clear();
       config.graphics = rex::system::CreateNullGraphicsSystem();
       REXLOG_INFO("pc-eu-base: gta4_renderer = renut (step R1: Direct3D without a GPU, no picture)");
+#endif
     } else
 #endif
     if (config.gpu_plugin.empty()) {
@@ -172,6 +182,25 @@ class EuBaseApp final : public rex::ReXApp {
     }
   }
 
+#if THEFT4_RENUT_ENGINE
+  // ReNut's renderer draws the SDK's menus through its own plume drawer, resizes its swapchain itself, and starts
+  // once the window exists (as sa2-nx's application does).
+  std::unique_ptr<rex::ui::ImmediateDrawer> OnCreateImmediateDrawer() override {
+    if (theft4::renut::Selected()) return renut::gpu::CreateOverlayDrawer();
+    return rex::ReXApp::OnCreateImmediateDrawer();
+  }
+  void OnWindowPixelSizeChanged(uint32_t pixel_width, uint32_t pixel_height) override {
+    rex::ReXApp::OnWindowPixelSizeChanged(pixel_width, pixel_height);
+    if (theft4::renut::Selected()) renut::gpu::OnWindowResized();
+  }
+  std::optional<rex::PathConfig> OnFinalizePaths(const rex::PathConfig& defaults,
+                                                 std::function<void(rex::PathConfig)> resume) override {
+    if (theft4::renut::Selected())
+      renut::gpu::StartRenderer(app_context(), [this] { return imgui_drawer(); });
+    return rex::ReXApp::OnFinalizePaths(defaults, std::move(resume));
+  }
+#endif
+
   void OnPostSetup() override {
     REXLOG_INFO("pc-eu-base: generated code {:08X}+{:X}, image {:08X}+{:X}; exports traced",
                 uint32_t(PPCImageConfig.code_base), uint32_t(PPCImageConfig.code_size),
@@ -184,6 +213,9 @@ class EuBaseApp final : public rex::ReXApp {
   }
 
   void OnShutdown() override {
+#if THEFT4_RENUT_ENGINE
+    if (theft4::renut::Selected()) renut::gpu::ShutdownRenderer();
+#endif
     StopHeartbeat();
     rex::diagnostics::LogExportCallSummary("at exit");
     rex::diagnostics::LogExportStubSummary("at exit");

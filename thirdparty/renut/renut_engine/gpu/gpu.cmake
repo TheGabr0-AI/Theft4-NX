@@ -8,7 +8,11 @@
 include(ExternalProject)
 
 set(RENUT_GPU_DIR "${CMAKE_CURRENT_LIST_DIR}")
-set(RENUT_XENOS_RECOMP_DIR "${CMAKE_SOURCE_DIR}/thirdparty/reblue-XenosRecomp")
+# theft4 (2026-11-10): the folder that holds renut_engine/, plume/, reblue-XenosRecomp/, imgui/ and cmake/
+# (thirdparty/renut in this repository; sa2-nx has them under app/src and app/thirdparty, which CMAKE_SOURCE_DIR
+# named).
+get_filename_component(RENUT_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+set(RENUT_XENOS_RECOMP_DIR "${RENUT_ROOT_DIR}/reblue-XenosRecomp")
 set(RENUT_SHADER_COMMON_DIR "${RENUT_XENOS_RECOMP_DIR}/XenosRecomp")
 set(RENUT_GPU_GEN_DIR "${CMAKE_BINARY_DIR}/renut_gpu")
 
@@ -35,7 +39,7 @@ endif()
 
 # plume is read-only and vendored; build it as-is.
 if(NOT TARGET plume)
-    add_subdirectory("${CMAKE_SOURCE_DIR}/thirdparty/plume" "${CMAKE_BINARY_DIR}/plume")
+    add_subdirectory("${RENUT_ROOT_DIR}/plume" "${CMAKE_BINARY_DIR}/renut_plume")
 endif()
 
 # The shader cache is zstd-compressed and its SPIR-V is smol-v encoded. Only the
@@ -65,12 +69,17 @@ set_target_properties(renut_smolv PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # ---------------------------------------------------------------------------
 # DXC: the copy vendored with XenosRecomp covers Windows and Linux.
 # ---------------------------------------------------------------------------
-set(RENUT_DXC_BIN_DIR "${RENUT_XENOS_RECOMP_DIR}/thirdparty/dxc-bin/bin/x64")
+# theft4: the DXC binaries are not in thirdparty/renut (nor in sa2-nx's repository): RENUT_DXC_BIN_ROOT names a
+# dxc-bin folder that has bin/ and lib/ (this repository: tools/XenosRecomp/thirdparty/dxc-bin).
+if(NOT RENUT_DXC_BIN_ROOT)
+    set(RENUT_DXC_BIN_ROOT "${RENUT_XENOS_RECOMP_DIR}/thirdparty/dxc-bin")
+endif()
+set(RENUT_DXC_BIN_DIR "${RENUT_DXC_BIN_ROOT}/bin/x64")
 if(CMAKE_HOST_WIN32)
     set(RENUT_DXC "${RENUT_DXC_BIN_DIR}/dxc.exe")
 else()
     # The Linux binary finds libdxcompiler next to it.
-    set(RENUT_DXC env "LD_LIBRARY_PATH=${RENUT_XENOS_RECOMP_DIR}/thirdparty/dxc-bin/lib/x64" "${RENUT_DXC_BIN_DIR}/dxc-linux")
+    set(RENUT_DXC env "LD_LIBRARY_PATH=${RENUT_DXC_BIN_ROOT}/lib/x64" "${RENUT_DXC_BIN_DIR}/dxc-linux")
 endif()
 
 # renut_host_shader(<target> <stem> <profile>) compiles gpu/shaders/host/<stem>.hlsl
@@ -159,6 +168,7 @@ function(renut_xenos_shader_cache TARGET)
             -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
             -DXENOS_RECOMP_RENUT=ON
             -DXENOS_RECOMP_DXIL=${recomp_dxil}
+            "-DXENOS_RECOMP_DXC_BIN_ROOT=${RENUT_DXC_BIN_ROOT}"
             ${BANJO_RENUT_XENOS_RECOMP_ARGS}
         BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target XenosRecomp --config Release
         INSTALL_COMMAND ""
@@ -218,13 +228,13 @@ function(renut_xenos_shader_cache TARGET)
         OUTPUT "${cache_cpp}"
         COMMAND "${CMAKE_COMMAND}" "-DCAPTURE_DIR=${RENUT_SHADER_CAPTURE_DIR}"
                 "-DDUMP_DIR=${RENUT_SHADER_DUMP_DIR}"
-                -P "${CMAKE_SOURCE_DIR}/cmake/collect_captured_shaders.cmake"
+                -P "${RENUT_ROOT_DIR}/cmake/collect_captured_shaders.cmake"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${RENUT_GPU_GEN_DIR}"
         ${early_alpha_commands}
         COMMAND ${early_alpha_env} "${recomp_exe}" "${RENUT_SHADER_DUMP_DIR}" "${cache_cpp}"
                 "${RENUT_SHADER_COMMON_DIR}/shader_common.h"
         DEPENDS renut_xenos_recomp "${recomp_exe}" "${RENUT_SHADER_COMMON_DIR}/shader_common.h"
-                "${CMAKE_SOURCE_DIR}/cmake/collect_captured_shaders.cmake"
+                "${RENUT_ROOT_DIR}/cmake/collect_captured_shaders.cmake"
                 ${dump_outputs} ${shader_inputs} ${captured_inputs} ${early_alpha_depends}
         COMMENT "Recompiling Xenos shaders (RENUT_RECOMP) from ${RENUT_SHADER_DUMP_DIR}"
         USES_TERMINAL VERBATIM)
@@ -295,7 +305,7 @@ function(renut_gpu_setup TARGET)
     renut_xenos_shader_cache(${TARGET})
 
     target_include_directories(${TARGET} PRIVATE
-        "${CMAKE_SOURCE_DIR}/src"
+        "${RENUT_ROOT_DIR}"
         "${RENUT_GPU_DIR}/shaders"
         "${RENUT_GPU_GEN_DIR}"
         "${RENUT_SHADER_COMMON_DIR}")
@@ -309,7 +319,7 @@ function(renut_gpu_setup TARGET)
     # polls input), which pulled the overlay's context away mid-frame. Compiled
     # into the executable, these definitions take precedence over rexruntime's
     # imports; the headers go ahead of the SDK's identical ones.
-    set(RENUT_IMGUI_DIR "${CMAKE_SOURCE_DIR}/thirdparty/imgui")
+    set(RENUT_IMGUI_DIR "${RENUT_ROOT_DIR}/imgui")
     set(renut_imgui_sources
         "${RENUT_IMGUI_DIR}/imgui.cpp"
         "${RENUT_IMGUI_DIR}/imgui_draw.cpp"

@@ -234,7 +234,13 @@ constexpr u32 DeltaChunkSize(u32 i) {
 // swap flags: the hooks read and write them on the live device). Their chunks are not compared; the render thread's
 // device keeps them as the frame's whole copy had them.
 constexpr u32 kDeltaUnreadEnd = kDeltaVertexF - 0x300;  // 0x480: the fetch constants' start
+// theft4 (2026-11-11): GTA IV's private words (Direct3D 2.0.6274): the global qword at 10880 (N&B's) up to the vertex
+// declaration at 11812, rounded down to a chunk (11776); sa2-nx's were 11008-12224 (SA2's layout, N&B + 128).
+#if THEFT4_RENUT_ENGINE
+constexpr u32 kDeltaPrivateUnreadBegin = 10880, kDeltaPrivateUnreadEnd = 11776;
+#else
 constexpr u32 kDeltaPrivateUnreadBegin = 11008, kDeltaPrivateUnreadEnd = 12224;
+#endif
 constexpr bool DeltaChunkRead(u32 i) {
   const u32 at = DeltaChunkOffset(i);
   return !(at < kDeltaUnreadEnd || (at >= kDeltaPrivateUnreadBegin && at + 64 <= kDeltaPrivateUnreadEnd));
@@ -257,7 +263,12 @@ constexpr DeltaChunkList MakeDeltaChunkList(bool narrow) {
 }
 constexpr DeltaChunkList kDeltaAllChunks = MakeDeltaChunkList(false);
 constexpr DeltaChunkList kDeltaReadChunks = MakeDeltaChunkList(true);
+#if THEFT4_RENUT_ENGINE
+// GTA IV: 12 chunks before the constants, 27 of the 41 after them (snapshot 12,704 bytes; 14 private chunks unread).
+static_assert(kDeltaReadChunks.count == 39);
+#else
 static_assert(kDeltaReadChunks.count == 40);
+#endif
 // Whether device byte 'at' is one the render thread reads (the verify mode compares those).
 constexpr bool DeltaByteRead(u32 at) {
   return !(at < kDeltaUnreadEnd || (at >= kDeltaPrivateUnreadBegin && at < kDeltaPrivateUnreadEnd));

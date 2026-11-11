@@ -33,8 +33,22 @@
 // For VK_KHR_portability_subset
 #define VK_ENABLE_BETA_EXTENSIONS
 
-#if defined(__SWITCH__)
+#if defined(__SWITCH__) || defined(PLUME_VOLK_PRIVATE_NAMES)
 #include "plume_volk_names.h"
+#endif
+#if defined(PLUME_VOLK_PRIVATE_NAMES)
+// theft4 (2026-11-11): on the PC the SDK links a volk of its own (volk.lib), so plume's copy takes private names for
+// volk's functions too, not only for the Vulkan pointers: two loaders, each initialised by its user.
+#define volkInitialize plume_volkInitialize
+#define volkInitializeCustom plume_volkInitializeCustom
+#define volkFinalize plume_volkFinalize
+#define volkGetInstanceVersion plume_volkGetInstanceVersion
+#define volkLoadInstance plume_volkLoadInstance
+#define volkLoadInstanceOnly plume_volkLoadInstanceOnly
+#define volkLoadDevice plume_volkLoadDevice
+#define volkGetLoadedInstance plume_volkGetLoadedInstance
+#define volkGetLoadedDevice plume_volkGetLoadedDevice
+#define volkLoadDeviceTable plume_volkLoadDeviceTable
 #endif
 #include <volk.h>
 

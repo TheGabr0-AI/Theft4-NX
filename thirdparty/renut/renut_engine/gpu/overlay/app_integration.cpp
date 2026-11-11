@@ -28,7 +28,13 @@ namespace {
 // for Present to draw.
 void RecordSdkMenus(rex::ui::ImGuiDrawer *drawer) {
   uint32_t width = 0, height = 0;
-  if (!drawer || !drawer->HasDialogs() || !GetRenderWindowPixelSize(width, height) || !width ||
+#if THEFT4_RENUT_ENGINE
+  // theft4: this SDK's ImGuiDrawer (v0.9) has no HasDialogs(); a frame with no dialog records nothing (below).
+  const bool has_dialogs = drawer != nullptr;
+#else
+  const bool has_dialogs = drawer && drawer->HasDialogs();
+#endif
+  if (!drawer || !has_dialogs || !GetRenderWindowPixelSize(width, height) || !width ||
       !height) {
     OverlayDrawer::ClearLatest();
     return;

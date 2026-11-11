@@ -124,7 +124,14 @@ constexpr uint32_t kSurfaceSize = 0x24;  // (height - 1) << 3 | (width - 1) << 1
   X(D3DDevice_BeginVertices, 829CC610, "counted, then the original")                                         \
   X(D3DDevice_BeginTiling, 829CD470, "counted, then the original (it is BeginTiling, not Clear: 18 s.6)")    \
   X(EndTiling_SubmitTiles, 829DDF28, "EndTiling's tail without the GPU: no tile block, no worker callback")  \
-  X(D3DDevice_Resolve, 829CB7C8, "counted, then the original")
+  X(D3DDevice_Resolve, 829CB7C8, "counted, then the original")                                                \
+  /* Hooked by ReNut's renderer only (thirdparty/renut/renut_engine/gpu/d3d/hooks), not by step R1's layer: */  \
+  X(D3DDevice_ClearF, 829D49A0, "R2: the host clear queued, then the original")                               \
+  X(D3DDevice_EndTiling, 829CD908, "R2: the original, then the tiling extent off")                            \
+  X(D3DResource_Destroy, 829D8D40, "R2: the host objects released in order, then the original")               \
+  X(D3DDevice_CreateVertexShader, 829D1818, "R2: the original, then the shader registered by its hash")       \
+  X(D3DDevice_CreatePixelShader, 829D1708, "R2: the original, then the shader registered by its hash")        \
+  X(D3DDevice_CreateVertexDeclaration, 829D1598, "R2: the original, then the declaration registered")
 
 // Device work the creation hook calls (never hooked).
 constexpr uint32_t kFnPhysicalAlloc = 0x8218BF20;            // (bytes, flags): D3D's allocations use 0xB5800000

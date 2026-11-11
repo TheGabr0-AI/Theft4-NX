@@ -42,7 +42,7 @@ LAYOUT = {
     '829D76F0': ['lwz r3,13500(r31)', 'lbz r11,10941(r31)'],
     '829D8138': ['lwz r3,13500(r31)', 'lwz r4,14924(r31)', 'lwz r11,22280(r31)'],
     '829D8618': ['lwz r31,10908(r3)', 'stw r31,10928(r3)'],
-    '829D5338': ['lwz r11,16544(r31)', 'stw r11,16544(r31)', 'lwz r11,16552(r31)', 'lwz r11,14896(r31)',
+    '829D5338': ['lwz r10,13592(r31)', 'addi r27,r31,14988', 'lwz r11,16544(r31)', 'stw r11,16544(r31)', 'lwz r11,16552(r31)', 'lwz r11,14896(r31)',
                  'stw r30,14924(r31)', 'andi. r11,r11,239'],
     '829D1490': ['stw r4,11812(r3)'],
     '829CA310': ['stw r29,12428(r31)'],
@@ -52,11 +52,19 @@ LAYOUT = {
     '829CAAB0': ['lwz r11,12432(r31)', 'lwz r11,12444(r31)', 'lwz r11,12448(r31)', 'lwz r10,12720(r31)'],
     '829CAE18': ['lwz r10,12448(r31)'],
     # Predicated tiling: BeginTiling stores its count and rects, EndTiling's tail and the pending block count.
-    '829CD470': ['stw r27,12740(r31)', 'addi r10,r31,12748'],
-    '829CD908': ['lwz r11,12740(r31)', 'addi r5,r31,12744', 'addi r5,r11,-8912'],  # the callback sub_829DDD30
+    '829CD908': ['lwz r11,12740(r31)', 'addi r5,r31,12744', 'addi r5,r11,-8912', 'stw r9,12700(r31)',
+                 'stw r22,12704(r31)', 'stw r22,12708(r31)', 'stw r22,10932(r31)', 'stw r22,10936(r31)'],  # the callback sub_829DDD30
     '829DDF28': ['lbz r11,10941(r31)', 'stw r26,13216(r31)', 'stw r26,13220(r31)', 'addi r3,r31,13352',
                  'addi r3,r31,13232'],
     '829D7C68': ['lwz r11,11000(r30)', 'stw r11,11000(r30)'],
+    # What ReNut's renderer reads beyond step R1 (thirdparty/renut/renut_engine/gpu/d3d: d3d.h, d3d_native.h).
+    '829CD470': ['stw r27,12740(r31)', 'addi r10,r31,12748', 'stw r29,13172(r31)', 'stw r28,13176(r31)',
+                 'addi r10,r31,12668', 'addi r9,r31,12988', 'li r4,63'],  # extent, scissor, origins, ClearF(0x3F)
+    '829CCAB0': ['lwz r11,13428(r3)', 'stw r11,48(r3)'],  # EndVertices
+    '829D1818': ['li r5,872', 'addi r3,r30,872'],  # the vertex shader's container at +0x368
+    '829D1708': ['addi r3,r31,40', 'stw r29,24(r31)'],  # the pixel shader's container at +0x28, physical part +24
+    '829D1598': ['cmplwi cr6,r9,255', 'addi r3,r11,56'],  # CreateVertexDeclaration: 12-byte elements to Stream 0xFF
+    '829D8D40': ['li r5,13', 'lis r4,9344'],  # D3DResource_Destroy: fence waits by type, then the free
     '829D8798': ['lwz r10,56(r31)', 'lwz r11,11000(r31)'],
 }
 # gta4_d3d.h constant -> the value the checks above read
@@ -95,7 +103,7 @@ def part_header():
     for name, value in HEADER.items():
         check(values.get(name) == value, 'HEADER: %s is %s, the code says %d' % (name, values.get(name), value))
     table = re.findall(r'^\s*X\((\w+), ([0-9A-F]{8}),', text, re.M)
-    check(len(table) == 17 and len(set(a for _, a in table)) == 17, 'HEADER: 17 distinct hooked functions')
+    check(len(table) == 23 and len(set(a for _, a in table)) == 23, 'HEADER: 23 distinct hooked functions')
     print('HEADER   %d constants checked, %d hooked functions' % (len(HEADER), len(table)))
     return table
 
@@ -126,9 +134,22 @@ def part_layout(index):
 
 
 def part_hooks(table, index):
+    # Step R1's hook layer (gta4_renut_device.cpp) and ReNut's renderer (thirdparty/renut: the same functions and
+    # six more) are two builds of the same table: the renderer must hook every function of it, R1 its own 17.
     source = read(os.path.join(RENUT, 'gta4_renut_device.cpp'))
     defined = set(re.findall(r'^THEFT4_RENUT_HOOK\(sub_([0-9A-F]{8})\)', source, re.M))
-    check(defined == set(a for _, a in table), 'HOOKS: the hooks defined are not the table of gta4_d3d.h')
+    header = read(os.path.join(RENUT, 'gta4_d3d.h'))
+    r2_only = set(re.findall(r'X\(\w+, ([0-9A-F]{8}), "R2:', header))
+    check(defined == set(a for _, a in table) - r2_only,
+          'HOOKS: the hooks of gta4_renut_device.cpp are not the table of gta4_d3d.h without its R2 rows')
+    hooks_dir = os.path.join(ROOT, 'thirdparty', 'renut', 'renut_engine', 'gpu', 'd3d', 'hooks')
+    engine = ''
+    for name in ('device.cpp', 'draw.cpp', 'resource.cpp', 'shader.cpp'):
+        engine += read(os.path.join(hooks_dir, name))
+    engine_hooks = set(re.findall(r'^BANJO_RENUT_HOOK(?:_RAW|_SHARED|_RAW_SHARED)?\(sub_([0-9A-F]{8})', engine, re.M))
+    check(engine_hooks == set(a for _, a in table),
+          'HOOKS: the renderer hooks %s, the table of gta4_d3d.h has %s'
+          % (sorted(engine_hooks - set(a for _, a in table)), sorted(set(a for _, a in table) - engine_hooks)))
     if index is not None:
         for name, address in table:
             check(address in index, 'HOOKS: %s sub_%s is not a function start' % (name, address))
@@ -136,8 +157,7 @@ def part_hooks(table, index):
     for address in defined:
         check('__imp__sub_%s' % address in source or 'THEFT4_RENUT_YIELD(sub_%s)' % address in source,
               'HOOKS: sub_%s never runs its original' % address)
-    print('HOOKS    %d hooks, each a function start with its original reachable' % len(defined))
-
+    print('HOOKS    %d hooks in step R1\'s layer, %d in the renderer, each a function start' % (len(defined), len(engine_hooks)))
 
 def part_calls():
     r = subprocess.run([sys.executable, os.path.join(RENUT, 'weak_calls.py'), '--check'], capture_output=True,
@@ -172,6 +192,8 @@ def part_wiring():
     source = read(os.path.join(RENUT, 'gta4_renut_device.cpp'))
     check('option(THEFT4_RENUT' in cmake and 'weak_calls.py' in cmake and 'gta4_renut_device.cpp' in cmake,
           'WIRING: the PC target has no THEFT4_RENUT option')
+    check('theft4_renut_gpu(theft4-eu-base' in cmake and 'renut::gpu::StartRenderer' in main,
+          'WIRING: the PC target does not link or start ReNut\'s renderer')
     check('theft4::renut::Selected()' in main and 'CreateNullGraphicsSystem' in main,
           'WIRING: main.cpp does not choose the renderer')
     check('REXCVAR_DEFINE_STRING(gta4_renderer, "xenos"' in source, 'WIRING: gta4_renderer must default to xenos')

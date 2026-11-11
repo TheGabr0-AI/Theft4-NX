@@ -82,7 +82,13 @@ namespace {
 // header helpers), which reserve against m_pRingGuarantee. Large enough for
 // the biggest single reservation; the guarantee margin is what inline writers
 // assume is free without calling KickOff.
+#if THEFT4_RENUT_ENGINE
+// theft4: guest physical memory is short in GTA IV (guest_records.cpp); step R1 ran its loading screens and 3D frames
+// on a 1 MiB sink.
+constexpr u32 kRingSinkSize = 1u << 20;
+#else
 constexpr u32 kRingSinkSize = 4u << 20;
+#endif
 constexpr u32 kRingSinkGuaranteeMargin = 256u << 10;
 // Scratch handed out for inline data (RingBufferDeviceAllocate), reused in a
 // circle: nothing reads it either.
@@ -94,36 +100,36 @@ constexpr u32 kRingDataSize = 1u << 20;
 // and the hardware path sub_8255CDA0; N&B's in brackets.
 // Byte whose 0x80 bit marks a device without GPU hardware (its device-type-2
 // path sets it); D3D's code skips hardware work for it.
-constexpr u32 kDeviceOffsetFlags = 11068;  // [10940]
+constexpr u32 kDeviceOffsetFlags = 10940;  // GTA IV; N&B's [10940]
 constexpr u8 kDeviceFlagNoHardware = 0x80;
 // Byte whose 0x2 bit makes CDevice::SetFence (0x82278528) write each fence's
 // completion value itself instead of waiting for the GPU to. The title device
 // runs without it once created: its fences complete on the render thread.
-constexpr u32 kDeviceOffsetFlags2 = 11069;  // [10941]
+constexpr u32 kDeviceOffsetFlags2 = 10941;  // GTA IV; N&B's [10941]
 constexpr u8 kDeviceFlagImmediateFences = 0x02;
 // Pointer to the completed-fence word IsFencePending / BlockOnFence read.
-constexpr u32 kDeviceOffsetFenceCompletion = 11024;  // [10896]
+constexpr u32 kDeviceOffsetFenceCompletion = 10896;  // GTA IV; N&B's [10896]
 // Nonzero while a KickOff is in progress (BlockOnFence does not kick then).
 // sa2-nx: the word SA2's CDevice::BlockOnFence (sub_8254D6E8) tests [13232].
-constexpr u32 kDeviceOffsetInKickOff = 13600;
+constexpr u32 kDeviceOffsetInKickOff = 13216;  // GTA IV: sub_829D7D40, sub_829D8518; set while tiles are recorded
 // Side buffer (0x12C0 bytes) every device gets.
-constexpr u32 kDeviceOffsetSideBuffer = 17136;  // [16728]
+constexpr u32 kDeviceOffsetSideBuffer = 16712;  // GTA IV [16728]
 constexpr u32 kSideBufferSize = 0x12C0;
 // Set to -1 by the device-type-2 path.
-constexpr u32 kDeviceOffsetsMinusOne[] = {21968, 21972, 15340};  // [21560, 21564, 14936]
+constexpr u32 kDeviceOffsetsMinusOne[] = {21540, 21544, 14920};  // GTA IV  // [21560, 21564, 14936]
 constexpr u32 kDeviceTypeNoHardware = 2;
 // Copied from the global qword at 0x82F39B38 into every device.
-constexpr u32 kDeviceOffsetGlobalQword = 11008;  // [10880]
-constexpr u32 kGlobalQwordVa = 0x82980268;  // [0x82F39B38]
+constexpr u32 kDeviceOffsetGlobalQword = 10880;  // GTA IV; N&B's [10880]
+constexpr u32 kGlobalQwordVa = 0x82A9E568;  // GTA IV: sub_829DF380  // [0x82F39B38]
 // Hardware-path fields: two critical sections, QueryPerformanceFrequency and
 // its reciprocal as floats, and 41 words set to -1.
-constexpr u32 kDeviceOffsetCriticalSection0 = 15348;  // [14944]
-constexpr u32 kDeviceOffsetCriticalSection1 = 15376;  // [14972]
-constexpr u32 kDeviceOffsetPerfFrequency = 21996;  // [21588]
-constexpr u32 kDeviceOffsetTitleMinusOne = 23380;
+constexpr u32 kDeviceOffsetCriticalSection0 = 14928;  // GTA IV  // [14944]
+constexpr u32 kDeviceOffsetCriticalSection1 = 14956;  // GTA IV  // [14972]
+constexpr u32 kDeviceOffsetPerfFrequency = 21568;  // GTA IV  // [21588]
+constexpr u32 kDeviceOffsetTitleMinusOne = 21680;  // GTA IV: 41 words, sub_829E1BB8
 // Import slot holding the address of the kernel's VdGlobalDevice variable.
 // sa2-nx: SA2's (sub_8255CDA0 stores the title device there) [0x820007FC].
-constexpr u32 kVdGlobalDeviceImportSlot = 0x82000710;
+constexpr u32 kVdGlobalDeviceImportSlot = 0x82000768;  // GTA IV: sub_829DF3F0
 
 constexpr u32 kE_OUTOFMEMORY = 0x8007000Eu;
 
@@ -605,10 +611,22 @@ u32 BlockOnFence_hook(u32 device_va, u32 fence, u32 /*type*/, u32 /*no_kick*/) {
   // The fence may wait for callbacks, which this thread runs as the render
   // thread reaches them.
   const auto waiting = std::chrono::steady_clock::now();
+  bool reported = false;  // theft4: a wait of more than 2 s is reported once (it is a stall, not a frame's wait)
   for (;;) {
     RunReadyCallbacks();
     if (!FencePending(bytes, fence))
       break;
+    if (!reported && std::chrono::steady_clock::now() - waiting > std::chrono::seconds(2)) {
+      reported = true;
+      const u32 completion = *reinterpret_cast<const be_u32 *>(bytes + kDeviceOffsetFenceCompletion);
+      const auto *word = GuestPtr<const be_u32>(completion);
+      RGPU_WARN("BlockOnFence: device {:08X} waits 2 s for fence {:08X}: completed {:08X}, current tag {:08X}, queued "
+                "{:08X}, render thread frames done {}, callbacks reached {}",
+                device_va, fence, word ? u32(*word) : 0u,
+                u32(*reinterpret_cast<const be_u32 *>(bytes + d3d::kDeviceOffsetFenceTag)),
+                g_queued_fence.load(std::memory_order_relaxed), render_thread::FramesDone(),
+                render_thread::CallbacksReached());
+    }
     if (!render_thread::WaitForFenceProgress(std::chrono::milliseconds(2)))
       break;  // no render thread: nothing would complete it
   }
@@ -865,7 +883,7 @@ void D3DDevice_RunCommandBuffer_hook(u32 device_va, u32 command_buffer,
 // The frame goes to the render thread, which presents it; the game thread
 // goes on with the next one, waiting only when it is more than
 // render_thread::kMaxFramesAhead ahead.
-constexpr u32 kSa2DeviceOffsetGammaRamp = 15408;  // sa2-nx: SA2's +0x3A9C (the +404 block)
+constexpr u32 kSa2DeviceOffsetGammaRamp = 14988;  // theft4: GTA IV's (Swap sub_829D5338 passes device + 14988; N&B 0x3A9C - 16);  // sa2-nx: SA2's +0x3A9C (the +404 block)
 
 // sa2-nx (2026-10-20): the SDK's core layout (system/xthread.cpp).
 REXCVAR_DEFINE_BOOL(sa2_renut_core_layout, true, "SA2/Renderer",
@@ -913,6 +931,9 @@ void D3DDevice_Swap_hook(u32 device_va, u32 front_buffer, u32 /*parameters*/) {
       return *reinterpret_cast<be_u32 *>(device + offset);
     };
     word(d3d::kDeviceOffsetSwapCount) = u32(word(d3d::kDeviceOffsetSwapCount)) + 1;
+    // theft4: GTA IV's flip count (+16552; the vertical blank work sub_829D4BF8 counts a queued flip there, and the
+    // original Swap waits while the swaps are 15 ahead of it): every swap has flipped.
+    word(16552) = u32(word(d3d::kDeviceOffsetSwapCount));
     const u32 fence_tag = word(d3d::kDeviceOffsetFenceTag);
     word(d3d::kDeviceOffsetSwapFenceTag) = fence_tag;
     word(d3d::kDeviceOffsetPresentFenceTag) = fence_tag;
@@ -1266,10 +1287,11 @@ void SetFence(u32 device_va) {
   if (bytes[kDeviceOffsetFlags2] & kDeviceFlagImmediateFences) {
     Device d = DeviceAt(device_va);
     const u32 fence = d.W(off::FenceTag);
-    if (!d.W(0x541C)) {
+    // theft4: GTA IV's +21512 and +14904 (N&B's 0x541C and 0x3A48, in the tail - 20 and the - 16 zone).
+    if (!d.W(21512)) {
       if (auto *completion = GuestPtr<be_u32>(d.W(off::FenceCompletion))) {
         completion[0] = fence;
-        completion[1] = (d.W(0x3A48) & 3) | d.W(off::Ring);
+        completion[1] = (d.W(14904) & 3) | d.W(off::Ring);
       }
     }
     d.SetW(off::FenceTag, fence + 2);
@@ -1297,9 +1319,13 @@ void SetFence(u32 device_va) {
 //     first (sa2_renut_hooks.cpp).
 //   - SA2's ring segment allocator (sub_8254DA90) rewinds the sink like the others.
 
-REX_EXTERN(__imp__sub_8254FC10);  // Direct3D_CreateDevice, the original
-REX_EXTERN(__imp__sub_8255CB20);  // D3D::InitializePresentationParameters (CDevice*, D3DPRESENT_PARAMETERS*)
-REX_EXTERN(__imp__sub_8255C150);  // D3D::InitializeApiState (CDevice*)
+// theft4 (2026-11-10): GTA IV's functions (Direct3D 2.0.6274, European base; docs/switch-port/18, section 2).
+REX_EXTERN(__imp__sub_829D0218);  // Direct3D_CreateDevice, the original [SA2 sub_8254FC10]
+REX_EXTERN(__imp__sub_829DEF28);  // D3D::InitializePresentationParameters (CDevice*, D3DPRESENT_PARAMETERS*) [sub_8255CB20]
+REX_EXTERN(__imp__sub_829DECC0);  // D3D::InitializeApiState (CDevice*) [sub_8255C150]
+REX_EXTERN(__imp__sub_829DF308);  // registers the library's graphics interrupt handler (CDevice*)
+REX_EXTERN(__imp__sub_829D0B80);  // the device's prebuilt commands (CDevice*), hardware path
+REX_EXTERN(__imp__sub_829CA608);  // ResetAllState (CDevice*, 0)
 
 namespace {
 
@@ -1330,7 +1356,7 @@ void Sa2CreateDevice(PPCContext &ctx, uint8_t *base) {
 
   // SA2's own no-hardware device.
   ctx.r4.u64 = kDeviceTypeNoHardware;
-  __imp__sub_8254FC10(ctx, base);
+  __imp__sub_829D0218(ctx, base);
   if (ctx.r3.u32 != 0)
     return;
   const u32 device_va = LoadGuestU32(out_va);
@@ -1345,17 +1371,29 @@ void Sa2CreateDevice(PPCContext &ctx, uint8_t *base) {
   bytes[kDeviceOffsetFlags2] &= u8(~0x20);
   bytes[kDeviceOffsetFlags2] |= kDeviceFlagImmediateFences;
   WriteU32(bytes, kDeviceOffsetFenceCompletion, fence_va);
-  WriteU32(bytes, 11028, fence_va + 0x80);  // the swap's scratch word (SynchronizeToPresentationInterval)
+  WriteU32(bytes, 10900, fence_va + 0x80);  // GTA IV: +10900 (the interrupt handler sub_829D7318 reads it)  // the swap's scratch word (SynchronizeToPresentationInterval)
   native::RewindRing(d);
 
   if (title_device) {
     RtlInitializeCriticalSection(device_va + kDeviceOffsetCriticalSection0);
     RtlInitializeCriticalSection(device_va + kDeviceOffsetCriticalSection1);
+    // theft4: what GTA IV's hardware path (sub_829DF3F0) also gives the title device apart from the GPU, as step R1
+    // ran it (tools/renut-gta4/gta4_renut_device.cpp): the flag it sets, the graphics interrupt handler (the
+    // vertical blank's count and the title's blank callback are the library's, sub_829D4BF8), the prebuilt commands.
+    bytes[10942] |= 0x04;
+    ctx.r3.u64 = device_va;
+    __imp__sub_829DF308(ctx, base);
+    if (!ctx.r3.u32)
+      RGPU_ERROR("Direct3D_CreateDevice: the graphics interrupt set-up (sub_829DF308) failed");
     if (const u32 global = LoadGuestU32(kVdGlobalDeviceImportSlot))
       *GuestPtr<be_u32>(global) = device_va;
     if (!(behavior_flags & 0x100) && !(behavior_flags & 0x3F000000))
       behavior_flags |= 0xC000000;
     WriteU32(bytes, d3d::kDeviceOffsetBehaviorFlags, behavior_flags);
+    ctx.r3.u64 = device_va;
+    __imp__sub_829D0B80(ctx, base);  // theft4: GTA IV's prebuilt commands
+    if (!ctx.r3.u32)
+      RGPU_ERROR("Direct3D_CreateDevice: the device's prebuilt commands (sub_829D0B80) failed");
     WriteU32(bytes, kDeviceOffsetsMinusOne[0], 0xFFFFFFFFu);
     WriteU32(bytes, kDeviceOffsetsMinusOne[1], 0xFFFFFFFFu);
     const float frequency = float(KeQueryPerformanceFrequency());
@@ -1364,7 +1402,7 @@ void Sa2CreateDevice(PPCContext &ctx, uint8_t *base) {
     if (present_parameters) {
       ctx.r3.u64 = device_va;
       ctx.r4.u64 = present_parameters;
-      __imp__sub_8255CB20(ctx, base);
+      __imp__sub_829DEF28(ctx, base);
       if (!ctx.r3.u32) {
         RGPU_ERROR("Direct3D_CreateDevice: InitializePresentationParameters failed");
         ctx.r3.u64 = kE_OUTOFMEMORY;
@@ -1372,7 +1410,13 @@ void Sa2CreateDevice(PPCContext &ctx, uint8_t *base) {
       }
     }
     ctx.r3.u64 = device_va;
-    __imp__sub_8255C150(ctx, base);
+    __imp__sub_829DECC0(ctx, base);
+    // theft4: as GTA IV's hardware path ends: every state dirty, and the 41 words of -1 (sub_829E1BB8).
+    ctx.r3.u64 = device_va;
+    ctx.r4.u64 = 0;
+    __imp__sub_829CA608(ctx, base);
+    for (u32 i = 0; i < 41; ++i)
+      WriteU32(bytes, kDeviceOffsetTitleMinusOne + 4 * i, 0xFFFFFFFFu);
     native::RewindRing(d);
     // From here the title device's fences complete on the render thread (KickFence).
     bytes[kDeviceOffsetFlags2] &= u8(~kDeviceFlagImmediateFences);
@@ -1403,19 +1447,61 @@ void Sa2SynchronizeToPresentationInterval_hook(u32 device_va, u32 /*immediate*/)
 
 }  // namespace
 
-BANJO_RENUT_HOOK_RAW(sub_8254FC10) {  // Direct3D_CreateDevice [0x8264DF28]
+// theft4 (2026-11-10): GTA IV's addresses (European base, Direct3D 2.0.6274; SA2's and N&B's in brackets). Not hooked,
+// on purpose:
+//   - D3DDevice_InsertCallback (sub_829D8810): its only caller is EndTiling, with Direct3D's own worker callback
+//     (sub_829DDD30), which wakes a worker thread the hardware path creates and this path does not. Its packets go
+//     into the sink; the tile block it belongs to is never submitted (the hook on sub_829DDF28 below).
+//   - SynchronizeToPresentationInterval (sub_829D5158 / sub_829D50D8): only the original Swap calls them, and the
+//     Swap is hooked.
+//   - D3DDevice_IsFencePending and D3DDevice_SetRingBufferParameters: not located in GTA IV's image yet (no caller
+//     found); the original IsFencePending, if the game has one, reads the fence words this path keeps and kicks
+//     through the hooked KickOff.
+BANJO_RENUT_HOOK_RAW(sub_829D0218) {  // Direct3D_CreateDevice [SA2 sub_8254FC10; N&B 0x8264DF28]
   Sa2CreateDevice(ctx, base);
 }
-BANJO_RENUT_HOOK(sub_8254EEE8, D3DDevice_InsertCallback_hook);  // D3DDevice_InsertCallback [0x821FB688]
-BANJO_RENUT_HOOK(sub_825589D8, Sa2SynchronizeToPresentationInterval_hook);  // D3D_SynchronizeToPresentationInterval [0x8228A748]
-BANJO_RENUT_HOOK(sub_8254EBB8, KickOff_hook);  // D3D_CDevice_KickOff [0x82210AB0]
-BANJO_RENUT_HOOK(sub_8254E830, KickOffSegment_hook);  // D3D_CDevice_KickOffSegment [0x822106C8]
-BANJO_RENUT_HOOK(sub_8254EDF8, BeginRingBig_hook);  // D3D_CDevice_BeginRingBig [0x821F7C18]
-BANJO_RENUT_HOOK(sub_8254D4B8, RingBufferDeviceAllocate_hook);  // D3D_RingBufferDeviceAllocate [0x8222D3E0]
-BANJO_RENUT_HOOK_SHARED(sub_8254D9A8, AllocateInlineData_hook);  // D3D_CDevice_AllocateInlineData [0x8222D240]
-BANJO_RENUT_HOOK(sub_8254DA90, Sa2NewSegment_hook);  // SA2's ring segment allocator
-BANJO_RENUT_HOOK(sub_8254EF40, D3DDevice_SetRingBufferParameters_hook);  // D3DDevice_SetRingBufferParameters [0x82657508]
-BANJO_RENUT_HOOK(sub_82558E98, D3DDevice_Swap_hook);  // D3DDevice_Swap [0x82287590]
-BANJO_RENUT_HOOK(sub_8254D6E8, BlockOnFence_hook);  // D3D_CDevice_BlockOnFence [0x8228F558]
-BANJO_RENUT_HOOK_SHARED(sub_8254F400, CBlocker_Check_hook);  // D3D_CBlocker_Check [0x8264DCD0]
-BANJO_RENUT_HOOK(sub_8254ECF8, IsFencePending_hook);  // D3DDevice_IsFencePending [0x8228F650]
+BANJO_RENUT_HOOK(sub_829D8518, KickOff_hook);  // D3D_CDevice_KickOff [sub_8254EBB8; 0x82210AB0]
+BANJO_RENUT_HOOK(sub_829D8390, KickOffSegment_hook);  // KickOff's tail, the next segment [sub_8254E830; 0x822106C8]
+BANJO_RENUT_HOOK(sub_829D8730, BeginRingBig_hook);  // D3D_CDevice_BeginRingBig [sub_8254EDF8; 0x821F7C18]
+BANJO_RENUT_HOOK(sub_829D74E8, RingBufferDeviceAllocate_hook);  // D3D_RingBufferDeviceAllocate [sub_8254D4B8; 0x8222D3E0]
+BANJO_RENUT_HOOK_SHARED(sub_829D76F0, AllocateInlineData_hook);  // D3D_CDevice_AllocateInlineData [sub_8254D9A8; 0x8222D240]
+BANJO_RENUT_HOOK(sub_829D8138, Sa2NewSegment_hook);  // the ring segment allocator [sub_8254DA90]
+BANJO_RENUT_HOOK(sub_829D5338, D3DDevice_Swap_hook);  // D3DDevice_Swap [sub_82558E98; 0x82287590]
+BANJO_RENUT_HOOK(sub_829D7D40, BlockOnFence_hook);  // D3D_CDevice_BlockOnFence [sub_8254D6E8; 0x8228F558]
+BANJO_RENUT_HOOK_SHARED(sub_829CFE80, CBlocker_Check_hook);  // D3D_CBlocker_Check [sub_8254F400; 0x8264DCD0]
+
+// The hardware submission of a command block (it writes the GPU's ring registers). sub_829D8290 reaches it for the
+// title device, whose ring set-up (sub_829D8868) is left out: the block is the GPU's, nothing here reads it.
+BANJO_RENUT_HOOK_RAW(sub_829D77D8) {
+  (void)base;
+}
+
+// BOOL EndTiling's tail (CDevice*, DWORD TileCount, DWORD Processors) [N&B sub_82210138]: the end of
+// D3DDevice_EndTiling (sub_829CD908). The original closes the segment the tiles' commands were recorded in, hands it to
+// the GPU as a command block (sub_829D7C68: one more pending block at +11000) behind a ring callback (sub_829DDD30)
+// that wakes Direct3D's worker thread, which replays the block once per tile. This renderer draws the tiled frame once
+// at full size (hooks/draw.cpp), so the tail keeps its device work and leaves the block out, as Renut's own EndTiling
+// does for N&B: the tiling words cleared, the seven segment lists ended, the batch's fence. Step R1 found it: without
+// this the wait for an idle GPU (sub_829D8798) never ended at the first frame of the 3D scene.
+BANJO_RENUT_HOOK_RAW(sub_829DDF28) {
+  const u32 device_va = ctx.r3.u32;
+  native::Device d = native::DeviceAt(device_va);
+  if (!d) {
+    ctx.r3.u64 = 0;
+    return;
+  }
+  const u8 flags1 = d.B(kDeviceOffsetFlags2);
+  d.SetW(kDeviceOffsetInKickOff, 0);
+  d.SetW(kDeviceOffsetInKickOff + 4, 0);
+  if (flags1 & 0x20) {  // the command memory ran out while the tiles were recorded
+    d.SetB(kDeviceOffsetFlags2, flags1 & u8(~0x20));
+    native::RewindRing(d);
+    ctx.r3.u64 = 1;
+    return;
+  }
+  for (u32 i = 0; i < 7; ++i)
+    d.SetW(13232 + i * 20 + 12, 0);  // sub_829D73D0 without the jump words a GPU would follow
+  native::SetFence(device_va);
+  native::RewindRing(d);
+  ctx.r3.u64 = 0;
+}

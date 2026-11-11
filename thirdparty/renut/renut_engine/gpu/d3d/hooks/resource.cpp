@@ -1692,8 +1692,9 @@ u32 AddRefResource(u32 resource) {
 // queued before that uses them, then SA2's own D3DResource_Destroy waits for the resource's fence (through the hooked
 // BlockOnFence: the render thread is then past it) and frees it.
 
-// void D3DResource_Destroy(D3DResource*) [sub_8254A200; N&B 0x822084F0]
-BANJO_RENUT_HOOK_RAW(sub_8254A200) {
+// void D3DResource_Destroy(D3DResource*) [sub_829D8D40; SA2 sub_8254A200; N&B 0x822084F0]
+// theft4 (2026-11-10): GTA IV's (its only caller is D3DResource_Release, sub_829D92E8).
+BANJO_RENUT_HOOK_RAW(sub_829D8D40) {
   const u32 resource = ctx.r3.u32;
   render_thread::Queue([resource] {
     ReleaseHostSurfaceLocked(resource);
@@ -1701,5 +1702,5 @@ BANJO_RENUT_HOOK_RAW(sub_8254A200) {
     ReleaseGuestShaderLocked(resource);
     ReleaseGuestDeclarationLocked(resource);
   });
-  __imp__sub_8254A200(ctx, base);
+  __imp__sub_829D8D40(ctx, base);
 }

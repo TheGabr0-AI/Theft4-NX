@@ -4823,7 +4823,11 @@ void CompleteMemExportsLocked(uint32_t slot) {
       if (u8 *guest = GuestPhysicalPtr<u8>(p.base)) {
         std::memcpy(guest, data + p.offset, p.size);
         // banjo-nx: the store cards (sa2-nx: SA2's generated code marks them too since 2026-10-20).
+#if !THEFT4_RENUT_ENGINE
         rex::memory::MarkStoreCardsAt(StoreCards(), 0xA0000000u + (p.base & 0x1FFFFFFFu), p.size);
+#endif
+        // theft4: this SDK (v0.9) keeps no store cards (the first MB of the guest window is guest memory here) and
+        // GTA IV's generated code marks none (g_banjo_store_cards false: banjo_renut_store_cards stays off).
       }
     }
     readback->unmap();

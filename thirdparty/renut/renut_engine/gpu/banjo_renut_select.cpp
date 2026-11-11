@@ -14,7 +14,8 @@
 // sa2-nx (2026-10-20): SA2's key. "xenos" keeps the renderer SA2 had (ReXGlue's emulated Xenos GPU, or the PM4-ring
 // native renderer with sa2_renderer_native); "renut" is Renut's Direct3D-level renderer (no PM4 ring, no EDRAM), on
 // plume's deko3d back end on the Switch.
-REXCVAR_DEFINE_STRING(sa2_renderer, "xenos", "SA2",
+// theft4 (2026-11-10): GTA IV's key is gta4_renderer (docs/switch-port/18-renut-migration.md).
+REXCVAR_DEFINE_STRING(gta4_renderer, "xenos", "GTA IV",
                       "Renderer, chosen at boot. xenos = the emulated Xenos GPU (PM4 ring and EDRAM; or the native "
                       "PM4 renderer with sa2_renderer_native). renut = Renut's Direct3D-level renderer "
                       "(github.com/masterspike52/reNut, through banjo-nx): SA2's Direct3D draws natively through plume "
@@ -43,7 +44,7 @@ bool LatchActive() {
     return true;
   }();
 #else
-  static const bool active = REXCVAR_GET(sa2_renderer) == "renut";
+  static const bool active = REXCVAR_GET(gta4_renderer) == "renut";
 #endif
   g_active = active ? 1 : -1;
   return active;

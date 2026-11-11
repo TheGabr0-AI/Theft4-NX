@@ -472,24 +472,36 @@ void RegisterGuestDeclaration(u32 declaration_va, const GuestVertexElement *elem
 
 }  // namespace
 
-// void XGRegisterVertexShader(D3DVertexShader*, void *pPhysicalPart) [sub_8255E658; N&B 0x8264E7B8]
-BANJO_RENUT_HOOK_RAW(sub_8255E658) {
-  const u32 shader = ctx.r3.u32, physical = ctx.r4.u32;
-  __imp__sub_8255E658(ctx, base);
-  RegisterGuestShader(shader, physical, false);
+// theft4 (2026-11-10): GTA IV's addresses (European base, Direct3D 2.0.6274). GTA IV creates its shaders through
+// D3DDevice_CreateVertexShader / CreatePixelShader, which take the microcode container (its physical part follows the
+// virtual part) and return the shader object with a copy of the container at the offsets N&B's objects have it
+// (+0x368 vertex: sub_829D1818 copies to +872; +0x28 pixel: sub_829D1708 copies to +40).
+
+// D3DVertexShader *D3DDevice_CreateVertexShader(const DWORD *pFunction) [sub_829D1818]
+BANJO_RENUT_HOOK_RAW(sub_829D1818) {
+  const u32 function_va = ctx.r3.u32;
+  const auto *header = GuestPtr<const d3d::ShaderContainer>(function_va);
+  const u32 physical = header ? function_va + u32(header->virtualSize) : 0;
+  __imp__sub_829D1818(ctx, base);
+  if (const u32 shader = ctx.r3.u32; shader && physical)
+    RegisterGuestShader(shader, physical, false);
 }
 
-// void XGRegisterPixelShader(D3DPixelShader*, void *pPhysicalPart) [sub_8255DBF8; N&B 0x8264E670]
-BANJO_RENUT_HOOK_RAW(sub_8255DBF8) {
-  const u32 shader = ctx.r3.u32, physical = ctx.r4.u32;
-  __imp__sub_8255DBF8(ctx, base);
-  RegisterGuestShader(shader, physical, true);
+// D3DPixelShader *D3DDevice_CreatePixelShader(const DWORD *pFunction) [sub_829D1708]
+BANJO_RENUT_HOOK_RAW(sub_829D1708) {
+  const u32 function_va = ctx.r3.u32;
+  const auto *header = GuestPtr<const d3d::ShaderContainer>(function_va);
+  const u32 physical = header ? function_va + u32(header->virtualSize) : 0;
+  __imp__sub_829D1708(ctx, base);
+  if (const u32 shader = ctx.r3.u32; shader && physical)
+    RegisterGuestShader(shader, physical, true);
 }
 
-// D3DVertexDeclaration *D3DDevice_CreateVertexDeclaration(const D3DVERTEXELEMENT9*) [sub_8255E198; N&B 0x8264EA90]
-BANJO_RENUT_HOOK_RAW(sub_8255E198) {
+// D3DVertexDeclaration *D3DDevice_CreateVertexDeclaration(const D3DVERTEXELEMENT9*) [sub_829D1598; SA2 sub_8255E198;
+// N&B 0x8264EA90]: counts the elements up to Stream 0xFF, allocates and fills the object (sub_829D14A8).
+BANJO_RENUT_HOOK_RAW(sub_829D1598) {
   const u32 elements_va = ctx.r3.u32;
-  __imp__sub_8255E198(ctx, base);
+  __imp__sub_829D1598(ctx, base);
   const u32 declaration = ctx.r3.u32;
   if (const auto *elements = declaration ? GuestPtr<const GuestVertexElement>(elements_va) : nullptr)
     RegisterGuestDeclaration(declaration, elements);

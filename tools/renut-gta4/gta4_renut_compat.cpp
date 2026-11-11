@@ -1,0 +1,244 @@
+// What Renut's renderer (thirdparty/renut/renut_engine, from sa2-nx) asks of the application around it, for GTA IV:
+// the headers in compat/ and their code. docs/switch-port/18-renut-migration.md, step R2.
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <thread>
+#include <vector>
+
+#include <fmt/format.h>
+#include <rex/ui/presenter.h>
+
+#include "renut_engine/gpu/banjo_renut_capture.h"
+
+#include <rex/cvar.h>
+#include <rex/logging.h>
+#include <rex/platform.h>
+
+#include "cpu/sa2_enhancements.h"
+#include "me/sa2_render_mode.h"
+#include "rex/input/read_hook.h"
+#include "sa2_capture.h"
+
+#include "renut_engine/gpu/banjo_renut_select.h"
+
+#include "gta4_renut_select.h"
+
+#if REX_PLATFORM_SWITCH
+#include <switch.h>
+#endif
+
+REXCVAR_DEFINE_BOOL(gta4_renut_cpu_enhancements, true, "GTA IV enhancements",
+                    "Master of the CPU-side keys of Renut's renderer (banjo_renut_* keys of the CPU group)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(gta4_renut_noncpu_enhancements, true, "GTA IV enhancements",
+                    "Master of the non-CPU keys of Renut's renderer (banjo_renut_* keys of the non-CPU group)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(gta4_renut_render_height, 720, "GTA IV",
+                     "Render height of Renut's renderer in lines, docked and handheld (720 = the game's own)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+std::atomic<uint64_t> g_sa2_game_frames{0};
+
+// GTA IV's generated code does not mark store cards (sa2-nx's tools/store_cards.py pass is not run here, and this SDK
+// keeps no card table): banjo_renut_store_cards stays off, Renut hashes its cached copies.
+extern "C" const bool g_banjo_store_cards = false;
+
+#if !REX_PLATFORM_SWITCH
+// The Switch profiler's counters (frame_stats.cpp counts the render thread's frames): no-ops on the PC, as sa2-nx's
+// src/me/me_pc_stubs.cpp.
+extern "C" void RexSwitchPerfCount(unsigned) {}
+#endif
+
+namespace sa2::enh {
+
+namespace {
+std::mutex& Mutex() {
+  static std::mutex m;
+  return m;
+}
+std::vector<Enhancement*>& Registered() {
+  static std::vector<Enhancement*> v;
+  return v;
+}
+}  // namespace
+
+// Called from static initialisers: the key's cvar may not be read yet, so `active` is set by Resolve().
+bool Register(Enhancement* e) {
+  std::lock_guard lock(Mutex());
+  Registered().push_back(e);
+  return true;
+}
+
+void Resolve() {
+  std::lock_guard lock(Mutex());
+  for (Enhancement* e : Registered())
+    e->active = e->own && e->own() && (e->group == kCpu ? CpuMaster() : NonCpuMaster());
+}
+
+bool CpuMaster() { return REXCVAR_GET(gta4_renut_cpu_enhancements); }
+bool NonCpuMaster() { return REXCVAR_GET(gta4_renut_noncpu_enhancements); }
+void StartReport() {}
+void VerifyCheck(uint64_t) {}
+void VerifyDifference() {}
+bool VerifyMode() { return false; }
+
+}  // namespace sa2::enh
+
+// sa2-nx's relaxed vertical sync key (its native renderer's; sa2_renut_pacing.cpp reads `active`): off here.
+::sa2::enh::Enhancement g_vsync_relaxed{"gta4_renut_vsync_relaxed", ::sa2::enh::kNonCpu,
+                                        "sa2-nx's relaxed vertical sync (not ported)", [] { return false; }};
+
+// ---------------------------------------------------------------------------------------------------------------
+// Frame captures for tests (PC and console): the presented image every gta4_renut_capture_s seconds, as PNG files in
+// gta4_renut_capture_dir. The comparison of docs/switch-port/18 (run 65's shots against ReNut's) is made from them.
+// Each capture costs a GPU sync (banjo_renut_capture.h): a test tool, off by default.
+// ---------------------------------------------------------------------------------------------------------------
+REXCVAR_DEFINE_INT32(gta4_renut_capture_s, 0, "GTA IV",
+                     "Renut's renderer: save the presented frame every N seconds as a PNG (0 = off; a test tool)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_STRING(gta4_renut_capture_dir, "captures", "GTA IV", "Folder of gta4_renut_capture_s's PNG files")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+namespace theft4::renut {
+namespace {
+
+uint32_t Crc32(const uint8_t* p, size_t n, uint32_t crc = 0) {
+  crc = ~crc;
+  for (size_t i = 0; i < n; ++i) {
+    crc ^= p[i];
+    for (int k = 0; k < 8; ++k)
+      crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+  }
+  return ~crc;
+}
+
+void Put32(std::vector<uint8_t>& v, uint32_t x) {
+  v.push_back(uint8_t(x >> 24));
+  v.push_back(uint8_t(x >> 16));
+  v.push_back(uint8_t(x >> 8));
+  v.push_back(uint8_t(x));
+}
+
+void Chunk(std::vector<uint8_t>& png, const char* type, const std::vector<uint8_t>& data) {
+  Put32(png, uint32_t(data.size()));
+  const size_t at = png.size();
+  png.insert(png.end(), type, type + 4);
+  png.insert(png.end(), data.begin(), data.end());
+  Put32(png, Crc32(png.data() + at, png.size() - at));
+}
+
+// An RGB PNG with stored (uncompressed) deflate blocks: no compressor needed, about 2.7 MB at 1280x720.
+bool WritePng(const std::filesystem::path& path, const rex::ui::RawImage& image) {
+  std::vector<uint8_t> raw;
+  raw.reserve(size_t(image.height) * (1 + size_t(image.width) * 3));
+  for (uint32_t y = 0; y < image.height; ++y) {
+    raw.push_back(0);
+    const uint8_t* row = image.data.data() + size_t(y) * image.stride;
+    for (uint32_t x = 0; x < image.width; ++x)
+      raw.insert(raw.end(), row + x * 4, row + x * 4 + 3);
+  }
+  std::vector<uint8_t> z = {0x78, 0x01};
+  uint32_t a = 1, b = 0;
+  for (uint8_t c : raw) {
+    a = (a + c) % 65521;
+    b = (b + a) % 65521;
+  }
+  for (size_t at = 0; at < raw.size() || at == 0;) {
+    const size_t n = std::min<size_t>(65535, raw.size() - at);
+    const bool last = at + n >= raw.size();
+    z.push_back(last ? 1 : 0);
+    z.push_back(uint8_t(n));
+    z.push_back(uint8_t(n >> 8));
+    z.push_back(uint8_t(~n));
+    z.push_back(uint8_t(~n >> 8));
+    z.insert(z.end(), raw.begin() + at, raw.begin() + at + n);
+    at += n;
+    if (last)
+      break;
+  }
+  Put32(z, (b << 16) | a);
+  std::vector<uint8_t> png = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+  std::vector<uint8_t> ihdr;
+  Put32(ihdr, image.width);
+  Put32(ihdr, image.height);
+  ihdr.insert(ihdr.end(), {8, 2, 0, 0, 0});
+  Chunk(png, "IHDR", ihdr);
+  Chunk(png, "IDAT", z);
+  Chunk(png, "IEND", {});
+  std::ofstream f(path, std::ios::binary);
+  f.write(reinterpret_cast<const char*>(png.data()), std::streamsize(png.size()));
+  return bool(f);
+}
+
+std::once_flag g_capture_once;
+
+void StartCaptures() {
+  const int every = REXCVAR_GET(gta4_renut_capture_s);
+  if (every <= 0)
+    return;
+  std::thread([every] {
+    const std::filesystem::path dir = std::string(REXCVAR_GET(gta4_renut_capture_dir));
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const auto start = std::chrono::steady_clock::now();
+    for (int n = 1;; ++n) {
+      std::this_thread::sleep_until(start + std::chrono::seconds(every * n));
+      rex::ui::RawImage image;
+      if (!::renut::gpu::CaptureFrame(image, 3000) || !image.width) {
+        REXLOG_WARN("gta4_renut_capture_s: no frame at {} s", every * n);
+        continue;
+      }
+      const auto file = dir / fmt::format("renut-{:04}s-f{:06}.png", every * n,
+                                          g_sa2_game_frames.load(std::memory_order_relaxed));
+      REXLOG_INFO("gta4_renut_capture_s: {} ({}x{}){}", file.string(), image.width, image.height,
+                  WritePng(file, image) ? "" : " NOT WRITTEN");
+    }
+  }).detach();  // a test tool for the whole session; it only sleeps and reads frames the renderer serves
+}
+
+}  // namespace
+}  // namespace theft4::renut
+
+namespace sa2::render {
+
+bool Docked() {
+#if REX_PLATFORM_SWITCH
+  return appletGetOperationMode() == AppletOperationMode_Console;
+#else
+  return false;
+#endif
+}
+
+int32_t RenderHeightOf(bool) { return REXCVAR_GET(gta4_renut_render_height); }
+
+void OnPresented(uint64_t) { std::call_once(theft4::renut::g_capture_once, theft4::renut::StartCaptures); }
+
+}  // namespace sa2::render
+
+namespace sa2::capture {
+
+bool RenutLockstepOn() { return false; }
+void RenutLockstepFrame(uint64_t, const rex::ui::RawImage*) {}
+
+}  // namespace sa2::capture
+
+namespace rex::input {
+
+namespace {
+std::atomic<ReadHook> g_read_hook{nullptr};
+}
+void SetReadHook(ReadHook hook) { g_read_hook.store(hook, std::memory_order_release); }
+
+}  // namespace rex::input
+
+namespace theft4::renut {
+
+bool Selected() { return ::banjo::renut_gpu::Active(); }
+
+}  // namespace theft4::renut
