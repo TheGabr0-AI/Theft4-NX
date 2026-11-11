@@ -53,6 +53,7 @@
 #include "host_shaders/target_readback_cs.spirv.h"
 #include "host_shaders/texture_mip_ps.spirv.h"
 #include "host_shaders/resolve_copy_ps.spirv.h"
+#include "host_shaders/resolve_ms_ps.spirv.h"  // theft4 (run 68)
 #if defined(PLUME_DEKO3D)  // banjo-nx (2026-10-17): the deko3d back end's (tools/deko3d_host_shader.py)
 #include "host_shaders/depth_resolve_ms_ps.deko3d.h"
 #include "host_shaders/depth_resolve_ps.deko3d.h"
@@ -65,6 +66,7 @@
 #include "host_shaders/target_readback_cs.deko3d.h"
 #include "host_shaders/texture_mip_ps.deko3d.h"
 #include "host_shaders/resolve_copy_ps.deko3d.h"
+#include "host_shaders/resolve_ms_ps.deko3d.h"  // theft4 (run 68)
 #endif
 #if defined(_WIN32)
 #include "host_shaders/depth_resolve_ms_ps.dxil.h"
@@ -78,6 +80,7 @@
 #include "host_shaders/target_readback_cs.dxil.h"
 #include "host_shaders/texture_mip_ps.dxil.h"
 #include "host_shaders/resolve_copy_ps.dxil.h"
+#include "host_shaders/resolve_ms_ps.dxil.h"  // theft4 (run 68)
 #endif
 
 REXCVAR_DEFINE_BOOL(sa2_renut_double_buffer, false, "SA2/Renderer",
@@ -289,6 +292,8 @@ bool BuildPresentPipeline(VideoState &s) {
 bool BuildDepthResolvePipelines(VideoState &s) {
   // banjo-nx (2026-10-18): the colour resolves drawn on deko3d (DrawResolveCopy); optional.
   s.resolve_copy_ps = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(resolve_copy_ps), "resolve_copy_ps");
+  // theft4 (2026-11-11, run 68): the multisampled colour resolves drawn (DrawResolveCopy); optional.
+  s.resolve_ms_ps = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(resolve_ms_ps), "resolve_ms_ps");
   s.depth_resolve_ps[0] =
       CreateHostShader(s.device.get(), RENUT_HOST_SHADER(depth_resolve_ps), "depth_resolve_ps");
   s.depth_resolve_ps[1] = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(depth_resolve_ms_ps),

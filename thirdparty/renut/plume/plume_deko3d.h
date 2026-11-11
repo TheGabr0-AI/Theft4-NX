@@ -626,6 +626,10 @@ namespace plume {
     bool Deko3DSetBlendConstant(RenderCommandList *commandList, const float rgba[4]);
     // banjo-nx: the memexport buffer of the next draws (storage binding 14 of the graphics stages).
     bool Deko3DBindMemExport(RenderCommandList *commandList, const RenderBuffer *buffer);
+    // theft4 (2026-11-11, run 68): drops the Zcull data of the bound depth target (with Deko3DOptions::zcull), after
+    // draws whose pixel shader wrote the depth (gl_FragDepth): Zcull is updated from the rasterised depth, which such a
+    // draw replaces, and deko3d does nothing about it (as for the copies, invalidateZcullAfterCopy).
+    void Deko3DInvalidateZcull(RenderCommandList *commandList);
     // banjo-nx: the vertex fetch data of the next draws (storage binding 15 of the graphics stages): size bytes from
     // address, which the shaders index from 0 (shader_common.h, g_DkAddressWindow).
     bool Deko3DBindFetchData(RenderCommandList *commandList, uint64_t address, uint32_t size);

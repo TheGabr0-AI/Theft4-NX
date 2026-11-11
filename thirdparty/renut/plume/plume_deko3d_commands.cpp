@@ -1034,6 +1034,14 @@ namespace plume {
         dkCmdBufSetBlendConst(cmd, rgba[0], rgba[1], rgba[2], rgba[3]);
     }
 
+    void Deko3DInvalidateZcull(RenderCommandList *commandList) {
+        Deko3DCommandList *cl = static_cast<Deko3DCommandList *>(commandList);
+        if (!cl || !Deko3DGetOptions().zcull)
+            return;
+        cl->flushBarriers();
+        dkCmdBufBarrier(cl->cmd, DkBarrier_None, DkInvalidateFlags_Zcull);
+    }
+
     bool Deko3DBindMemExport(RenderCommandList *commandList, const RenderBuffer *buffer) {
         Deko3DCommandList *cl = static_cast<Deko3DCommandList *>(commandList);
         const Deko3DBuffer *b = static_cast<const Deko3DBuffer *>(buffer);

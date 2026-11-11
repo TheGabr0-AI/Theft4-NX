@@ -71,6 +71,14 @@ REXCVAR_DEFINE_INT32(banjo_renut_diag_draw_log_s, 0, "Banjo/Renut",
                      "([drawlog]: shaders, counts, target, state; 0 = off)");
 REXCVAR_DEFINE_STRING(banjo_renut_diag_blend_skip_exclude, "", "Banjo/Renut",
                       "Diagnostic: pixel shader hashes (hex, comma separated) banjo_gpu_blend_skip leaves alone");
+// theft4 (2026-11-11, run 68): see DrawMsResolvesOn.
+REXCVAR_DEFINE_INT32(gta4_renut_draw_ms_resolves, -1, "GTA4/Renut",
+                     "Multisampled colour resolves drawn as the mean of each pixel's samples (resolve_ms_ps): -1 on "
+                     "deko3d only (its 2D engine's blit of a multisampled image is not a resolve), 1 on every back end "
+                     "(a PC test of the same path), 0 never")
+    .range(-1, 1)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+static std::atomic<uint64_t> g_ms_resolves_drawn{0};  // theft4 (run 68): reported with the drawn resolves
 
 // sa2-nx (2026-10-20): see DrawStateLocked.
 REXCVAR_DEFINE_BOOL(sa2_renut_chain_reuse, true, "SA2/Renderer",
@@ -4178,6 +4186,14 @@ void MaybeRestoreDepthLocked(HostSurface *depth) {
     cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
     cmd->drawInstanced(3, 1, 0, 0);
   }
+#if defined(PLUME_DEKO3D)
+  // theft4 (2026-11-11, run 68): the depth these passes wrote came from the pixel shader (gl_FragDepth), which the GPU's
+  // Zcull never sees: it kept describing the depth before (a clear's), and GTA IV's lighting tests that depth (light
+  // volumes with LESS against reverse Z) right after. deko3d leaves Zcull to the application: dropped here, as plume
+  // drops it after a copy into a depth target.
+  if (IsDeko3D())
+    plume::Deko3DInvalidateZcull(cmd);
+#endif
   depth->stencil_used = true;
   NoteSurfaceWrite(depth);
   depth->restored_clock = depth->write_clock;
@@ -5407,10 +5423,27 @@ void DepthHandOverBeforeBindLocked(HostSurface *surface, const plume::RenderRect
 // fences with a full barrier before and after (the 3D engine idle for the whole copy); a draw is ordered by the usual
 // fragment barriers and overlaps the work around it. Same format both sides, 2D level 0, slice 0: every texel is written
 // back bit for bit. 'rect' is the source rect and (host_x, host_y) its place in the destination, in host pixels.
+// theft4 (2026-11-11, run 68): multisampled colour resolves drawn (gta4_renut_draw_ms_resolves). On deko3d plume
+// resolved a region (every tile of GTA IV's 2x G-buffer: rows 0-256, 256-512, 512-720) with the 2D engine's blit of
+// the multisampled image (dkCmdBufBlitImage): deko3d's blit reads the image as its grid of samples (2x: twice as wide,
+// source coordinates doubled) and filters one point of it, without the sample mean or the centring its own whole-image
+// dkCmdBufResolveImage applies. A draw gives the same values D3D12's ResolveSubresourceRegion gives on the PC.
+bool DrawMsResolvesOn() {
+  static const bool on = [] {
+    const int32_t mode = REXCVAR_GET(gta4_renut_draw_ms_resolves);
+    return mode > 0 || (mode < 0 && IsDeko3D());
+  }();
+  return on;
+}
+
+// theft4 (2026-11-11, run 68): a multisampled surface too (shaders/host/resolve_ms_ps.hlsl, the mean of each pixel's
+// samples, as D3D12's and Vulkan's resolves of unorm and float formats): see DrawMsResolvesOn.
 bool DrawResolveCopy(HostSurface *surface, HostTexture *dest, const plume::RenderRect &rect, uint32_t host_x,
                      uint32_t host_y) {
   auto &s = State();
-  if (!s.resolve_copy_ps || !dest->texture || !dest->render_target || dest->host_format != surface->format ||
+  const uint32_t samples = std::max(u32(surface->samples), 1u);
+  plume::RenderShader *shader = samples > 1 ? s.resolve_ms_ps.get() : s.resolve_copy_ps.get();
+  if (!shader || !dest->texture || !dest->render_target || dest->host_format != surface->format ||
       dest->dimension != TextureDimension::Tex2D || dest->stacked)
     return false;
   switch (surface->format) {  // formats a texel load gives back exactly when written as a colour
@@ -5434,12 +5467,12 @@ bool DrawResolveCopy(HostSurface *surface, HostTexture *dest, const plume::Rende
   const uint32_t source_slot = SurfaceSampleSlotLocked(surface);
   if (source_slot == kInvalidDescriptor)
     return false;
-  auto &pipeline = s.resolve_copy_pipelines[uint32_t(surface->format)];
+  auto &pipeline = (samples > 1 ? s.resolve_ms_pipelines : s.resolve_copy_pipelines)[uint32_t(surface->format)];
   if (!pipeline) {
     plume::RenderGraphicsPipelineDesc desc;
     desc.pipelineLayout = s.utility_layout.get();
     desc.vertexShader = s.present_vs.get();
-    desc.pixelShader = s.resolve_copy_ps.get();
+    desc.pixelShader = shader;
     desc.primitiveTopology = plume::RenderPrimitiveTopology::TRIANGLE_LIST;
     desc.cullMode = plume::RenderCullMode::NONE;
     desc.renderTargetCount = 1;
@@ -5449,7 +5482,7 @@ bool DrawResolveCopy(HostSurface *surface, HostTexture *dest, const plume::Rende
     pipeline = s.device->createGraphicsPipeline(desc);
     if (!pipeline)
       return false;
-    pipeline->setName("renut resolve copy");
+    pipeline->setName(samples > 1 ? "theft4 multisample resolve" : "renut resolve copy");
   }
   if (!dest->copy_framebuffer) {
     const plume::RenderTexture *targets[] = {dest->texture.get()};
@@ -5474,9 +5507,17 @@ bool DrawResolveCopy(HostSurface *surface, HostTexture *dest, const plume::Rende
   push.translate[1] = float(rect.top - int32_t(host_y));
   push.texture_index = source_slot;
   push.sampler_index = kPointClampSamplerSlot;
+  push.param0 = float(samples);  // resolve_ms_ps: the sample count
   cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
   cmd->drawInstanced(3, 1, 0, 0);
   banjo::renut_gpu::CountDrawnResolve();
+  if (samples > 1) {
+    const uint64_t n = ++g_ms_resolves_drawn;
+    if (n == 1 || n == 1000 || n == 100000)
+      RGPU_INFO("[renut] multisampled colour resolves drawn (gta4_renut_draw_ms_resolves): {} so far; this one {:08X} "
+                "x{} format {} rect ({},{})-({},{}) at ({},{})", n, surface->guest_va, samples, u32(surface->format),
+                rect.left, rect.top, rect.right, rect.bottom, host_x, host_y);
+  }
   // The draw path binds its own layout, pipeline, targets and viewport again.
   g_bound.framebuffer = nullptr;
   g_bound.pipeline = nullptr;
@@ -5915,7 +5956,10 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
                                           int32_t(host_x) + (rect.right - rect.left),
                                           int32_t(host_y) + (rect.bottom - rect.top));
         const bool multisampled = surface->samples != plume::RenderSampleCount::COUNT_1;
-        if (multisampled && dest->extra_levels && IsVulkan()) {
+        if (multisampled && DrawMsResolvesOn() && slice == 0 && z == 0 &&
+            DrawResolveCopy(surface, dest, rect, host_x, host_y)) {
+          // theft4 (2026-11-11, run 68): drawn, each pixel the mean of its samples (DrawMsResolvesOn).
+        } else if (multisampled && dest->extra_levels && IsVulkan()) {
           // A destination with host levels takes it through a single-level
           // target (ResolveStagingLocked): plume's Vulkan resolve writes every
           // level of its destination (D3D12's writes level 0 only, and

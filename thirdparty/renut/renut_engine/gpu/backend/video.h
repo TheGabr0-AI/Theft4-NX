@@ -176,6 +176,8 @@ struct VideoState {
   std::unique_ptr<plume::RenderShader> depth_resolve_ps[2];
   std::unique_ptr<plume::RenderShader> resolve_copy_ps;  // banjo-nx (2026-10-18): DrawResolveCopy
   std::unordered_map<uint32_t, std::unique_ptr<plume::RenderPipeline>> resolve_copy_pipelines;  // by format
+  std::unique_ptr<plume::RenderShader> resolve_ms_ps;  // theft4 (run 68): DrawResolveCopy of a multisampled surface
+  std::unordered_map<uint32_t, std::unique_ptr<plume::RenderPipeline>> resolve_ms_pipelines;  // by format
   std::unique_ptr<plume::RenderPipeline> depth_resolve_pipeline[2];
   // banjo-nx (2026-10-19, banjo_renut_depth_words_lazy): the same with the words target's writes masked off.
   std::unique_ptr<plume::RenderPipeline> depth_resolve_float_pipeline[2];
