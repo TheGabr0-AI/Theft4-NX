@@ -237,8 +237,50 @@ void SetReadHook(ReadHook hook) { g_read_hook.store(hook, std::memory_order_rele
 
 }  // namespace rex::input
 
+#if defined(_WIN32)
+#include <cstdio>
+#include <windows.h>
+namespace {
+// PC test aid (step R1's, kept): the first access violations and other fatal exceptions with the faulting instruction
+// as an offset into the executable (the link map, /MAP, names the function), written at once to renut-faults.txt.
+// The runtime's own handlers run after this one and are not changed.
+LONG CALLBACK LogFault(EXCEPTION_POINTERS* info) {
+  static std::atomic<int> count{0};
+  const EXCEPTION_RECORD* r = info->ExceptionRecord;
+  const DWORD code = r->ExceptionCode;
+  const bool fatal = code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION ||
+                     code == EXCEPTION_STACK_OVERFLOW || code == EXCEPTION_INT_DIVIDE_BY_ZERO ||
+                     code == 0xC0000409 /* fast fail */ || code == 0xE06D7363 /* C++ throw */;
+  if (fatal && count.fetch_add(1) < 16) {
+    if (FILE* f = std::fopen("renut-faults.txt", "a")) {
+      const auto module = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+      const auto rip = reinterpret_cast<uintptr_t>(r->ExceptionAddress);
+      std::fprintf(f, "exception %08lX: rip exe+%llX (va %llX), %s address %llX, thread %lu\n", code,
+                   static_cast<unsigned long long>(rip - module),
+                   static_cast<unsigned long long>(rip - module + 0x140000000ull),
+                   r->NumberParameters > 0 && r->ExceptionInformation[0] ? "write" : "read",
+                   static_cast<unsigned long long>(r->NumberParameters > 1 ? r->ExceptionInformation[1] : 0),
+                   GetCurrentThreadId());
+      std::fclose(f);
+    }
+  }
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+}  // namespace
+#endif
+
 namespace theft4::renut {
 
-bool Selected() { return ::banjo::renut_gpu::Active(); }
+bool Selected() {
+  static const bool selected = [] {
+    const bool on = ::banjo::renut_gpu::Active();
+#if defined(_WIN32)
+    if (on)
+      AddVectoredExceptionHandler(1, LogFault);
+#endif
+    return on;
+  }();
+  return selected;
+}
 
 }  // namespace theft4::renut

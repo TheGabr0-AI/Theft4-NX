@@ -641,7 +641,26 @@ BANJO_RENUT_HOOK_RAW(sub_829CB7C8) {
   const u32 point_va = ctx.r7.u32, dest_level = ctx.r8.u32, dest_slice = ctx.r9.u32, color_va = ctx.r10.u32;
   const u32 clear_stencil = LoadU32(ctx.r1.u32 + 92);
   ClearRect rect;
-  const bool has_rect = rect_va && ReadRect(rect_va, rect);
+  bool has_rect = rect_va && ReadRect(rect_va, rect);
+  // theft4 (2026-11-11): the rect is clipped to the source surface, as the console's resolve does. GTA IV's last
+  // resolve of each 3D frame (the frame into its front buffer) passes (0,0)-(-1,-1): taken as it was, nothing was
+  // copied and the presented frame was black. The source is render target 0-3 or, with index 4, the depth surface.
+  if (has_rect) {
+    const u32 index = flags & 7;
+    const u32 surface = index == 4 ? LoadU32(device + d3d::kDeviceOffsetDepthStencil)
+                        : index < 4 ? LoadU32(device + d3d::kDeviceOffsetRenderTargets + index * 4)
+                                    : 0;
+    if (surface) {
+      const u32 size = LoadU32(surface + 0x24);  // (width - 1) << 18 | (height - 1) << 3 (GTA IV's EndTiling)
+      const u32 width = ((size >> 18) & 0x3FFF) + 1, height = ((size >> 3) & 0x7FFF) + 1;
+      rect.x1 = i32(std::min(u32(std::max(rect.x1, 0)), width));
+      rect.y1 = i32(std::min(u32(std::max(rect.y1, 0)), height));
+      rect.x2 = i32(std::min(u32(rect.x2), width));  // as unsigned: -1 is the whole width
+      rect.y2 = i32(std::min(u32(rect.y2), height));
+      if (rect.x1 == 0 && rect.y1 == 0 && u32(rect.x2) == width && u32(rect.y2) == height)
+        has_rect = false;  // the whole surface
+    }
+  }
   i32 dest_x = 0, dest_y = 0;
   if (const auto *p = point_va ? GuestPtr<const be_u32>(point_va) : nullptr) {
     dest_x = i32(u32(p[0]));

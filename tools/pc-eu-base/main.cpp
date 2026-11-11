@@ -149,6 +149,14 @@ class EuBaseApp final : public rex::ReXApp {
 #if THEFT4_RENUT_ENGINE
       // No SDK graphics system and no GPU plugin: the renderer is the app's (its own window swapchain and thread).
       renut::gpu::ConfigureRuntime(config);
+      // GTA IV's Direct3D registers its graphics interrupt (sub_829DF308): the vertical blank's work (sub_829D4BF8:
+      // the blank count, the title's blank callback) runs from it on the console. With no graphics system
+      // VdSetGraphicsInterruptCallback was ignored. The null graphics system raises the 60 Hz blank as the console
+      // does and draws nothing; it has no presenter, so ReNut's renderer stays the one that presents (the SDK's
+      // detached mode). Its ring is never written: ReNut's ring is a sink. Measured (PC, 2026-11-11): the game runs
+      // either way; with it, 44 game frames a second instead of 60 in the 3D scene (to look at: GTA IV's own wait on
+      // the blank count and sa2-nx's pacing may both pace the frame).
+      config.graphics = rex::system::CreateNullGraphicsSystem();
       REXLOG_INFO("pc-eu-base: gta4_renderer = renut (ReNut's Direct3D-level renderer: no PM4 ring, no EDRAM)");
 #else
       config.gpu_plugin.clear();

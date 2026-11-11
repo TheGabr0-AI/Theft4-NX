@@ -56,7 +56,15 @@ REXCVAR_DEFINE_BOOL(sa2_renut_gamma_ramp, true, "SA2/Renderer",
                     "Renut's renderer: apply the game's display gamma ramp at scan-out, as the Xbox 360's display "
                     "controller, the emulated GPU and the native renderer do (off: the frame as rendered, lighter)");
 
+// theft4 (2026-11-11): off by default for GTA IV on the PC. With the D3D12 swapchain's SyncInterval 1, half of the
+// boots stopped at the 9th frame with the GPU idle and the device not removed (the frame never completed; the render
+// thread waited for it in Present): 3 of 6 boots, 6 of 6 with it off. GTA IV's frames are paced at its presentation
+// interval by sa2_renut_vblank_pacing either way; off can tear on the PC. The console presents through deko3d.
+#if THEFT4_RENUT_ENGINE
+REXCVAR_DEFINE_BOOL(renut_vsync, false, "Nuts&Bolts/Graphics",
+#else
 REXCVAR_DEFINE_BOOL(renut_vsync, true, "Nuts&Bolts/Graphics",
+#endif
                     "Show each frame at the display's refresh: no tearing, and the game runs at "
                     "the refresh rate (frame_cap then only limits below it). Off shows frames at "
                     "once, with tearing.");
@@ -399,6 +407,14 @@ bool DiagTextureImageLocked(PresentImage &out) {
   if (!va)
     return false;
   HostTexture *t = FindHostTextureLocked(va);
+  // theft4: say once a second whether the texture was found (without it the frame shows as usual, which a test must
+  // not take for the texture).
+  static std::chrono::steady_clock::time_point said{};
+  if (std::chrono::steady_clock::now() - said > std::chrono::seconds(1)) {
+    said = std::chrono::steady_clock::now();
+    RGPU_INFO("banjo_renut_diag_show_texture {:08X}: {}", va,
+              !t ? "no host texture" : !t->texture ? "no host image" : t->stacked ? "stacked" : "shown");
+  }
   if (!t || !t->texture || t->slot == UINT32_MAX || t->slot == kInvalidDescriptor ||
       t->dimension != TextureDimension::Tex2D || t->stacked)
     return false;

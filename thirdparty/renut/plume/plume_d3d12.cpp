@@ -2721,7 +2721,30 @@ namespace plume {
         assert(fence != nullptr);
 
         D3D12CommandFence *interfaceFence = static_cast<D3D12CommandFence *>(fence);
-        WaitForSingleObjectEx(interfaceFence->fenceEvent, INFINITE, FALSE);
+        // theft4 (2026-11-11): wait for the fence's last signal by its value. The event is auto-reset and set once per
+        // signal (executeCommandLists' SetEventOnCompletion): a fence signalled twice before its wait leaves one set
+        // state for two values, and a second wait would never return. Not what stopped GTA IV's PC boots (that was the
+        // swapchain's vertical sync: renut_vsync in backend/present.cpp), but the wait it replaces relied on one
+        // signal per wait, which nothing guaranteed.
+        const UINT64 target = interfaceFence->fenceValue - 1;  // fenceValue is the next value to signal
+        while (interfaceFence->d3d->GetCompletedValue() < target) {
+            interfaceFence->d3d->SetEventOnCompletion(target, interfaceFence->fenceEvent);
+            if (interfaceFence->d3d->GetCompletedValue() >= target) {
+                break;
+            }
+            if (WaitForSingleObjectEx(interfaceFence->fenceEvent, 3000, FALSE) == WAIT_TIMEOUT) {
+                // theft4: a wait of more than 3 s is a GPU that stopped: said once per fence, with the device's state.
+                static thread_local const void *reported = nullptr;
+                if (reported != interfaceFence) {
+                    reported = interfaceFence;
+                    fprintf(stderr, "waitForCommandFence: fence %p at %llu, waiting for %llu for 3 s; device removed "
+                                    "reason 0x%lX\n", (void *)interfaceFence,
+                            (unsigned long long)interfaceFence->d3d->GetCompletedValue(), (unsigned long long)target,
+                            (long)device->d3d->GetDeviceRemovedReason());
+                    fflush(stderr);
+                }
+            }
+        }
     }
 
     // D3D12Buffer

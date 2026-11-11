@@ -247,6 +247,28 @@ of extracted containers); `main.cpp` starts the renderer as sa2-nx's application
 **Where R2 stops:** the 3D frame does not reach the screen. The next step is the frame's last part: which resolve or
 copy writes the texture GTA IV passes to Swap as its front buffer, and why ReNut's present finds it black (R3/R4: the
 deferred targets, the depth read-backs, the resolve of a tiled frame).
+### R2, second round (2026-11-11): boot made reliable, the black 3D frame narrowed
+
+| Found | How | Change |
+|---|---|---|
+| **Half of the PC boots stopped** in the first frames: the render thread (or, earlier, the UI thread's overlay present) waited for ever for a GPU slot, with the GPU idle and the device not removed; in the other half the game ran | a stack sampler of the process (dbghelp `StackWalk64` against the link map: `Video::SetGuestDevice` waiting for the video lock held in `WaitSlotLocked`), plume's fence report (completed 8, waiting for 9), the GPU engine counters (0 % during the stop) | the D3D12 swapchain's vertical sync: **3 of 6 boots with it, 6 of 6 without**. `renut_vsync` off by default in this build (frames are paced by `sa2_renut_vblank_pacing`; the console presents through deko3d) |
+| plume's D3D12 `waitForCommandFence` waited on an auto-reset event, one signal per wait assumed | reading | it waits for the fence's last signalled value |
+| GTA IV registers its graphics interrupt; with no graphics system the SDK ignored it | the boot log | the SDK's null graphics system beside the renderer raises the 60 Hz blank and has no presenter (ReNut presents). The 3D scene then runs at 44 game frames a second instead of 60: two pacings at once, to look at |
+| The last resolve of every 3D frame (into the front buffer) passes the rect (0,0)-(-1,-1) | `banjo_renut_diag_resolve_trace` | the Resolve hook clips the rect to the source surface, as the console's resolve does |
+| plume's Vulkan back end crashes on this PC's AMD driver (a read of address 0 inside the driver, after the swapchain) | the fault logger | not chased: D3D12 is the PC back end; the console uses deko3d |
+
+Test tools added: `gta4_renut_capture_s` (the presented frame as PNG), the fault logger
+(`renut-faults.txt`), a fence-wait report in `BlockOnFence` (2 s) and in plume's D3D12 wait (3 s), and a report of
+whether `banjo_renut_diag_show_texture` found its texture.
+
+**The 3D frame is still black, and it is black before the tone mapping.** With `banjo_renut_diag_show_texture`: the
+scene's resolved colour (`40079D00`), its 640x360 HDR downsample (`DA1A63E0`) and its resolved depth (`DA1A6320`) are
+all exactly 0 (mean 0, maximum 0); the 1x1 average-luminance target (`40226B50`) is saturated. The frame's draws are
+all there (`banjo_renut_diag_draw_log_s`: 971 depth-only draws, 588 into the 3-target G-buffer, 478 into the final
+1280x720 target, 325 pipelines built). So the lit scene does not reach its targets. Next: read back the G-buffer
+targets themselves (not their resolves) right after the G-buffer pass, to tell rasterization (viewport, depth test,
+tiled rendering's extent) from the targets' handling (the 2x multisampled G-buffer, the resolves of the three tiles
+into one texture).
 ## 7. Licences
 
 - reNut (masterspike52) has no licence file. **Settled on 2026-11-10:** this project's owner confirms
