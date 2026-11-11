@@ -262,8 +262,11 @@ void StopCaptures() {
   }
   g_capture_wake.notify_all();
   if (thread) {
+    const auto start = std::chrono::steady_clock::now();
     thread->join();  // at most one capture in flight: CaptureFrame waits 3 s at most
     delete thread;
+    REXLOG_INFO("gta4_renut_capture_s: capture thread joined in {} ms",
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count());
   }
 }
 }  // namespace theft4::renut
