@@ -595,6 +595,44 @@ audio worker starved at that frame rate: first look at it once the frame is righ
 frame every 30 s: every resolve and target change with the bytes' summary) so that a frame still dark says at which
 step it goes black.
 
+## 6g. The old deko3d renderer against ReNut: what to recover (2026-11-11, after run 68)
+
+Read from the devlog (16, runs 35-65), the roadmap (17), sections 3-4 above and the run 68 log; each "ReNut" cell
+checked in the tree or the log named. Transfer: **done** (ReNut has it), **direct** (a piece that moves as it is),
+**adapt** (the idea, rewritten for ReNut's path), **no** (not needed or not applicable). Priority: P0 the frame right,
+P1 stutter and audio, P2 frame rate, P3 only if a run shows the need.
+
+| Feature | Old renderer (where) | ReNut now | Transfer | Priority |
+|---|---|---|---|---|
+| Deferred lighting: scene depth and stencil for the lights | depth hand-off (run 44: black ground gone in the dark state), packed depth alias (runs 38-40) | colour-to-depth restore with the EDRAM half-tile swap (R3; PC right); on the Switch black in run 68, run 69 fixes the multisampled resolves and Zcull (§6f) | no (ReNut's own, closer to the console) | P0: run 69 |
+| Characters and cars whole | never solved (runs 48-65: shards when drawn) | whole on the PC (R3); on the Switch behind the deferred frame | no | P0: run 69 |
+| Light-volume and skinned vertex shaders | XenosRecomp state machines: 810 ms draws, cut-scene stall and freeze, 60 skinned shaders uam could not compile; `hlsl_structure.py` structured 183 (runs 46-47) | reblue-XenosRecomp writes structured code: `vs_0872615BD9E7930D` 24,576 B of DKSH (745 KB before), no `switch`/`while (true)`; 1,370 of 1,370 compiled, 0 failed | no (solved by the translator) | done |
+| Shader variants ready before play | package s61: 12,060 DKSH variants built offline, no compile on the console | GLSL package, variants compiled by uam on the console: run 68 compiled 295 at 153-552 ms each (about 160 s), the render thread waiting (10 s windows stretched to 16-41 s): **the stutter** | adapt: a DKSH cache built offline from a run's pipeline list (sa2-nx's way), or the console's own `deko3d_shaders.bin` kept between runs once the frame is right | **P1** |
+| Vertex outputs pruned | run 55-56 (`nx_dk_vs_prune`) | `vsout` pass, constant 905 per pipeline (deko3d.log variants) | done | - |
+| Depth-only draws without pixel shader | run 55 (`nx_dk_depth_only`) | `banjo_gpu_depth_only` (run 68: 23,350 depth-only draws counted) | done | - |
+| Geometry kept across frames | geometry store: hashes, write signals from lock/unlock, trusted 8 frames (runs 60-65; store off = -5 % draws/s) | stream cache hashed after each kick; store cards off (GTA IV's generated code has no card pass) | adapt: the lock/unlock write signals as the card source, or `store_cards.py` over the generated code | P2 |
+| Submission path | packet ring without allocations (run 46: 1-2 -> 3-5 fps), 64-byte constant diff (run 45) | device snapshot deltas, queued captures, render thread (sa2-nx) | no (other architecture) | - |
+| Copies at submit | copies by rewritten page (run 59: +10-13 % draws/s) | snapshot deltas copy only changed chunks (run 68: 123-6,595 bytes a draw) | no | - |
+| Exposure (luminance read by the CPU) | texture-lock read-back, EDRAM placements of the exposure chain (runs 54-57) | right on the PC (brightness matched, R3); its 4x targets go through the drawn multisampled resolve from run 69 | check in run 69's captures | P1 |
+| Depth clamp for z-fail light volumes | run 43, LRA's policy: changed nothing visible | `depthClipEnabled = true` always (`render/pipeline.cpp:304`); lighting right on the PC without it | adapt only if a run shows cut volumes | P3 |
+| Depth bias as LRA | run 55 | the Xenos bias through plume's dynamic depth bias | check against a decal scene | P3 |
+| Sync primitives (futex waits, multi-wait, lock-free release) | runs 56 (+11 % draws/s) | in the SDK, on in the ReNut NRO (start-up lines C2/C3/C5) | done | - |
+| Audio: XMA kick asynchronous, native mixer routing, deadline priority | runs 49, 64 | in the SDK and the game layer, on in the ReNut NRO (`xma_async_kick`, `native routing calls`, `deadline priority`) | done | - |
+| Audio starvation | 53-81 % of real time in play (runs 59-65), CPU bound | run 68: 68 % while loading, 100 % in the cut-scene, 87 % with 7 dry outputs in play (while uam compiled) | follows the stutter fix; then the mixer's own cost (NEON mixer: 0 voice loops counted in run 68, to check) | P1 |
+| Game-level hooks: aspect, presentation options (motion blur, film grain), font trace | `theft4_add_lra_hooks` in the deko3d and LRA builds | **not linked** in the ReNut variant (`tools/switch-game/CMakeLists.txt` 373-412) | direct (non-Direct3D files), after checking they need nothing of `gta4_native_hooks.cpp` | P2 |
+| Clocks, exit mode D, save fix, stack watch, crash records | runs 21-50 (main.cpp, SDK) | in the ReNut NRO (run 68: exit mode D, clocks as wanted) | done | - |
+| Diagnostics | anatomy frames, in-run A/B, GPU probes, stage counters | captures, `[trace]`, 10 s lines, verify keys, in-run A/B (`nx_dk_ab` gone) | adapt the A/B when a speed choice needs it | P3 |
+
+**Speed, the two at standard clocks (single samples, different frames):** the old renderer in play 5.3-5.8 fps,
+20.5-22.9 k draws/s, 3,600-4,050 draws a frame, GPU busy 120 ms + idle 50-70 ms a frame (runs 59-62); ReNut run 68 in
+play 3-10 fps with the compile stalls, 23.5-27.6 k draws/s in its best windows, 2,700-3,100 draws a frame, GPU 52-65
+ms a frame **on a frame whose deferred lighting is black** (not comparable until it is right).
+
+**Order from here:** (1) run 69: the deferred frame; if still dark, its `[trace]` lines name the step. (2) The stutter:
+variants ready before play (offline DKSH cache from the run 69 pipeline list; meanwhile `deko3d_shaders.bin` kept between
+runs). (3) Audio once the compiles are off the play path; the NEON mixer's state. (4) The game-level hooks into the ReNut
+variant. (5) Frame rate, one measured change a run: GPU time a frame first (55-65 ms), then the render thread.
+
 ## 7. Licences
 
 - reNut (masterspike52) has no licence file. **Settled on 2026-11-10:** this project's owner confirms
