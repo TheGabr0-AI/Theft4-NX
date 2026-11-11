@@ -387,6 +387,12 @@ the opening cutscene: 3 of 3 alive at the end, 0 faults, the one error line each
 same scenes drawn right in all three (deck, hold, pier, the docks with cranes at 160 s, the car on the wet quay at
 200 s); one capture at 40 s fell on a loading screen.
 
+**Brightness against the reference (PC):** the same build with `gta4_renderer = xenos` (the emulated GPU) captured from
+the composed screen at the same times (`out/pc-renut/xenos-shots`, local; fullscreen 1920x1080, partly covered by a
+terminal window): the docks with the cranes at 160 s and the deck's "NO SMOKING" wall at 80 s are the same dark night
+blue as ReNut's frames (mean 16-25 against 17-27, frames not identical). The dark image is the game's; run 65's
+brighter ship shot was the old renderer's. Not frame-exact: a lockstep comparison is still to be made.
+
 ## 7. Licences
 
 - reNut (masterspike52) has no licence file. **Settled on 2026-11-10:** this project's owner confirms
