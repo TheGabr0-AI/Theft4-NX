@@ -430,6 +430,21 @@ which tells a fault of the passes from one of the renderer without a new build.
 After them: the renderer (44 objects), plume with the deko3d back end, uam and the UI pieces compile with 0 errors and
 0 warnings; `main.cpp` too.
 
+**The full build and the link (2026-11-11, second round).** The first full build stopped for lack of RAM on the PC at
+generated unit 22 of 106 (not a code error). Resumed from the objects already made, one compile at a time
+(`THEFT4_BUILD_JOBS=1 tools/switch-game/build_variants.sh out/console-runs/run66-build renut`; the variable lowers
+the parallelism for one call, the default stays `-j3` for every variant): the other 81 units compiled with at least
+9.9 GB free, one GCC at about 1.2 GB. The link then failed on three symbols sa2-nx's SDK has and this one does not:
+
+| Undefined | Asked by | Fix (`tools/renut-gta4/gta4_renut_compat.cpp`, Switch only) |
+|---|---|---|
+| `vk_icdGetInstanceProcAddr`, `vk_icdNegotiateLoaderICDInterfaceVersion` | plume's Vulkan interface (`plume_vulkan.cpp`), compiled even without the driver | "no driver" entry points (null, `VK_ERROR_INCOMPATIBLE_DRIVER`), the ones `PLUME_SWITCH_NO_NVK` expects from the parent: plume's Vulkan interface stays invalid, deko3d is the back end |
+| `RexSetGuestThreadCoreLayout` | `device.cpp`, `sa2_renut_core_layout` at the first Swap | moves no thread (returns 0, the log line says "(0 threads set)"): this SDK places the guest threads itself (`nx_guest_core_mask`); SA2's layout, made for SA2's threads, is not ported |
+
+Result: `out/console-runs/run66-build/theft4-renut.nro` (49,043,653 bytes, SHA-256 `c2dc1581…abbce`, NACP "Theft4
+ReNut"), `switch-game-renut.elf` (static PIE, 0 undefined symbols, the GLSL package `g_deko3dGlslPackage` 1,272,760
+bytes inside), commit `fead1cd` in the start-up line. Not run on the console yet: run 66 is its first run.
+
 ## 7. Licences
 
 - reNut (masterspike52) has no licence file. **Settled on 2026-11-10:** this project's owner confirms

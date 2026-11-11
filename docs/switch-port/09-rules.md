@@ -142,7 +142,9 @@ cartelle diverse: smoke e gioco scrivono le stesse librerie dell'SDK
 generati** (circa 2 MB di C++ l'uno, 1–2 GB di RAM per processo GCC): il
 2026-09-29 due Ninja nella stessa cartella, 6 GCC insieme, hanno esaurito i
 16 GB. Se un Ninja viene interrotto a metà, `ninja -t recompact` ripara
-`.ninja_deps`.
+`.ninja_deps`. Con poca RAM libera: `THEFT4_BUILD_JOBS=1` (o 2) davanti a
+`build_variants.sh` abbassa il parallelismo per quella chiamata, senza cambiare
+il default delle varianti.
 
 ## 8. Una correzione non provata sulla console è "da verificare"
 
