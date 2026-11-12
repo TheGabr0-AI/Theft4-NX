@@ -1,0 +1,29 @@
+# Theft4-NX: GTA IV EU base (D3D 2.0.6274) addresses the Ultimate Base's hooks may bind to (docs/switch-port/20, U4).
+# The 23 rows are the hooks the working renderer binds (thirdparty/renut/renut_engine/gpu/d3d/hooks, run 70-72) and
+# tools/renut-gta4/gta4_d3d.h's X() table, each identified in docs/switch-port/18-renut-migration.md section 2 (the
+# "source" column names its row). tools/ultimate/hook_census.py checks every live hook of the base against this list.
+# kind: binding (a hook belongs at this address) or reviewed (an address in code checked and accepted, with why).
+kind,address,name,katamari_base_hook,source
+binding,829D0218,Direct3D_CreateDevice,,doc 18 s2 "Direct3D_CreateDevice": allocates 22400 / 128; device type 2 sets flag 0x80
+binding,829D8518,CDevice_KickOff,,doc 18 s2 "CDevice::KickOff": 49 callers; returns m_pRing
+binding,829D8390,CDevice_KickOffSegment,,doc 18 s2 "KickOff's tail (next segment)"
+binding,829D8730,CDevice_BeginRingBig,,doc 18 s2 "CDevice::BeginRingBig": ring + count * 4 against the limit
+binding,829D8138,CDevice_NewSegment,,doc 18 s2 "ring segment allocator": (device; dwords); non-zero on success
+binding,829D74E8,RingBufferDeviceAllocate,,doc 18 s2 "RingBufferDeviceAllocate": (device; flags; size*; alignment)
+binding,829D76F0,CDevice_AllocateInlineData,,doc 18 s2 "CDevice::AllocateInlineData"
+binding,829D7D40,CDevice_BlockOnFence,,doc 18 s2 "CDevice::BlockOnFence": polls through CBlocker
+binding,829CFE80,CBlocker_Check,,doc 18 s2 "CBlocker::Check"
+binding,829D77D8,CDevice_SubmitIndirect,,gta4_d3d.h X(CDevice_SubmitIndirect): the hardware submission of a command block (ring registers); hooked since R1 (96f8261)
+binding,829D5338,D3DDevice_Swap,,doc 18 s2 "D3DDevice_Swap": calls VdSwap; swap count 16544
+binding,829CCAC0,D3DDevice_DrawVertices,,doc 18 s2 "DrawVertices"
+binding,829CCEA8,D3DDevice_DrawIndexedVertices,,doc 18 s2 "DrawIndexedVertices"
+binding,829CC610,D3DDevice_BeginVertices,,doc 18 s2 "BeginVertices"
+binding,829CD470,D3DDevice_BeginTiling,,doc 18 s2 "BeginTiling": stores the tile count at 12740 (old notes: Clear)
+binding,829CD908,D3DDevice_EndTiling,,doc 18 s2 "EndTiling"
+binding,829DDF28,EndTiling_SubmitTiles,,doc 18 s2 "EndTiling's tail": submitted the tile block (+11000 pending); 96f8261
+binding,829CB7C8,D3DDevice_Resolve,,doc 18 s2 "Resolve": EndTiling calls it once per tile
+binding,829D49A0,D3DDevice_ClearF,,doc 18 s2 "D3DDevice_ClearF": BeginTiling calls it with flags 0x3F
+binding,829D8D40,D3DResource_Destroy,,doc 18 s2 "D3DResource_Destroy": only caller D3DResource_Release 829D92E8
+binding,829D1818,D3DDevice_CreateVertexShader,,doc 18 s2 "CreatePixelShader / CreateVertexShader"
+binding,829D1708,D3DDevice_CreatePixelShader,,doc 18 s2 "CreatePixelShader / CreateVertexShader"
+binding,829D1598,D3DDevice_CreateVertexDeclaration,,doc 18 s2 "D3DDevice_CreateVertexDeclaration": allocates 56 + 12 n
