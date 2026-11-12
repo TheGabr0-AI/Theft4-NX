@@ -6,6 +6,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -64,12 +65,25 @@ extern "C" bool RexSwitchSetCurrentThreadPriorityOk(int priority) {
   return priority >= 0 && priority < 64 && R_SUCCEEDED(svcSetThreadPriority(CUR_THREAD_HANDLE, u32(priority)));
 }
 
+// Run 72: switch-game's CPU rows and 1 kHz sampler take the renderer's host threads from here (main.cpp); weak: the
+// smoke test and other hosts of this file do not have it.
+extern "C" __attribute__((weak)) void Theft4RegisterProfiledThread(const char *name);
+
 extern "C" bool RexSwitchPinCurrentThreadToCore(int core) {
   u64 process_mask = 0;
   if (core < 0 || core > 3 || R_FAILED(svcGetInfo(&process_mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)) ||
       !(process_mask & (u64(1) << core)))
     return false;  // a core the process may not use
-  return R_SUCCEEDED(svcSetThreadCoreMask(CUR_THREAD_HANDLE, core, u32(1) << core));
+  const bool pinned = R_SUCCEEDED(svcSetThreadCoreMask(CUR_THREAD_HANDLE, core, u32(1) << core));
+  if (pinned && Theft4RegisterProfiledThread) {
+    // The renderer's threads that pin themselves: the render thread, the ring cleaner, the pipeline prebuild worker,
+    // the display limiter (banjo_renut_tuning.cpp). Named by core and order; main.cpp drops a repeated handle.
+    static std::atomic<int> order{0};
+    char name[24];
+    std::snprintf(name, sizeof(name), "renut c%d #%d", core, order.fetch_add(1, std::memory_order_relaxed));
+    Theft4RegisterProfiledThread(name);
+  }
+  return pinned;
 }
 
 extern "C" int RexSwitchCurrentCore(void) { return int(svcGetCurrentProcessorNumber()); }

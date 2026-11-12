@@ -1151,6 +1151,32 @@ Result __wrap_svcBreak(u32 reason, uintptr_t arg1, uintptr_t arg2) {
 // Set by the deko3d graphics system's recorder thread (dk_graphics_system.cpp); weak: the other builds do not have it.
 extern "C" unsigned int g_theft4_dk_recorder_thread __attribute__((weak));
 
+// Run 72 (19-optimization-matrix.md): the host threads of ReNut's renderer (its render thread, ring cleaner, pipeline
+// prebuild, display limiter) were missing from the CPU rows and the 1 kHz sampler, though run 71's render thread was
+// busy 80-97 ms a frame while driving. Each pins itself through RexSwitchPinCurrentThreadToCore
+// (tools/renut-gta4/gta4_renut_compat.cpp), which registers it here; LogCpu gives each a row of kind "renut".
+namespace {
+struct ProfiledHostThread {
+  std::atomic<uint32_t> handle{0};
+  char name[24] = {};
+};
+constexpr uint32_t kProfiledHostThreads = 8;
+ProfiledHostThread g_profiled_hosts[kProfiledHostThreads];
+std::atomic<uint32_t> g_profiled_host_count{0};
+}  // namespace
+
+extern "C" void Theft4RegisterProfiledThread(const char* name) {
+  const uint32_t handle = threadGetCurHandle();
+  const uint32_t known = std::min(g_profiled_host_count.load(std::memory_order_acquire), kProfiledHostThreads);
+  for (uint32_t i = 0; i < known; ++i) {
+    if (g_profiled_hosts[i].handle.load(std::memory_order_acquire) == handle) return;  // pinned again (an A/B)
+  }
+  const uint32_t slot = g_profiled_host_count.fetch_add(1, std::memory_order_acq_rel);
+  if (slot >= kProfiledHostThreads) return;
+  std::snprintf(g_profiled_hosts[slot].name, sizeof(g_profiled_hosts[slot].name), "%s", name ? name : "renut");
+  g_profiled_hosts[slot].handle.store(handle, std::memory_order_release);
+}
+
 namespace {
 
 void OnTerminate() {
@@ -1751,6 +1777,20 @@ void LogCpu(std::vector<std::pair<Handle, u64>>* last, u64 window_ticks) {
     rec.kind = "recorder";
     theft4::nx_threads::SetName(rec.handle, "deko3d recorder");
     rows.push_back(rec);
+  }
+  {
+    // Run 72: ReNut's host threads (Theft4RegisterProfiledThread).
+    const uint32_t count = std::min(g_profiled_host_count.load(std::memory_order_acquire), kProfiledHostThreads);
+    for (uint32_t i = 0; i < count; ++i) {
+      const uint32_t handle = g_profiled_hosts[i].handle.load(std::memory_order_acquire);
+      if (!handle) continue;  // being registered
+      CpuRow r;
+      r.handle = handle;
+      r.kind = "renut";
+      r.name = g_profiled_hosts[i].name;
+      theft4::nx_threads::SetName(r.handle, g_profiled_hosts[i].name);
+      rows.push_back(r);
+    }
   }
   if (g_log_writer_ready) {
     CpuRow w;
