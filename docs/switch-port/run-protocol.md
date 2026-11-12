@@ -107,6 +107,15 @@ shader del gioco non cambia. Si cancellano solo se una NRO cambia il pacchetto o
 avvio: log vecchi rinominati, `captures/` vuota. Le finestre a 2-5 fps che coincidono con i frame tracciati
 (`banjo_renut_diag_resolve_trace`) sono il costo della misura, non del gioco.
 
+**Dal run 71: run di ottimizzazione** (`19-optimization-matrix.md`). Il trace dei resolve è uno strumento di
+diagnosi grafica: **mai acceso** in un run che misura prestazioni o audio (nel run 70 ogni frame tracciato fermava il
+gioco 10-15 s). Il campionatore CPU (`nx_profile`) parte dopo `nx_profile_start_s` secondi: le finestre prima sono il
+benchmark, quelle dopo il profilo della stessa sessione (`tools/switch-game/where.py --profile game.log --elf
+<ELF del run>`). Il profilo GPU per tipo di lavoro (`renut_gpu_profile`, secondi tra le righe) costa pochi timestamp.
+Ogni modifica si confronta con la baseline del run 71 sulla stessa scena: introduzione, filmato, poi gioco a piedi e in
+auto. Da riportare sempre: fps e tempo GPU delle righe `[renut] ... game frames`, righe `audio:`, i blocchi visti
+(quando e quanto), cosa manca a schermo.
+
 **Smoke:** `switch-smoke.nro` della stessa cartella del run fa anche il
 passo 8 (deko3d contro NVK, `13-deko3d-spike.md`, ~1–2 minuti, schermo fermo
 sull'ultima immagine della sonda Vulkan); il risultato sono le righe `gpu

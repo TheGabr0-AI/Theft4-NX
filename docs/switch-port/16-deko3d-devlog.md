@@ -4602,3 +4602,17 @@ a draw's targets and textures: in GTA IV's device those bytes are other words, a
 and every pass after the G-buffer drew into the previous target. Both ranges now come from the layout; a test fails on
 any range named by number. **PC, D3D12:** the scene reaches the screen (night sky, city), still much darker than run
 65's shots; exposure next. Nothing of this has run on the console.
+## 2026-11-11: ReNut on the console, runs 66-70, and the optimisation phase (AQ)
+
+The ReNut runs are recorded in `18-renut-migration.md` §6d-§6h and `run-index.md`; this entry only links them to the
+old renderer's log. Run 66 crashed at the device (guest addresses past the Switch arena), run 67 at the first Swap
+(`std::thread::detach` and ENOSYS on libnx), run 68 reached gameplay with the deferred frame black, run 69 located the
+loss (every shader read of a multisampled image was 0 on deko3d), **run 70 draws the scene: the characters and the ship
+visible, the deferred lighting right**. What stays from this log: the state-machine shaders of §S are not produced by
+ReNut's translator (`18` §6g); the light-volume depth clamp of §N is not needed so far.
+
+From run 70 the work is optimisation, in `19-optimization-matrix.md`: the reference ports' techniques (rr6-nx,
+katamari-nx, bejeweled3-nx, sa2-nx, nfsmw-nx, torchlight-nx, kabba536's GTA IV) with their category, cost and check.
+Run 70's freezes of several seconds were mostly the resolve trace left on in its `game.toml` (one traced frame every
+30 s cost 10-15 s); outside them gameplay ran at 13-14.5 fps, GPU 67-75 ms a frame, audio 62-70 % of real time. Run 71
+is the baseline with the trace off and both profilers on (same NRO).

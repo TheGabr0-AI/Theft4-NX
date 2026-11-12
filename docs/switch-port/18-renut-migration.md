@@ -715,6 +715,26 @@ default); `tests/renut/test_gta4_d3d.py` OK. The deko3d path cannot run on the P
 | `runtime-cache/` | the old NVK/Vulkan builds | Vulkan shader cache | not read by ReNut (logged only): may stay or go |
 | `cache/`, `cache1/` | GTA IV's cache partitions (`nx_mount_cache`, off) | game cache | not mounted: leave |
 
+## 6i. Run 70: the scene drawn on the console; the optimisation phase starts (2026-11-11)
+
+**Run 70** (`cc64728`, logs `out/console-runs/70-logs`, 44 captures, 710 s, 0 faults): the user saw the characters and
+the ship and a scene that looks right: **the deferred frame works on the console** (run 69's fix: multisampled targets
+uncompressed and read through decayed descriptors). Left: freezes of several seconds, audio robotic and slow, and one
+intro panel not seen (the man whipping the woman).
+
+- **The freezes were mostly the measurement.** The resolve trace was still on in run 70's `game.toml`: each traced
+  frame (one every 30 s) stopped the game for 10-15 s (the 10 s windows holding a `[trace] frame start` last 17-21 s at
+  2-4 fps; the captures 15 s apart show 2-6 frames across them). Off from run 71.
+- Outside them: 12.9-14.5 fps in gameplay, GPU 67-75 ms a frame, audio 62-70 % of real time with the output running
+  dry: CPU and GPU both far from 30 fps; the audio is starved even without the trace.
+- The intro panels are shown while the game loads: on the PC, which loads fast, only two appear before the cutscene
+  (a capture every 2 s, `pcintro`); on the console more (the car panel at 45 s). The missing panel is probably a
+  matter of load time and order, not of drawing: a dense capture of the console's intro will tell (separate from the
+  performance work).
+
+From here the work and its numbers are in `19-optimization-matrix.md`. Run 71 is the baseline: same NRO, trace off,
+CPU sampler and GPU breakdown on.
+
 ## 7. Licences
 
 - reNut (masterspike52) has no licence file. **Settled on 2026-11-10:** this project's owner confirms
