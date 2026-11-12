@@ -1,0 +1,989 @@
+function starts in the generated code: 37541
+hook definitions: 389 (0 live in compiled files: with KATAMARI_RENUT_HOOKS or always)
+
+== hook definitions (address, macro, liveness, compiled?, host, GTA IV function start?, binding, place)
+821DF948 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/me/banjo_me_hooks.cpp:257
+821DFFF0 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/me/banjo_me_hooks.cpp:246
+821E17C0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_EndTiling_hook           no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:620
+821F1A78 BANJO_RENUT_UNHOOKED_HOOK_SHARED     never                 built     D3DDevice_RunCommandBuffer_hook    no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1309
+821F2750 REX_HOOK_RAW                         always                not-built                                    start    -                                  ultimate/app/src/me/banjo_me_hooks.cpp:161
+821F99C0 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/renut_engine/hooks.cpp:281
+821FAF10 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/me/banjo_me_hooks.cpp:82
+821FB880 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/me/banjo_me_hooks.cpp:99
+821FB880 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/native/banjo_d3d_hooks.cpp:184
+821FC318 BANJO_RENUT_UNHOOKED_HOOK            never                 built     AllocateInlineData_hook            no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1304
+821FC7A0 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/me/banjo_me_hooks.cpp:171
+821FD698 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/me/banjo_me_hooks.cpp:141
+821FD698 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/native/banjo_d3d_hooks.cpp:202
+8220F350 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/renut_engine/thread_slots.cpp:74
+82237D80 BANJO_RENUT_UNHOOKED_HOOK_SHARED     never                 built     D3DDevice_EndExport_hook           no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:633
+82237FE8 BANJO_RENUT_UNHOOKED_HOOK_SHARED     never                 built     D3DDevice_BeginExport_hook         no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:632
+82241D38 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/renut_engine/townsfolk.cpp:16
+82244B18 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_GetViewport_hook         no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:523
+82246798 BANJO_RENUT_UNHOOKED_HOOK_SHARED     never                 built     D3DDevice_BeginTiling_hook         no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:619
+822554F8 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/me/banjo_me_hooks.cpp:207
+822554F8 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/native/banjo_d3d_hooks.cpp:212
+8225D1D0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_BlockOnFence_hook        no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1287
+822DA088 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/renut_engine/env_map_pool.cpp:60
+822EDC90 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/renut_engine/env_map_pool.cpp:52
+82333388 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/cpu/banjo_pool_lock.cpp:64
+823333F0 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/cpu/banjo_pool_lock.cpp:54
+823B7B50 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/renut_engine/frontend_debug_menu.cpp:18
+824A3D40 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetTexture_hook          no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:498
+824D01C8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_AddRef_hook              no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1282
+824D0290 BANJO_RENUT_UNHOOKED_HOOK            never                 built     CBlocker_Check_hook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1311
+824D0368 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_Release_hook             no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1294
+824D0430 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_AcquireThreadOwnership_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1283
+824D0470 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_ReleaseThreadOwnership_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1284
+824D0488 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_UnsetAll_hook            no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:514
+824D0598 BANJO_RENUT_UNHOOKED_HOOK            never                 built     Direct3D_CreateDevice_hook         no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1293
+824D0650 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetTextureDimensions_hook          no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1756
+824D06E8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DArrayTexture_UnlockRect_hook    no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1745
+824D0700 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DSurface_UnlockRect_hook         no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1720
+824D0788 BANJO_RENUT_UNHOOKED_HOOK            never                 built     BlockSizeOfGpuFormat_hook          no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1758
+824D0820 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetMaxMipLevels_hook               no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1755
+824D08A8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     AlignTextureDimensions_hook        no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1759
+824D09C8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     FindTextureSize_hook               start    -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1754
+824D0D38 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetMipTailLevelOffsetCoords_hook   no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1760
+824D0E90 BANJO_RENUT_UNHOOKED_HOOK            never                 built     LevelLayout_hook                   no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1741
+824D1258 BANJO_RENUT_UNHOOKED_HOOK            never                 built     Get2DSurfaceDesc                   no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1737
+824D1358 BANJO_RENUT_UNHOOKED_HOOK            never                 built     Get3DSurfaceDesc                   no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1739
+824D1458 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SubresourceLayout_hook             no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1742
+824D1918 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3D_LockSurface_hook               no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1724
+824D19E0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3D_Lock2DSurface_hook             no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1725
+824D1A70 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3D_Lock3DSurface_hook             no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1726
+824D1B18 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetTextureHeader_hook              no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1753
+824D2080 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DBaseTexture_GetLevelCount_hook  no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1743
+824D2090 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DTexture_GetSurfaceLevel_hook    no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1747
+824D2148 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DLineTexture_LockRect_hook       no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1728
+824D2160 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DCubeTexture_GetCubeMapSurface_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1748
+824D2228 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DVolumeTexture_GetVolumeLevel_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1749
+824D22D8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_CreateTexture_hook       no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1752
+824D23F8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_CreateSurface_hook       no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1716
+824D2520 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DSurface_GetDesc_hook            no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1735
+824D25B8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DSurface_LockRect_hook           no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1729
+824D25D8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DVolume_GetDesc_hook             no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1736
+824D2620 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DVolume_LockBox_hook             no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1730
+824D2640 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetTexture_hook          no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:497
+824D3FE0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3D_CleanupGprAllocationSetup_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:512
+824D4470 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetVertexShaderConstantB_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:526
+824D44D0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetPixelShaderConstantB_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:527
+824D4630 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetPixelShader_hook      no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:636
+824D4838 BANJO_RENUT_UNHOOKED_HOOK            never                 built     XGRegisterVertexShader_hook        no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/shader.cpp:803
+824D4930 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetVertexShader_hook     no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:635
+824D4B48 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetVertexDeclaration_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:501
+824D4C50 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_CreateVertexDeclaration_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/shader.cpp:801
+824D4CD8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetShaderGPRAllocation_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:511
+824D6010 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_CreatePixelShader_hook   no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/shader.cpp:800
+824D6120 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_CreateVertexShader_hook  no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/shader.cpp:799
+824D92B8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_BeginVertices_hook       no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:615
+824D9758 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_DrawVerticesUP_hook      no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:613
+824D9D08 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_DrawVertices_hook        no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:610
+824DA0F0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_DrawIndexedVertices_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:611
+824DA9C0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_DrawIndexedTessellatedVertices_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:612
+824DAF98 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DResource_GetType_hook           no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1734
+824DB028 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DResource_Destroy_hook           no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1717
+824DB210 BANJO_RENUT_UNHOOKED_HOOK            never                 built     LockResource_hook                  no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1721
+824DB448 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3D_UnlockResource_hook            no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1718
+824DB550 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DResource_AddRef_hook            no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1732
+824DB5C8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DResource_Release_hook           no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1733
+824DB698 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_CreateVertexBuffer_hook  no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1750
+824DB760 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DVertexBuffer_Lock_hook          no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1722
+824DB7B0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DVertexBuffer_Unlock_hook        no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1719
+824DB7C0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_CreateIndexBuffer_hook   no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1751
+824DB870 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DIndexBuffer_Lock_hook           no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1723
+824DB8B8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DConstantBuffer_Unlock_hook      no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1746
+824DB8C8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3D_SetSurfaceClip_hook            no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:505
+824DBBA8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:387
+824DBBC8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:537
+824DBBD8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:386
+824DBBF8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:536
+824DBC08 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:397
+824DBC30 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:547
+824DBC40 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:388
+824DBCC0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:538
+824DBCD0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:393
+824DBD50 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:543
+824DBD60 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:391
+824DBDE0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:541
+824DBDF0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:392
+824DBE70 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:542
+824DBE80 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:396
+824DBEE0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:546
+824DBEF0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 start    -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:394
+824DBF50 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:544
+824DBF60 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:395
+824DBFC0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 start    -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:545
+824DBFD0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:389
+824DC058 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:539
+824DC068 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 start    -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:398
+824DC0A0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:548
+824DC0D0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:399
+824DC0F0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:549
+824DC100 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:390
+824DC1A0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:540
+824DC220 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:471
+824DC248 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:621
+824DC258 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:472
+824DC298 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:622
+824DC2C8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:473
+824DC2E8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:623
+824DC2F8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:383
+824DC330 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:533
+824DC338 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:385
+824DC358 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:535
+824DC368 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:384
+824DC390 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:534
+824DC3A0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:400
+824DC3D8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 start    -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:550
+824DC3E0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:401
+824DC408 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:551
+824DC418 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:405
+824DC438 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:555
+824DC448 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:402
+824DC470 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:552
+824DC480 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:403
+824DC4A8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:553
+824DC4B8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:404
+824DC4D8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:554
+824DC4E8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:412
+824DC508 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:562
+824DC518 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:409
+824DC540 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:559
+824DC550 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:410
+824DC578 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:560
+824DC588 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:411
+824DC5A8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:561
+824DC5B8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:406
+824DC5D0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:556
+824DC5D8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:407
+824DC5F0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:557
+824DC5F8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:408
+824DC610 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:558
+824DC618 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:413
+824DC630 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:563
+824DC638 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:414
+824DC650 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:564
+824DC658 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:415
+824DC670 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:565
+824DC678 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:416
+824DC6B8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:566
+824DC6C8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:573
+824DC6D0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:424
+824DC778 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:574
+824DC798 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:425
+824DC830 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:575
+824DC840 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:421
+824DC860 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:571
+824DC870 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:422
+824DC888 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:572
+824DC890 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:426
+824DC8C8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:576
+824DC8D0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:427
+824DC908 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:577
+824DC910 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:428
+824DC948 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:578
+824DC950 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:429
+824DC988 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:579
+824DC990 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:419
+824DC998 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:569
+824DC9A0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:417
+824DC9F0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:567
+824DCA00 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:418
+824DCA48 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:568
+824DCA58 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:420
+824DCAA0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:570
+824DCAB0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:433
+824DCAD0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:434
+824DCAF8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:435
+824DCB20 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:436
+824DCB48 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:437
+824DCB70 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:438
+824DCB98 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:439
+824DCBC0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:440
+824DCBE0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:441
+824DCC00 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:442
+824DCC28 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:443
+824DCC50 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:444
+824DCC78 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:445
+824DCCA0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:446
+824DCCC8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:447
+824DCCF0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:448
+824DCD10 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:583
+824DCD20 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:584
+824DCD30 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 start    -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:585
+824DCD40 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:586
+824DCD50 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:587
+824DCD60 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:588
+824DCD70 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:589
+824DCD80 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:590
+824DCD90 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:591
+824DCDA0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:592
+824DCDB0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:593
+824DCDC0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:594
+824DCDD0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:595
+824DCDE0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:596
+824DCDF0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:597
+824DCE00 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:598
+824DCE10 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:449
+824DCE50 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:599
+824DCE60 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:450
+824DCF08 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:600
+824DCF10 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:451
+824DCFB8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:601
+824DCFC0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:452
+824DD068 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 start    -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:602
+824DD070 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:453
+824DD118 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 start    -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:603
+824DD120 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:431
+824DD148 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:581
+824DD158 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:432
+824DD180 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:582
+824DD190 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:430
+824DD1B8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:580
+824DD1C8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:454
+824DD1F0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:604
+824DD200 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:455
+824DD220 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:605
+824DD230 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:456
+824DD250 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:606
+824DD258 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:457
+824DD278 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:607
+824DD288 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:458
+824DD2A8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:608
+824DD2C0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:459
+824DD2E8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:609
+824DD2F0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:460
+824DD318 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:610
+824DD320 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:461
+824DD340 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:611
+824DD348 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:462
+824DD370 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:612
+824DD378 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:469
+824DD398 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:619
+824DD3A8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:470
+824DD400 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:620
+824DD410 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:463
+824DD430 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:613
+824DD440 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:464
+824DD460 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:614
+824DD470 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:465
+824DD490 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:615
+824DD4A0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:466
+824DD4B8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:616
+824DD4C0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:467
+824DD4C8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:617
+824DD4D0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:468
+824DD4E0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:618
+824DD4F0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:481
+824DD5B0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:631
+824DD5E8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:487
+824DD670 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:637
+824DD680 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:480
+824DD740 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:630
+824DD778 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:486
+824DD800 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:636
+824DD810 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:482
+824DD850 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:632
+824DD868 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:488
+824DD8F0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:638
+824DD900 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:485
+824DD968 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:635
+824DD978 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:491
+824DD9D8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:641
+824DDA20 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:483
+824DDA80 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:633
+824DDAC0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:484
+824DDB30 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:634
+824DDB40 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:489
+824DDBB0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:639
+824DDBC0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:479
+824DDC10 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:629
+824DDC30 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:476
+824DDC68 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:626
+824DDC80 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:477
+824DDCB8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:627
+824DDCD0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:478
+824DDD08 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:628
+824DDD20 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:490
+824DDD60 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:640
+824DDD78 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:492
+824DDDB8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:642
+824DDDD0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:493
+824DDE10 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:643
+824DDE28 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:494
+824DDE68 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:644
+824DDE80 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:495
+824DDEC8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetSamplerStateHook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:645
+824DDEE0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetScissorRect_hook      no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:504
+824DDFE0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetStreamSource_hook     no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:499
+824DE188 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetIndices_hook          no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:500
+824DE218 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetGammaRamp_hook        no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1291
+824DE2F8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetPWLGamma_hook         no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1292
+824DE3C0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3D_ResetAllState_hook             no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:515
+824DE4B8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3D_SetViewport_hook               no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:503
+824DE720 BANJO_RENUT_UNHOOKED_HOOK            never                 built     SetRenderStateHook                 no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:423
+824DE730 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetViewport_hook         no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:502
+824DE7D0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3D_SetSurfaceInfo_hook            no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:508
+824DE868 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetRenderTarget_hook     no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:506
+824DEBD0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetDepthStencilSurface_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:507
+824DF3F0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     RingBufferDeviceAllocate_hook      no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1303
+824DFC48 BANJO_RENUT_UNHOOKED_HOOK            never                 built     BlockOnFence_hook                  no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1310
+824E0110 BANJO_RENUT_UNHOOKED_HOOK            never                 built     KickOffSegment_hook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1300
+824E0298 BANJO_RENUT_UNHOOKED_HOOK            never                 built     KickOff_hook                       no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1299
+824E03D0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     IsFencePending_hook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1312
+824E04B0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     BeginRingBig_hook                  no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1301
+824E0518 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_BlockUntilIdle_hook      no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:517
+824E0590 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_InsertCallback_hook      no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1281
+824E05E8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetRingBufferParameters_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1305
+824E11A0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3D_InitializeApiState_hook        start    -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1296
+824E1408 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3D_InitializePresentationParameters_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1297
+824E1B50 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3D_CDevice_Uninitialize_hook      no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1298
+824E6410 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_GetDeviceCaps_hook       no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1285
+824E67C8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetScreenExtentQueryMode_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:513
+824E89E8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3D_SynchronizeToPresentationInterval_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1288
+824E8E90 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_Swap_hook                no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1306
+824E9428 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_Present_hook             no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:634
+824ED278 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3D_XenonGpu_Initialize_hook       no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1295
+824EFA58 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetPredication_hook      no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:509
+824EFBC8 BANJO_RENUT_UNHOOKED_HOOK_RAW        never                 built                                        no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:625
+824F0150 BANJO_RENUT_UNHOOKED_HOOK_RAW        never                 built                                        no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:628
+824F12B8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_Resolve_hook             no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:618
+824F3248 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_ClearF_hook              no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:616
+824F3370 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_Clear_hook               no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:617
+825160B0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     PhotoCapture_hook                  no-start -                                  ultimate/app/src/renut_engine/gpu/guest/photo_capture.cpp:126
+8255A200 BANJO_RENUT_UNHOOKED_HOOK            never                 built     BeginRingManual_hook               no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1302
+8258C948 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/renut_engine/cvar_menu.cpp:631
+8258D038 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/renut_engine/cvar_menu.cpp:604
+8258D3A8 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/renut_engine/cvar_menu.cpp:558
+8258E008 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/renut_engine/cvar_menu.cpp:470
+8258E8F8 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/renut_engine/cvar_menu.cpp:451
+82634B90 BANJO_RENUT_UNHOOKED_HOOK_SHARED     never                 built     D3D_InvalidateConstants_hook       no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:516
+82636E40 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_GetStreamSource_hook     no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:522
+82636EC8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetRenderTarget_hook     no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:519
+82636ED0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_GetRenderTarget_hook     no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:520
+82636F10 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_GetDepthStencilSurface_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:521
+826370E8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetClipPlane_hook        no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:524
+82637138 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetVertexFetchConstant_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:525
+826374B0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetVertexShaderConstantI_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:528
+82637500 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_SetPixelShaderConstantI_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:529
+826375A0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     XGRegisterPixelShader_hook         no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/shader.cpp:804
+826375D8 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/native/banjo_d3d_hooks.cpp:166
+826377C0 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/native/banjo_d3d_hooks.cpp:174
+8263D4B8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DResource_GetDevice_hook         no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1289
+8263D5E8 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/me/banjo_me_hooks.cpp:186
+8263D6F8 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/me/banjo_me_hooks.cpp:196
+8263DCA8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     GetGpuTextureDimensions_hook       no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1757
+8263E958 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DArrayTexture_LockRect_hook      no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1727
+8263E960 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DArrayTexture_GetArraySize_hook  no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1744
+8263E970 BANJO_RENUT_UNHOOKED_HOOK            never                 built     Get2DSurfaceDesc                   no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1738
+8263E978 BANJO_RENUT_UNHOOKED_HOOK            never                 built     Get3DSurfaceDesc                   no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1740
+8263EA48 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3D_Lock3DSurface_hook             no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1731
+8263ED90 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_EndIndexedVertices_hook  no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:530
+8263F2B8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_DrawIndexedVerticesUP_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:614
+8263F358 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/me/banjo_me_hooks.cpp:120
+8263F358 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/native/banjo_d3d_hooks.cpp:193
+8263FBD0 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DVertexShader_Bind_hook          no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/shader.cpp:802
+8263FD60 REX_HOOK_RAW                         always                not-built                                    no-start -                                  ultimate/app/src/me/banjo_me_hooks.cpp:266
+82640818 BANJO_RENUT_UNHOOKED_HOOK_SHARED     never                 built     D3DDevice_BeginCommandBuffer_hook  start    -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1307
+82640DE8 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_EndCommandBuffer_hook    no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1308
+826411C0 BANJO_RENUT_UNHOOKED_HOOK_SHARED     never                 built     D3DDevice_SetCommandBufferPredication_hook no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/state.cpp:510
+82641498 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3DDevice_GetDisplayMode_hook      no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1286
+826F1AB8 PPC_HOOK                             always                not-built Sleep_hook                         no-start -                                  ultimate/app/src/renut_engine/sleep.h:46
+82BC8078 BANJO_RENUT_UNHOOKED_HOOK            never                 built     D3D_IsFusion_hook                  no-start -                                  ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:1290
+
+== bindings (address, name, function start, live hooks)
+829CB7C8 D3DDevice_Resolve                  start    0 
+829CC610 D3DDevice_BeginVertices            start    0 
+829CCAC0 D3DDevice_DrawVertices             start    0 
+829CCEA8 D3DDevice_DrawIndexedVertices      start    0 
+829CD470 D3DDevice_BeginTiling              start    0 
+829CD908 D3DDevice_EndTiling                start    0 
+829CFE80 CBlocker_Check                     start    0 
+829D0218 Direct3D_CreateDevice              start    0 
+829D1598 D3DDevice_CreateVertexDeclaration  start    0 
+829D1708 D3DDevice_CreatePixelShader        start    0 
+829D1818 D3DDevice_CreateVertexShader       start    0 
+829D49A0 D3DDevice_ClearF                   start    0 
+829D5338 D3DDevice_Swap                     start    0 
+829D74E8 RingBufferDeviceAllocate           start    0 
+829D76F0 CDevice_AllocateInlineData         start    0 
+829D77D8 CDevice_SubmitIndirect             start    0 
+829D7D40 CDevice_BlockOnFence               start    0 
+829D8138 CDevice_NewSegment                 start    0 
+829D8390 CDevice_KickOffSegment             start    0 
+829D8518 CDevice_KickOff                    start    0 
+829D8730 CDevice_BeginRingBig               start    0 
+829D8D40 D3DResource_Destroy                start    0 
+829DDF28 EndTiling_SubmitTiles              start    0 
+
+== other guest addresses in code (address, GTA IV function start?, reviewed?, place, text)
+82000010 no-start -        built     ultimate/app/src/cpu/banjo_forms_selfcheck.cpp:408  t.Expect("", "", blur_gather::PairOk(0x82000010u), true);
+82000012 no-start -        built     ultimate/app/src/cpu/banjo_forms_selfcheck.cpp:410  t.Expect("", "", blur_gather::PairOk(0x82000012u), false);
+8200001C no-start -        built     ultimate/app/src/cpu/banjo_forms_selfcheck.cpp:409  t.Expect("", "", blur_gather::PairOk(0x8200001Cu), true);
+82000750 no-start -        built     ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:131  constexpr u32 kVdGlobalDeviceImportSlot = 0x82000750;
+82000AA0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1784  const simde__m128 c0 = simde_mm_castsi128_ps(REX_RO_V128(0x82000AA0, 0x3F800000BE2AAAABull, 0x3C088889B9500D01ull));
+82000AB0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1785  const simde__m128 c1 = simde_mm_castsi128_ps(REX_RO_V128(0x82000AB0, 0x3638EF1DB2D7322Bull, 0x2F309231AB573F9Full));
+82000AC0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1786  const simde__m128 c2 = simde_mm_castsi128_ps(REX_RO_V128(0x82000AC0, 0x274A963CA317A4DAull, 0x1EB8DC789A3B0DA1ull));
+82000B34 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1002  if (uint32_t(0x82000B34u + 7u - dst) < 64u + 7u) [[unlikely]] return false;
+82000B34 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1004  const uint32_t zero = katamari::LoadW(::banjo::hot::Raw(base, 0x82000B34u));
+82000B34 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1066  if (uint32_t(0x82000B34u + 7u - dst) < 64u + 7u) [[unlikely]] return false;
+82000B34 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1068  const uint32_t zero = katamari::LoadW(::banjo::hot::Raw(base, 0x82000B34u));
+82000B34 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1878  constexpr uint32_t kZeroVa = 0x82000B34u;
+82000B38 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1003  const uint32_t one = katamari::LoadW(::banjo::hot::Raw(base, 0x82000B38u));
+82000B38 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1067  const uint32_t one = katamari::LoadW(::banjo::hot::Raw(base, 0x82000B38u));
+82000B38 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1628  const double one = ::rex::ppc::SingleToDoublePure(REX_RO_U32(0x82000B38, 0x3F800000));
+82000B38 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1712  const double one = double(std::bit_cast<float>(uint32_t(REX_RO_U32(0x82000B38, 0x3F800000))));
+82000B38 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1877  constexpr uint32_t kOneVa = 0x82000B38u;
+82000C1C no-start -        built     ultimate/app/src/cpu/banjo_reverb_native.cpp:286  constexpr u32 kAddrOne = 0x82000C1C;
+82000C20 no-start -        built     ultimate/app/src/cpu/banjo_reverb_native.cpp:288  constexpr u32 kAddrIdle = 0x82000C20;
+820050B8 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1763  const double two_pi = ::rex::ppc::SingleToDoubleAnyMode(REX_RO_U32(0x820050B8, 0x40C90FDB));
+820050F4 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1629  const double eps = ::rex::ppc::SingleToDoublePure(REX_RO_U32(0x820050F4, 0x350637BD));
+82005148 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1769  const double turns = REX_FMULS(shifted, double(std::bit_cast<float>(uint32_t(REX_RO_U32(0x82005148, 0x3E22F983)))));
+82010000 no-start -        built     ultimate/sdk/src/rexglue/commands/test_recompiler.cpp:48  constexpr uint32_t kTestBaseAddress = 0x82010000;
+820563DC no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1530  const double third2 = SingleToDoublePure(REX_RO_CFG_U32(0x820563DC, 0x3F2AAAABu, REX_LOAD_U32(0x820563DCu)));
+820563DC no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1530  const double third2 = SingleToDoublePure(REX_RO_CFG_U32(0x820563DC, 0x3F2AAAABu, REX_LOAD_U32(0x820563DCu)));
+8208F4C1 no-start -        built     ultimate/sdk/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp:617  0x6C0695EDu, 0x1B01A57Bu, 0x8208F4C1u, 0xF50FC457u, 0x65B0D9C6u, 0x12B7E950u, 0x8BBEB8EAu,
+820FA9D0 no-start -        built     ultimate/app/src/renut_engine/gpu/d3d/d3d_native_state.cpp:1366  constexpr u32 kFormatTable = 0x820FA9D0;
+820FA9D0 no-start -        built     ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:128  constexpr u32 kFormatTable = 0x820FA9D0;
+820FAEB4 no-start -        built     ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:55  constexpr u32 kFullViewport = 0x820FAEB4;
+820FC1F8 no-start -        built     ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:985  constexpr u32 kDeviceCapsVa = 0x820FC1F8;
+820FED64 no-start -        built     ultimate/app/src/cpu/banjo_reverb_native.cpp:292  constexpr u32 kAddrTapIn = 0x820FED64;
+820FF0B0 no-start -        built     ultimate/app/src/cpu/banjo_reverb_native.cpp:291  constexpr u32 kAddrLateOut = 0x820FF0B0;
+82106E9C no-start -        built     ultimate/app/src/cpu/banjo_reverb_native.cpp:289  constexpr u32 kAddrFadeScale = 0x82106E9C;
+82109854 no-start -        built     ultimate/app/src/cpu/banjo_reverb_native.cpp:287  constexpr u32 kAddrStep = 0x82109854;
+82109858 no-start -        built     ultimate/app/src/cpu/banjo_reverb_native.cpp:290  constexpr u32 kAddrCopyStep = 0x82109858;
+82148098 no-start -        not-built ultimate/app/src/renut_engine/hooks.cpp:231  r3.u32 = 0x82148098;
+821480AC no-start -        not-built ultimate/app/src/renut_engine/hooks.cpp:237  r3.u32 = 0x821480AC;
+821BD2F8 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:3  BANJO_D3D_RECORD_HOOK(821BD2F8)
+821BD980 no-start -        not-built ultimate/app/src/renut_engine/townsfolk.cpp:14  static constexpr uint32_t kCrowdSpawnBlockedTestLr = 0x821BD980;
+821C7360 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:4  BANJO_D3D_RECORD_HOOK_SHARED(821C7360)
+821C7360 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:7  extern "" void renut_native_sub_821C7360(PPCContext& ctx, uint8_t* base);
+821C8B80 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:5  BANJO_D3D_RECORD_HOOK(821C8B80)
+821CAF18 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:6  BANJO_D3D_RECORD_HOOK_SHARED(821CAF18)
+821CAF18 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:8  extern "" void renut_native_sub_821CAF18(PPCContext& ctx, uint8_t* base);
+821D3D20 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:7  BANJO_D3D_RECORD_HOOK(821D3D20)
+821DBFC8 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:8  BANJO_D3D_RECORD_HOOK(821DBFC8)
+821DD898 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:108  REX_EXTERN(__imp__sub_821DD898);
+821DD898 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:639  __imp__sub_821DD898(ctx, base);
+821DD898 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:9  BANJO_D3D_RECORD_HOOK(821DD898)
+821DEB98 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:10  BANJO_D3D_RECORD_HOOK(821DEB98)
+821DED78 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:11  BANJO_D3D_RECORD_HOOK(821DED78)
+821DF678 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:12  BANJO_D3D_RECORD_HOOK(821DF678)
+821DF948 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:256  REX_EXTERN(__imp__sub_821DF948);
+821DF948 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:258  BANJO_RENUT_YIELD(sub_821DF948)
+821DF948 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:260  __imp__sub_821DF948(ctx, base);
+821DFDF8 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:13  BANJO_D3D_RECORD_HOOK(821DFDF8)
+821DFFF0 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:245  REX_EXTERN(__imp__sub_821DFFF0);
+821DFFF0 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:247  BANJO_RENUT_YIELD_SHARED(sub_821DFFF0)
+821DFFF0 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:250  __imp__sub_821DFFF0(ctx, base);
+821DFFF0 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:9  extern "" void renut_native_sub_821DFFF0(PPCContext& ctx, uint8_t* base);
+821E17C0 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:14  BANJO_D3D_RECORD_HOOK_SHARED(821E17C0)
+821E17C0 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:10  extern "" void renut_native_sub_821E17C0(PPCContext& ctx, uint8_t* base);
+821EFD38 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:15  BANJO_D3D_RECORD_HOOK_SHARED(821EFD38)
+821EFD38 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:11  extern "" void renut_native_sub_821EFD38(PPCContext& ctx, uint8_t* base);
+821F1A78 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:16  BANJO_D3D_RECORD_HOOK_SHARED(821F1A78)
+821F1A78 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:12  extern "" void renut_native_sub_821F1A78(PPCContext& ctx, uint8_t* base);
+821F2460 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:17  BANJO_D3D_RECORD_HOOK_SHARED(821F2460)
+821F2460 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:13  extern "" void renut_native_sub_821F2460(PPCContext& ctx, uint8_t* base);
+821F2750 start    -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:160  REX_EXTERN(__imp__sub_821F2750);
+821F2750 start    -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:162  BANJO_RENUT_YIELD(sub_821F2750)
+821F2750 start    -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:165  __imp__sub_821F2750(ctx, base);
+821F97C8 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:18  BANJO_D3D_RECORD_HOOK(821F97C8)
+821F99C0 no-start -        not-built ultimate/app/src/renut_engine/hooks.cpp:280  REX_EXTERN(__imp__sub_821F99C0);
+821F99C0 no-start -        not-built ultimate/app/src/renut_engine/hooks.cpp:282  __imp__sub_821F99C0(ctx, base);
+821F9A48 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:19  BANJO_D3D_RECORD_HOOK_SHARED(821F9A48)
+821F9A48 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:14  extern "" void renut_native_sub_821F9A48(PPCContext& ctx, uint8_t* base);
+821F9BB8 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:106  REX_EXTERN(sub_821F9BB8);
+821F9BB8 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:624  sub_821F9BB8(ctx, base);
+821FADD0 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:20  BANJO_D3D_RECORD_HOOK(821FADD0)
+821FAF10 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:103  REX_EXTERN(sub_821FAF10);
+821FAF10 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:591  sub_821FAF10(ctx, base);
+821FAF10 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:81  REX_EXTERN(__imp__sub_821FAF10);
+821FAF10 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:83  BANJO_RENUT_YIELD(sub_821FAF10)
+821FAF10 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:90  banjo::d3d::CensusEnter(0x821FAF10u, ctx.r3.u32, base);
+821FAF10 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:91  __imp__sub_821FAF10(ctx, base);
+821FAF10 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:95  __imp__sub_821FAF10(ctx, base);
+821FB880 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:110  REX_EXTERN(__imp__sub_821FB880);
+821FB880 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:833  PPCFunc* const original = indexed ? &__imp__sub_8263F358 : &__imp__sub_821FB880;
+821FB880 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:987  PPCFunc* const original = indexed ? &__imp__sub_8263F358 : &__imp__sub_821FB880;
+821FB880 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:98  REX_EXTERN(__imp__sub_821FB880);
+821FB880 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:100  BANJO_RENUT_YIELD_SHARED(sub_821FB880)
+821FB880 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:103  banjo::d3d::CensusEnter(0x821FB880u, ctx.r3.u32, base);
+821FB880 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:104  __imp__sub_821FB880(ctx, base);
+821FB880 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:109  auto direct = me::native::BeginDrawDirect(base, ctx.r3.u32, depth, 0x821FB880u);
+821FB880 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:114  __imp__sub_821FB880(ctx, base);
+821FB880 no-start -        not-built ultimate/app/src/native/banjo_d3d_hooks.cpp:183  REX_EXTERN(__imp__sub_821FB880);
+821FB880 no-start -        not-built ultimate/app/src/native/banjo_d3d_hooks.cpp:188  __imp__sub_821FB880(ctx, base);
+821FB880 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:15  extern "" void renut_native_sub_821FB880(PPCContext& ctx, uint8_t* base);
+821FBC70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:519  namespace n_821FBC70 {
+821FBC70 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:104  REX_EXTERN(sub_821FBC70);
+821FBC70 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:556  sub_821FBC70(ctx, base);
+821FBD30 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:21  BANJO_D3D_RECORD_HOOK_SHARED(821FBD30)
+821FBD30 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:16  extern "" void renut_native_sub_821FBD30(PPCContext& ctx, uint8_t* base);
+821FC1C8 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:526  namespace n_821FC1C8 {
+821FC1C8 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:105  REX_EXTERN(sub_821FC1C8);
+821FC1C8 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:573  sub_821FC1C8(ctx, base);
+821FC7A0 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:170  REX_EXTERN(__imp__sub_821FC7A0);
+821FC7A0 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:172  BANJO_RENUT_YIELD_SHARED(sub_821FC7A0)
+821FC7A0 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:175  const auto record = me::native::BeginWriterDirect(base, device, depth, 0x821FC7A0u);
+821FC7A0 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:177  __imp__sub_821FC7A0(ctx, base);
+821FC7A0 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:17  extern "" void renut_native_sub_821FC7A0(PPCContext& ctx, uint8_t* base);
+821FD698 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:140  REX_EXTERN(__imp__sub_821FD698);
+821FD698 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:142  BANJO_RENUT_YIELD_SHARED(sub_821FD698)
+821FD698 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:145  banjo::d3d::CensusEnter(0x821FD698u, ctx.r3.u32, base);
+821FD698 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:146  __imp__sub_821FD698(ctx, base);
+821FD698 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:151  auto direct = me::native::BeginDrawDirect(base, ctx.r3.u32, depth, 0x821FD698u);
+821FD698 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:154  __imp__sub_821FD698(ctx, base);
+821FD698 no-start -        not-built ultimate/app/src/native/banjo_d3d_hooks.cpp:201  REX_EXTERN(__imp__sub_821FD698);
+821FD698 no-start -        not-built ultimate/app/src/native/banjo_d3d_hooks.cpp:205  __imp__sub_821FD698(ctx, base);
+821FD698 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:18  extern "" void renut_native_sub_821FD698(PPCContext& ctx, uint8_t* base);
+821FE108 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:375  namespace n_821FE108 {
+821FE230 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:382  namespace n_821FE230 {
+821FF958 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:22  BANJO_D3D_RECORD_HOOK_SHARED(821FF958)
+821FF958 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:19  extern "" void renut_native_sub_821FF958(PPCContext& ctx, uint8_t* base);
+8220F350 no-start -        not-built ultimate/app/src/renut_engine/thread_slots.cpp:31  REX_EXTERN(__imp__sub_8220F350);
+8220F350 no-start -        not-built ultimate/app/src/renut_engine/thread_slots.cpp:76  __imp__sub_8220F350(ctx, base);
+8220F350 no-start -        not-built ultimate/app/src/renut_engine/thread_slots.cpp:85  __imp__sub_8220F350(ctx, base);
+82237D80 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:23  BANJO_D3D_RECORD_HOOK_SHARED(82237D80)
+82237D80 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:20  extern "" void renut_native_sub_82237D80(PPCContext& ctx, uint8_t* base);
+82237FE8 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:24  BANJO_D3D_RECORD_HOOK_SHARED(82237FE8)
+82237FE8 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:21  extern "" void renut_native_sub_82237FE8(PPCContext& ctx, uint8_t* base);
+82239418 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:107  REX_EXTERN(__imp__sub_82239418);
+82239418 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:601  __imp__sub_82239418(ctx, base);
+82239418 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:25  BANJO_D3D_RECORD_HOOK(82239418)
+8223A388 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:26  BANJO_D3D_RECORD_HOOK(8223A388)
+8223A970 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2589  namespace n_8223A970 {
+82241D38 no-start -        not-built ultimate/app/src/renut_engine/townsfolk.cpp:11  REX_EXTERN(__imp__sub_82241D38);
+82241D38 no-start -        not-built ultimate/app/src/renut_engine/townsfolk.cpp:22  __imp__sub_82241D38(ctx, base);
+82246798 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:27  BANJO_D3D_RECORD_HOOK_SHARED(82246798)
+82246798 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:22  extern "" void renut_native_sub_82246798(PPCContext& ctx, uint8_t* base);
+82246AF0 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:28  BANJO_D3D_RECORD_HOOK(82246AF0)
+82248A68 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:29  BANJO_D3D_RECORD_HOOK(82248A68)
+82249288 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:30  BANJO_D3D_RECORD_HOOK(82249288)
+822554F8 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:206  REX_EXTERN(__imp__sub_822554F8);
+822554F8 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:209  renut_native_sub_822554F8(ctx, base);
+822554F8 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:220  banjo::d3d::CensusEnter(0x822554F8u, ctx.r3.u32, base);
+822554F8 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:221  __imp__sub_822554F8(ctx, base);
+822554F8 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:228  const auto record = me::native::BeginWriterDirect(base, ctx.r3.u32, depth, 0x822554F8u);
+822554F8 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:229  __imp__sub_822554F8(ctx, base);
+822554F8 no-start -        not-built ultimate/app/src/native/banjo_d3d_hooks.cpp:211  REX_EXTERN(__imp__sub_822554F8);
+822554F8 no-start -        not-built ultimate/app/src/native/banjo_d3d_hooks.cpp:213  __imp__sub_822554F8(ctx, base);
+822554F8 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:23  extern "" void renut_native_sub_822554F8(PPCContext& ctx, uint8_t* base);
+82255C98 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:31  BANJO_D3D_RECORD_HOOK_SHARED(82255C98)
+82255C98 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:24  extern "" void renut_native_sub_82255C98(PPCContext& ctx, uint8_t* base);
+82258778 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:32  BANJO_D3D_RECORD_HOOK_SHARED(82258778)
+82258778 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:25  extern "" void renut_native_sub_82258778(PPCContext& ctx, uint8_t* base);
+8225D370 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:33  BANJO_D3D_RECORD_HOOK_SHARED(8225D370)
+8225D370 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:26  extern "" void renut_native_sub_8225D370(PPCContext& ctx, uint8_t* base);
+8225D468 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:34  BANJO_D3D_RECORD_HOOK_SHARED(8225D468)
+8225D468 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:27  extern "" void renut_native_sub_8225D468(PPCContext& ctx, uint8_t* base);
+82265C08 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2659  namespace n_82265C08 {
+82267DE8 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:35  BANJO_D3D_RECORD_HOOK(82267DE8)
+82275268 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1865  REX_EXTERN(sub_82275268);
+82275268 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2551  sub_82275268(ctx, base);
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1862  namespace n_82277E70 {
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2599  if (uint32_t(n_82277E70::kZeroVa + 7u - m) < 64u + 7u) [[unlikely]] return false;
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2600  const uint32_t one = n_82277E70::L32(base, n_82277E70::kOneVa), zero = n_82277E70::L32(base, n_82277E70::kZeroVa);
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2600  const uint32_t one = n_82277E70::L32(base, n_82277E70::kOneVa), zero = n_82277E70::L32(base, n_82277E70::kZeroVa);
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2600  const uint32_t one = n_82277E70::L32(base, n_82277E70::kOneVa), zero = n_82277E70::L32(base, n_82277E70::kZeroVa);
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2600  const uint32_t one = n_82277E70::L32(base, n_82277E70::kOneVa), zero = n_82277E70::L32(base, n_82277E70::kZeroVa);
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2601  uint32_t vec[3] = {n_82277E70::L32(base, v), n_82277E70::L32(base, v + 4), n_82277E70::L32(base, v + 8)};
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2601  uint32_t vec[3] = {n_82277E70::L32(base, v), n_82277E70::L32(base, v + 4), n_82277E70::L32(base, v + 8)};
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2601  uint32_t vec[3] = {n_82277E70::L32(base, v), n_82277E70::L32(base, v + 4), n_82277E70::L32(base, v + 8)};
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2605  n_82277E70::M4 old = n_82277E70::LoadM(base, m);
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2605  n_82277E70::M4 old = n_82277E70::LoadM(base, m);
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2606  if (n_82277E70::Snan(old)) [[unlikely]] return false;
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2609  n_82277E70::TranslateFrame(ctx, base, r1);
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2610  n_82277E70::StoreM(base, f + 80, old);
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2614  n_82277E70::PinM(old);
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2616  n_82277E70::V regs[14];
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2617  n_82277E70::M4 r = n_82277E70::MatMulRegs(n_82277E70::Translation(one, zero, vec), old, regs);
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2617  n_82277E70::M4 r = n_82277E70::MatMulRegs(n_82277E70::Translation(one, zero, vec), old, regs);
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2617  n_82277E70::M4 r = n_82277E70::MatMulRegs(n_82277E70::Translation(one, zero, vec), old, regs);
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2619  n_82277E70::PinM(r);
+82277E70 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2621  n_82277E70::StoreM(base, m, r);
+822889D8 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1864  REX_EXTERN(sub_822889D8);
+822889D8 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2549  sub_822889D8(ctx, base);
+822DA088 no-start -        not-built ultimate/app/src/renut_engine/env_map_pool.cpp:31  REX_EXTERN(__imp__sub_822DA088);
+822DA088 no-start -        not-built ultimate/app/src/renut_engine/env_map_pool.cpp:61  __imp__sub_822DA088(ctx, base);
+822EDC90 no-start -        not-built ultimate/app/src/renut_engine/env_map_pool.cpp:30  REX_EXTERN(__imp__sub_822EDC90);
+822EDC90 no-start -        not-built ultimate/app/src/renut_engine/env_map_pool.cpp:57  __imp__sub_822EDC90(ctx, base);
+82316A78 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1464  namespace n_82316A78 {
+82332728 no-start -        not-built ultimate/app/src/renut_engine/StopNSwap.cpp:16  REX_EXTERN(gameFlagsSetFlag_82332728);
+82332728 no-start -        not-built ultimate/app/src/renut_engine/StopNSwap.cpp:58  rex::ppc::GuestToHostFunction<void>(__imp__rex_gameFlagsSetFlag_82332728, flags_ptr, 1, unlock.flag, 1);
+82332728 no-start -        not-built ultimate/app/src/renut_engine/StopNSwap.cpp:59  rex::ppc::GuestToHostFunction<void>(__imp__rex_gameFlagsSetFlag_82332728, flags_ptr, 0, unlock.event, 1);
+82333388 no-start -        not-built ultimate/app/src/cpu/banjo_pool_lock.cpp:63  REX_EXTERN(__imp__sub_82333388);
+82333388 no-start -        not-built ultimate/app/src/cpu/banjo_pool_lock.cpp:66  __imp__sub_82333388(ctx, base);
+82333388 no-start -        not-built ultimate/app/src/cpu/banjo_pool_lock.cpp:77  __imp__sub_82333388(ctx, base);
+823333F0 no-start -        not-built ultimate/app/src/cpu/banjo_pool_lock.cpp:53  REX_EXTERN(__imp__sub_823333F0);
+823333F0 no-start -        not-built ultimate/app/src/cpu/banjo_pool_lock.cpp:56  __imp__sub_823333F0(ctx, base);
+823333F0 no-start -        not-built ultimate/app/src/cpu/banjo_pool_lock.cpp:60  __imp__sub_823333F0(ctx, base);
+82392B60 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:36  BANJO_D3D_RECORD_HOOK(82392B60)
+823B7B50 no-start -        not-built ultimate/app/src/renut_engine/frontend_debug_menu.cpp:16  REX_EXTERN(__imp__sub_823B7B50);
+823B7B50 no-start -        not-built ultimate/app/src/renut_engine/frontend_debug_menu.cpp:24  __imp__sub_823B7B50(ctx, base);
+824C1C10 no-start -        built     ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:80  REX_IMPORT(__imp__sub_824C1C10, GuestGetCurrentThreadId, u32());
+824CAB98 no-start -        built     ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:52  REX_IMPORT(__imp__sub_824CAB98, GameXMemFree, void(u32, u32));
+824E97F0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1752  namespace n_824E97F0 {
+8255E5B0 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:77  REX_IMPORT(sub_8255E5B0, RenutGetCurSel, uint32_t(uint32_t));
+82589933 no-start -        built     ultimate/sdk/src/kernel/xboxkrnl/xboxkrnl_io_info.cpp:146  size_t fname_hash = rex::memory::hash_combine(82589933LL, file->path());
+8258C948 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:72  REX_EXTERN(__imp__sub_8258C948);
+8258C948 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:679  __imp__sub_8258C948(ctx, base);
+8258C948 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:684  __imp__sub_8258C948(ctx, base);
+8258D038 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:71  REX_EXTERN(__imp__sub_8258D038);
+8258D038 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:612  __imp__sub_8258D038(ctx, base);
+8258D038 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:619  __imp__sub_8258D038(ctx, base);
+8258D3A8 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:70  REX_EXTERN(__imp__sub_8258D3A8);
+8258D3A8 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:563  __imp__sub_8258D3A8(ctx, base);
+8258D3A8 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:567  __imp__sub_8258D3A8(ctx, base);
+8258DC38 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:75  REX_IMPORT(sub_8258DC38, RenutRebuildPauseMenu, void(uint32_t));
+8258E008 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:68  REX_EXTERN(__imp__sub_8258E008);
+8258E008 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:512  __imp__sub_8258E008(ctx, base);
+8258E8F8 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:67  REX_EXTERN(__imp__sub_8258E8F8);
+8258E8F8 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:463  __imp__sub_8258E8F8(ctx, base);
+82634740 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:28  extern "" void renut_native_sub_82634740(PPCContext& ctx, uint8_t* base);
+82634B90 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:37  BANJO_D3D_RECORD_HOOK_SHARED(82634B90)
+82634B90 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:29  extern "" void renut_native_sub_82634B90(PPCContext& ctx, uint8_t* base);
+826352B8 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:39  BANJO_D3D_RECORD_HOOK_SHARED(826352B8)
+826352B8 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:30  extern "" void renut_native_sub_826352B8(PPCContext& ctx, uint8_t* base);
+826375D8 no-start -        not-built ultimate/app/src/native/banjo_d3d_hooks.cpp:165  REX_EXTERN(__imp__sub_826375D8);
+826375D8 no-start -        not-built ultimate/app/src/native/banjo_d3d_hooks.cpp:168  __imp__sub_826375D8(ctx, base);
+826377C0 no-start -        not-built ultimate/app/src/native/banjo_d3d_hooks.cpp:173  REX_EXTERN(__imp__sub_826377C0);
+826377C0 no-start -        not-built ultimate/app/src/native/banjo_d3d_hooks.cpp:176  __imp__sub_826377C0(ctx, base);
+8263D060 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:40  BANJO_D3D_RECORD_HOOK_SHARED(8263D060)
+8263D060 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:31  extern "" void renut_native_sub_8263D060(PPCContext& ctx, uint8_t* base);
+8263D5E8 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:185  REX_EXTERN(__imp__sub_8263D5E8);
+8263D5E8 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:187  BANJO_RENUT_YIELD_SHARED(sub_8263D5E8)
+8263D5E8 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:193  __imp__sub_8263D5E8(ctx, base);
+8263D5E8 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:32  extern "" void renut_native_sub_8263D5E8(PPCContext& ctx, uint8_t* base);
+8263D6F8 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:195  REX_EXTERN(__imp__sub_8263D6F8);
+8263D6F8 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:197  BANJO_RENUT_YIELD_SHARED(sub_8263D6F8)
+8263D6F8 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:203  __imp__sub_8263D6F8(ctx, base);
+8263D6F8 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:33  extern "" void renut_native_sub_8263D6F8(PPCContext& ctx, uint8_t* base);
+8263EDA0 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:41  BANJO_D3D_RECORD_HOOK(8263EDA0)
+8263F358 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:109  REX_EXTERN(__imp__sub_8263F358);
+8263F358 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:833  PPCFunc* const original = indexed ? &__imp__sub_8263F358 : &__imp__sub_821FB880;
+8263F358 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:987  PPCFunc* const original = indexed ? &__imp__sub_8263F358 : &__imp__sub_821FB880;
+8263F358 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:119  REX_EXTERN(__imp__sub_8263F358);
+8263F358 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:121  BANJO_RENUT_YIELD_SHARED(sub_8263F358)
+8263F358 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:124  banjo::d3d::CensusEnter(0x8263F358u, ctx.r3.u32, base);
+8263F358 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:125  __imp__sub_8263F358(ctx, base);
+8263F358 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:130  auto direct = me::native::BeginDrawDirect(base, ctx.r3.u32, depth, 0x8263F358u);
+8263F358 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:135  __imp__sub_8263F358(ctx, base);
+8263F358 no-start -        not-built ultimate/app/src/native/banjo_d3d_hooks.cpp:192  REX_EXTERN(__imp__sub_8263F358);
+8263F358 no-start -        not-built ultimate/app/src/native/banjo_d3d_hooks.cpp:197  __imp__sub_8263F358(ctx, base);
+8263F358 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:34  extern "" void renut_native_sub_8263F358(PPCContext& ctx, uint8_t* base);
+8263FD60 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:265  REX_EXTERN(__imp__sub_8263FD60);
+8263FD60 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:267  BANJO_RENUT_YIELD(sub_8263FD60)
+8263FD60 no-start -        not-built ultimate/app/src/me/banjo_me_hooks.cpp:269  __imp__sub_8263FD60(ctx, base);
+8263FE50 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:42  BANJO_D3D_RECORD_HOOK(8263FE50)
+82640010 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:43  BANJO_D3D_RECORD_HOOK_SHARED(82640010)
+82640010 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:35  extern "" void renut_native_sub_82640010(PPCContext& ctx, uint8_t* base);
+82640090 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:44  BANJO_D3D_RECORD_HOOK_SHARED(82640090)
+82640090 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:36  extern "" void renut_native_sub_82640090(PPCContext& ctx, uint8_t* base);
+826405A0 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:45  BANJO_D3D_RECORD_HOOK(826405A0)
+82640660 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:46  BANJO_D3D_RECORD_HOOK(82640660)
+82640818 start    -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:47  BANJO_D3D_RECORD_HOOK_SHARED(82640818)
+82640818 start    -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:37  extern "" void renut_native_sub_82640818(PPCContext& ctx, uint8_t* base);
+826411C0 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:48  BANJO_D3D_RECORD_HOOK_SHARED(826411C0)
+826411C0 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:38  extern "" void renut_native_sub_826411C0(PPCContext& ctx, uint8_t* base);
+826414C0 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:49  BANJO_D3D_RECORD_HOOK_SHARED(826414C0)
+826414C0 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:39  extern "" void renut_native_sub_826414C0(PPCContext& ctx, uint8_t* base);
+82641530 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:50  BANJO_D3D_RECORD_HOOK(82641530)
+82642300 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:51  BANJO_D3D_RECORD_HOOK(82642300)
+82644918 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:60  BANJO_D3D_RECORD_HOOK(82644918)
+826462E0 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:61  BANJO_D3D_RECORD_HOOK(826462E0)
+8264B748 no-start -        not-built ultimate/app/src/me/banjo_d3d_record_hooks.inc:62  BANJO_D3D_RECORD_HOOK_SHARED(8264B748)
+8264B748 no-start -        built     ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:40  extern "" void renut_native_sub_8264B748(PPCContext& ctx, uint8_t* base);
+8266AF60 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1178  namespace n_8266AF60 {
+8270FE40 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1418  namespace n_8270FE40 {
+8271FAD0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1222  namespace n_8271FAD0 {
+827595D0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1059  namespace n_827595D0 {
+827596B0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1343  namespace n_827596B0 {
+82759780 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:979  namespace n_82759780 {
+827598C0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:969  namespace n_827598C0 {
+827598C0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1867  REX_EXTERN(sub_827598C0);
+827598C0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2052  if (!::banjo::hand::n_827598C0::Native(ctx, base, s)) sub_827598C0(ctx, base);
+827598C0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2052  if (!::banjo::hand::n_827598C0::Native(ctx, base, s)) sub_827598C0(ctx, base);
+82759A00 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1090  namespace n_82759A00 {
+82759C98 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:947  namespace n_82759C98 {
+82759C98 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1866  REX_EXTERN(sub_82759C98);
+82759C98 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2047  if (!::banjo::hand::n_82759C98::Native(ctx, base, s)) sub_82759C98(ctx, base);
+82759C98 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2047  if (!::banjo::hand::n_82759C98::Native(ctx, base, s)) sub_82759C98(ctx, base);
+82759D20 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:994  namespace n_82759D20 {
+82759D20 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1868  REX_EXTERN(sub_82759D20);
+82759D20 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2074  if (!::banjo::hand::n_82759D20::Native(ctx, base, s)) sub_82759D20(ctx, base);
+82759D20 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2074  if (!::banjo::hand::n_82759D20::Native(ctx, base, s)) sub_82759D20(ctx, base);
+8275A828 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1555  namespace n_8275A828 {
+8275A828 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1869  REX_EXTERN(sub_8275A828);
+8275A828 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2059  if (!::banjo::hand::n_8275A828::Native(ctx, base, s)) sub_8275A828(ctx, base);
+8275A828 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2059  if (!::banjo::hand::n_8275A828::Native(ctx, base, s)) sub_8275A828(ctx, base);
+8275AA88 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1607  namespace n_8275AA88 {
+8276E3D8 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1682  namespace n_8276E3D8 {
+827E6F50 start    -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1047  namespace n_827E6F50 {
+827E73A8 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1146  namespace n_827E73A8 {
+827E7A40 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1027  namespace n_827E7A40 {
+82800000 no-start -        built     ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1276  return 0x82800000u | ((usage & 4) ? 0x20000000u : 0x30000000u);
+82A25780 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:79  REX_IMPORT(sub_82A25780, RenutSetTitleText, uint32_t(uint32_t, uint32_t));
+82AD8E48 no-start -        built     ultimate/app/src/renut_engine/gpu/d3d/d3d_native_state.cpp:731  constexpr u32 kRenderStateTable = 0x82AD8E48;
+82AD9308 no-start -        built     ultimate/app/src/renut_engine/gpu/d3d/d3d_native_state.cpp:732  constexpr u32 kSamplerStateTable = 0x82AD9308;
+82AD93F8 no-start -        built     ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:123  constexpr u32 kGlobalQwordVa = 0x82AD93F8;
+82AEC618 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1876  constexpr uint32_t kIdentityVa = 0x82AEC618u;
+82B0B568 no-start -        built     ultimate/app/src/cpu/katamari_stage_diag.cpp:33  constexpr uint32_t kStatePointer = 0x82B0B568;
+82B6B258 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:701  namespace n_82B6B258 {
+82C111C0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:249  namespace n_82C111C0 {
+82C111C0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1051  return n_82C111C0::Native(ctx, base, s);
+82C116F0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:291  namespace n_82C116F0 {
+82C116F0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:1031  return n_82C116F0::Native(ctx, base, s);
+82C64EF0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2713  if (!s.Note(r1 - 16, 16) || !s.Note(0x82C64F00u, 4) || !s.Note(0x82C64EF0u, 16)) [[unlikely]] return true;
+82C64EF0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2721  ::banjo::hot::Card(base, 0x82C64EF0u, 16);
+82C64EF0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2722  StV(base, 0x82C64EF0u, v13);
+82C64EF0 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2724  v13 = LdV(base, 0x82C64EF0u);
+82C64F00 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2710  const uint32_t flag = katamari::LoadW(::banjo::hot::Raw(base, 0x82C64F00u));
+82C64F00 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2713  if (!s.Note(r1 - 16, 16) || !s.Note(0x82C64F00u, 4) || !s.Note(0x82C64EF0u, 16)) [[unlikely]] return true;
+82C64F00 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2718  katamari::StoreW(::banjo::hot::Raw(base, 0x82C64F00u), flag | 1u);
+82C64F00 no-start -        built     ultimate/app/src/cpu/hot/banjo_hand_natives.h:2719  ::banjo::hot::Card(base, 0x82C64F00u, 4);
+82DA0104 no-start -        built     ultimate/sdk/src/kernel/xbdm/xbdm_misc.cpp:60  REX_EXPORT_STUB_RETURN(__imp__DmWalkLoadedModules, 0x82DA0104);
+82DA3340 no-start -        built     ultimate/app/src/cpu/banjo_reverb_native.cpp:293  constexpr u32 kAddrDry = 0x82DA3340;
+82DF04CC no-start -        built     ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:58  constexpr u32 kScreenScratchVa = 0x82DF04CC;
+82DF0500 no-start -        built     ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:59  constexpr u32 kHalfWidthScratchVa = 0x82DF0500;
+82DF0534 no-start -        built     ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:60  constexpr u32 kTopScratchVa = 0x82DF0534;
+82DF0568 no-start -        built     ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:61  constexpr u32 kBottomScratchVa = 0x82DF0568;
+82DF0710 no-start -        built     ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:51  constexpr u32 kScratchPoolSizeVa = 0x82DF0710;
+82DF0714 no-start -        built     ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:52  constexpr u32 kScratchPoolVa = 0x82DF0714;
+82DF0718 no-start -        built     ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:53  constexpr u32 kCopyPoolSizeVa = 0x82DF0718;
+82DF0730 no-start -        built     ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:54  constexpr u32 kDepthPoolSizeVa = 0x82DF0730;
+82DF0748 no-start -        built     ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:48  constexpr u32 kPoolsCreatedVa = 0x82DF0748;
+82E0B14C no-start -        built     ultimate/app/src/renut_engine/mnk_controls.cpp:774  constexpr uint32_t kConnectedMask = 0x82E0B14C;
+82E0BAD0 no-start -        not-built ultimate/app/src/renut_engine/thread_slots.cpp:35  constexpr uint32_t kTableVa = 0x82E0BAD0;
+82E10458 no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:51  static constexpr uint32_t kSectionCount = 0x82E10458;
+82E1045C no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:50  static constexpr uint32_t kSectionArray = 0x82E1045C;
+82E1048C no-start -        not-built ultimate/app/src/renut_engine/cvar_menu.cpp:26  static constexpr uint32_t kItemCount = 0x82E1048C;
+82E19AC8 no-start -        built     ultimate/app/src/renut_engine/gpu/guest/photo_capture.cpp:50  constexpr u32 kDevicePointer = 0x82E19AC8;
+82E1B280 no-start -        not-built ultimate/app/src/renut_engine/StopNSwap.cpp:22  static constexpr uint32_t kPlayerProfiles = 0x82E1B280;
+82E1B5F0 no-start -        built     ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:39  constexpr u32 kActiveCameraVa = 0x82E1B5F0;
+82E1B6B8 no-start -        built     ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:41  constexpr u32 kConsoleAspectModeVa = 0x82E1B6B8;
+82E1B754 no-start -        not-built ultimate/app/src/renut_engine/env_map_pool.cpp:35  constexpr uint32_t kEnvMapPool = 0x82E1B754;
+82FB0130 no-start -        not-built ultimate/app/src/me/banjo_d3d_native.h:151  inline constexpr uint32_t kGlobalDeclIds = 0x82FB0130u;
+
+== other addresses by file
+    93 ultimate/app/src/cpu/hot/banjo_hand_natives.h
+    51 ultimate/app/src/me/banjo_d3d_record_hooks.inc  (not built)
+    51 ultimate/app/src/me/banjo_me_hooks.cpp  (not built)
+    34 ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h
+    19 ultimate/app/src/me/banjo_d3d_native.h  (not built)
+    19 ultimate/app/src/renut_engine/cvar_menu.cpp  (not built)
+    12 ultimate/app/src/native/banjo_d3d_hooks.cpp  (not built)
+    11 ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp
+     8 ultimate/app/src/cpu/banjo_reverb_native.cpp
+     6 ultimate/app/src/cpu/banjo_pool_lock.cpp  (not built)
+     5 ultimate/app/src/renut_engine/env_map_pool.cpp  (not built)
+     4 ultimate/app/src/renut_engine/hooks.cpp  (not built)
+     4 ultimate/app/src/renut_engine/StopNSwap.cpp  (not built)
+     4 ultimate/app/src/renut_engine/thread_slots.cpp  (not built)
+     4 ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp
+     3 ultimate/app/src/cpu/banjo_forms_selfcheck.cpp
+     3 ultimate/app/src/renut_engine/townsfolk.cpp  (not built)
+     3 ultimate/app/src/renut_engine/gpu/d3d/d3d_native_state.cpp
+     3 ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp
+     2 ultimate/app/src/renut_engine/frontend_debug_menu.cpp  (not built)
+     1 ultimate/app/src/cpu/katamari_stage_diag.cpp
+     1 ultimate/app/src/renut_engine/mnk_controls.cpp
+     1 ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp
+     1 ultimate/app/src/renut_engine/gpu/guest/photo_capture.cpp
+     1 ultimate/sdk/src/kernel/xbdm/xbdm_misc.cpp
+     1 ultimate/sdk/src/kernel/xboxkrnl/xboxkrnl_io_info.cpp
+     1 ultimate/sdk/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp
+     1 ultimate/sdk/src/rexglue/commands/test_recompiler.cpp
+
+problems: 190
+  binding 829CB7C8 D3DDevice_Resolve has 0 live hooks
+  binding 829CC610 D3DDevice_BeginVertices has 0 live hooks
+  binding 829CCAC0 D3DDevice_DrawVertices has 0 live hooks
+  binding 829CCEA8 D3DDevice_DrawIndexedVertices has 0 live hooks
+  binding 829CD470 D3DDevice_BeginTiling has 0 live hooks
+  binding 829CD908 D3DDevice_EndTiling has 0 live hooks
+  binding 829CFE80 CBlocker_Check has 0 live hooks
+  binding 829D0218 Direct3D_CreateDevice has 0 live hooks
+  binding 829D1598 D3DDevice_CreateVertexDeclaration has 0 live hooks
+  binding 829D1708 D3DDevice_CreatePixelShader has 0 live hooks
+  binding 829D1818 D3DDevice_CreateVertexShader has 0 live hooks
+  binding 829D49A0 D3DDevice_ClearF has 0 live hooks
+  binding 829D5338 D3DDevice_Swap has 0 live hooks
+  binding 829D74E8 RingBufferDeviceAllocate has 0 live hooks
+  binding 829D76F0 CDevice_AllocateInlineData has 0 live hooks
+  binding 829D77D8 CDevice_SubmitIndirect has 0 live hooks
+  binding 829D7D40 CDevice_BlockOnFence has 0 live hooks
+  binding 829D8138 CDevice_NewSegment has 0 live hooks
+  binding 829D8390 CDevice_KickOffSegment has 0 live hooks
+  binding 829D8518 CDevice_KickOff has 0 live hooks
+  binding 829D8730 CDevice_BeginRingBig has 0 live hooks
+  binding 829D8D40 D3DResource_Destroy has 0 live hooks
+  binding 829DDF28 EndTiling_SubmitTiles has 0 live hooks
+  address 82000010 in code, not reviewed: ultimate/app/src/cpu/banjo_forms_selfcheck.cpp:408
+  address 82000012 in code, not reviewed: ultimate/app/src/cpu/banjo_forms_selfcheck.cpp:410
+  address 8200001C in code, not reviewed: ultimate/app/src/cpu/banjo_forms_selfcheck.cpp:409
+  address 82000750 in code, not reviewed: ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:131
+  address 82000AA0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1784
+  address 82000AB0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1785
+  address 82000AC0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1786
+  address 82000B34 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1002
+  address 82000B34 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1004
+  address 82000B34 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1066
+  address 82000B34 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1068
+  address 82000B34 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1878
+  address 82000B38 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1003
+  address 82000B38 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1067
+  address 82000B38 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1628
+  address 82000B38 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1712
+  address 82000B38 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1877
+  address 82000C1C in code, not reviewed: ultimate/app/src/cpu/banjo_reverb_native.cpp:286
+  address 82000C20 in code, not reviewed: ultimate/app/src/cpu/banjo_reverb_native.cpp:288
+  address 820050B8 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1763
+  address 820050F4 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1629
+  address 82005148 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1769
+  address 82010000 in code, not reviewed: ultimate/sdk/src/rexglue/commands/test_recompiler.cpp:48
+  address 820563DC in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1530
+  address 820563DC in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1530
+  address 8208F4C1 in code, not reviewed: ultimate/sdk/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp:617
+  address 820FA9D0 in code, not reviewed: ultimate/app/src/renut_engine/gpu/d3d/d3d_native_state.cpp:1366
+  address 820FA9D0 in code, not reviewed: ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:128
+  address 820FAEB4 in code, not reviewed: ultimate/app/src/renut_engine/gpu/d3d/hooks/draw.cpp:55
+  address 820FC1F8 in code, not reviewed: ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:985
+  address 820FED64 in code, not reviewed: ultimate/app/src/cpu/banjo_reverb_native.cpp:292
+  address 820FF0B0 in code, not reviewed: ultimate/app/src/cpu/banjo_reverb_native.cpp:291
+  address 82106E9C in code, not reviewed: ultimate/app/src/cpu/banjo_reverb_native.cpp:289
+  address 82109854 in code, not reviewed: ultimate/app/src/cpu/banjo_reverb_native.cpp:287
+  address 82109858 in code, not reviewed: ultimate/app/src/cpu/banjo_reverb_native.cpp:290
+  address 821C7360 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:7
+  address 821CAF18 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:8
+  address 821DFFF0 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:9
+  address 821E17C0 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:10
+  address 821EFD38 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:11
+  address 821F1A78 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:12
+  address 821F2460 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:13
+  address 821F9A48 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:14
+  address 821FB880 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:15
+  address 821FBC70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:519
+  address 821FBD30 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:16
+  address 821FC1C8 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:526
+  address 821FC7A0 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:17
+  address 821FD698 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:18
+  address 821FE108 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:375
+  address 821FE230 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:382
+  address 821FF958 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:19
+  address 82237D80 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:20
+  address 82237FE8 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:21
+  address 8223A970 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2589
+  address 82246798 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:22
+  address 822554F8 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:23
+  address 82255C98 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:24
+  address 82258778 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:25
+  address 8225D370 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:26
+  address 8225D468 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:27
+  address 82265C08 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2659
+  address 82275268 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1865
+  address 82275268 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2551
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1862
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2599
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2600
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2600
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2600
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2600
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2601
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2601
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2601
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2605
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2605
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2606
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2609
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2610
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2614
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2616
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2617
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2617
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2617
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2619
+  address 82277E70 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2621
+  address 822889D8 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1864
+  address 822889D8 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2549
+  address 82316A78 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1464
+  address 824C1C10 in code, not reviewed: ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:80
+  address 824CAB98 in code, not reviewed: ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:52
+  address 824E97F0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1752
+  address 82589933 in code, not reviewed: ultimate/sdk/src/kernel/xboxkrnl/xboxkrnl_io_info.cpp:146
+  address 82634740 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:28
+  address 82634B90 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:29
+  address 826352B8 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:30
+  address 8263D060 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:31
+  address 8263D5E8 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:32
+  address 8263D6F8 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:33
+  address 8263F358 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:34
+  address 82640010 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:35
+  address 82640090 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:36
+  address 82640818 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:37
+  address 826411C0 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:38
+  address 826414C0 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:39
+  address 8264B748 in code, not reviewed: ultimate/app/src/renut_engine/gpu/banjo_shared_hooks.h:40
+  address 8266AF60 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1178
+  address 8270FE40 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1418
+  address 8271FAD0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1222
+  address 827595D0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1059
+  address 827596B0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1343
+  address 82759780 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:979
+  address 827598C0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:969
+  address 827598C0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1867
+  address 827598C0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2052
+  address 827598C0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2052
+  address 82759A00 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1090
+  address 82759C98 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:947
+  address 82759C98 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1866
+  address 82759C98 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2047
+  address 82759C98 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2047
+  address 82759D20 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:994
+  address 82759D20 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1868
+  address 82759D20 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2074
+  address 82759D20 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2074
+  address 8275A828 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1555
+  address 8275A828 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1869
+  address 8275A828 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2059
+  address 8275A828 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2059
+  address 8275AA88 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1607
+  address 8276E3D8 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1682
+  address 827E6F50 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1047
+  address 827E73A8 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1146
+  address 827E7A40 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1027
+  address 82800000 in code, not reviewed: ultimate/app/src/renut_engine/gpu/d3d/hooks/resource.cpp:1276
+  address 82AD8E48 in code, not reviewed: ultimate/app/src/renut_engine/gpu/d3d/d3d_native_state.cpp:731
+  address 82AD9308 in code, not reviewed: ultimate/app/src/renut_engine/gpu/d3d/d3d_native_state.cpp:732
+  address 82AD93F8 in code, not reviewed: ultimate/app/src/renut_engine/gpu/d3d/hooks/device.cpp:123
+  address 82AEC618 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1876
+  address 82B0B568 in code, not reviewed: ultimate/app/src/cpu/katamari_stage_diag.cpp:33
+  address 82B6B258 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:701
+  address 82C111C0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:249
+  address 82C111C0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1051
+  address 82C116F0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:291
+  address 82C116F0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:1031
+  address 82C64EF0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2713
+  address 82C64EF0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2721
+  address 82C64EF0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2722
+  address 82C64EF0 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2724
+  address 82C64F00 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2710
+  address 82C64F00 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2713
+  address 82C64F00 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2718
+  address 82C64F00 in code, not reviewed: ultimate/app/src/cpu/hot/banjo_hand_natives.h:2719
+  address 82DA0104 in code, not reviewed: ultimate/sdk/src/kernel/xbdm/xbdm_misc.cpp:60
+  address 82DA3340 in code, not reviewed: ultimate/app/src/cpu/banjo_reverb_native.cpp:293
+  address 82DF04CC in code, not reviewed: ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:58
+  address 82DF0500 in code, not reviewed: ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:59
+  address 82DF0534 in code, not reviewed: ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:60
+  address 82DF0568 in code, not reviewed: ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:61
+  address 82DF0710 in code, not reviewed: ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:51
+  address 82DF0714 in code, not reviewed: ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:52
+  address 82DF0718 in code, not reviewed: ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:53
+  address 82DF0730 in code, not reviewed: ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:54
+  address 82DF0748 in code, not reviewed: ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:48
+  address 82E0B14C in code, not reviewed: ultimate/app/src/renut_engine/mnk_controls.cpp:774
+  address 82E19AC8 in code, not reviewed: ultimate/app/src/renut_engine/gpu/guest/photo_capture.cpp:50
+  address 82E1B5F0 in code, not reviewed: ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:39
+  address 82E1B6B8 in code, not reviewed: ultimate/app/src/renut_engine/gpu/guest/widescreen.cpp:41

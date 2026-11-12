@@ -60,6 +60,65 @@ def strip_comments(text):
     return text
 
 
+def defined_macros(ult):
+    """Every macro name a source #defines or a CMake file passes as a definition (any value): what an #if can see."""
+    names = set()
+    for root in (os.path.join(ult, 'app'), os.path.join(ult, 'sdk', 'src'), os.path.join(ult, 'sdk', 'include'),
+                 os.path.join(ult, 'sdk', 'cmake')):
+        for d, _, fs in os.walk(root):
+            if os.sep + 'generated' in d or os.sep + 'thirdparty' in d or os.sep + 'out' in d:
+                continue
+            for f in fs:
+                p = os.path.join(d, f)
+                if f.endswith(CODE_SUFFIXES):
+                    for m in re.finditer(r'#\s*define\s+(\w+)', open(p, encoding='utf-8', errors='ignore').read()):
+                        names.add(m.group(1))
+                elif f.endswith('.cmake') or f == 'CMakeLists.txt':
+                    text = open(p, encoding='utf-8', errors='ignore').read()
+                    for m in re.finditer(r'(?:compile_definitions|COMPILE_DEFINITIONS)\s*\(?([^)]*)', text):
+                        for w in re.findall(r'\b([A-Z][A-Z0-9_]{2,})(?:=|\b)', m.group(1)):
+                            names.add(w)
+                    for m in re.finditer(r'-D([A-Z][A-Z0-9_]+)', text):
+                        names.add(m.group(1))
+    return names
+
+
+DEFINED = set()
+
+
+def active_lines(text):
+    """Per line: False inside an #if / #ifdef on a macro nothing defines (it is 0), True elsewhere; complex conditions
+    count as true (conservative)."""
+    stack, out = [], []
+    for line in text.split('\n'):
+        s = line.strip()
+        m = re.match(r'#\s*(if|ifdef|ifndef|elif|else|endif)\b\s*(.*)', s)
+        if m:
+            kw, cond = m.group(1), m.group(2).strip()
+            if kw in ('if', 'ifdef', 'ifndef'):
+                val = None
+                n = re.fullmatch(r'(!?)\s*(?:defined\s*\(?\s*)?(\w+)\s*\)?', cond)
+                if kw == 'ifdef':
+                    val = cond in DEFINED
+                elif kw == 'ifndef':
+                    val = cond not in DEFINED
+                elif n and not n.group(2).isdigit():
+                    val = n.group(2) in DEFINED or None  # a defined macro's value is unknown: conservative
+                    if n.group(2) not in DEFINED:
+                        val = n.group(1) == '!'
+                elif cond == '0':
+                    val = False
+                stack.append(val)
+            elif kw == 'elif' and stack:
+                stack[-1] = None
+            elif kw == 'else' and stack:
+                stack[-1] = None if stack[-1] is None else not stack[-1]
+            elif kw == 'endif' and stack:
+                stack.pop()
+        out.append(all(v is not False for v in stack))
+    return out
+
+
 def scan(roots):
     hooks, others = [], []
     for root in roots:
@@ -72,7 +131,10 @@ def scan(roots):
                     text = strip_comments(open(p, encoding='utf-8', errors='ignore').read())
                 except OSError:
                     continue
+                active = active_lines(text)
                 for n, line in enumerate(text.split('\n'), 1):
+                    if not active[n - 1]:
+                        continue
                     hit = set()
                     for m in HOOK_RE.finditer(line):
                         addr = m.group(2).upper()
@@ -149,6 +211,7 @@ def main():
     a = ap.parse_args()
 
     ult = os.path.abspath(a.ultimate)
+    DEFINED.update(defined_macros(ult))
     hooks, others = scan([os.path.join(ult, 'app', 'src'), os.path.join(ult, 'sdk', 'src'), os.path.join(ult, 'sdk', 'include')])
     starts = function_starts(os.path.join(ult, 'app', 'generated'))
     compiled = compiled_files(ult)
