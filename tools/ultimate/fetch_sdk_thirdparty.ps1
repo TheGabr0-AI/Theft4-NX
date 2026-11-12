@@ -42,5 +42,11 @@ if (Test-Path $Dest) { Remove-Item -Recurse -Force $Dest }
 & "$env:SystemRoot\System32\tar.exe" -xf $Tar -C $Repo
 if ($LASTEXITCODE -ne 0) { throw "tar failed" }
 Remove-Item $Tar
+# FFmpeg's generated headers, which FFmpeg's own .gitignore kept out of the base's commit (tools/ultimate/ffmpeg/config.h
+# says why): without them the SDK stops at the first libavutil file.
+$FF = Join-Path $PSScriptRoot "ffmpeg"
+Copy-Item (Join-Path $FF "config.h") (Join-Path $Dest "FFmpeg\config.h") -Force
+Copy-Item (Join-Path $FF "libavutil\avconfig.h") (Join-Path $Dest "FFmpeg\libavutil\avconfig.h") -Force
+Copy-Item (Join-Path $FF "libavutil\ffversion.h") (Join-Path $Dest "FFmpeg\libavutil\ffversion.h") -Force
 $n = (Get-ChildItem -Recurse -File $Dest).Count
 Write-Host "fetch_sdk_thirdparty: $n files from $Commit in $Dest"

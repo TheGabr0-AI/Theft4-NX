@@ -17,7 +17,7 @@ rem Git stays reachable (the SDK's configure stamps versions with it).
 set "THEFT4_GIT_DIR="
 for /f "delims=" %%G in ('where git.exe 2^>nul') do if not defined THEFT4_GIT_DIR set "THEFT4_GIT_DIR=%%~dpG"
 rem A clean PATH first: inherited from MSYS, its python3 and cmake mangle Windows paths.
-set "PATH=%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\WindowsPowerShell\v1.0"
+set "PATH=%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\WindowsPowerShell\v1.0;%ProgramFiles(x86)%\Microsoft Visual Studio\Installer"
 call "%THEFT4_VS_ROOT%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
 set "PATH=%THEFT4_VS_ROOT%\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;%THEFT4_VS_ROOT%\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;%PATH%"
 for %%P in ("%THEFT4_PYTHON%") do set "PATH=%%~dpP;%%~dpPScripts;%PATH%"
