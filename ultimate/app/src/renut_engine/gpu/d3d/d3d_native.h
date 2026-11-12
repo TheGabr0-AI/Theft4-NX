@@ -314,11 +314,11 @@ constexpr u32 TileCount = 0x31C4;  // katamari-nx: 0x31D4->0x31C4
 constexpr u32 TileRects = 0x31C8;          // D3DRECT[TileCount] (katamari-nx: 0x31D8->0x31C8)
 constexpr u32 TileOrigins = 0x32B8;        // per tile, x & ~31, y & ~31 (katamari-nx: 0x32C8->0x32B8)
 constexpr u32 TilingExtent = 0x3374;       // widest and tallest tile edge (katamari-nx: 0x3384->0x3374)
-constexpr u32 CommandBuffer = 0x34B4;      // the D3DCommandBuffer being recorded (katamari-nx: 0x34CC->0x34B4)
-constexpr u32 SideBuffer = 0x4140;  // katamari-nx: 0x4158->0x4140
-constexpr u32 AutoDepthStencil = 0x39D0;   // InitializePresentationParameters' surfaces (katamari-nx: 0x39E8->0x39D0)
-constexpr u32 AutoFrontBuffer = 0x39D4;  // katamari-nx: 0x39EC->0x39D4
-constexpr u32 AutoBackBuffer = 0x39D8;  // katamari-nx: 0x39F0->0x39D8
+constexpr u32 CommandBuffer = 13500;      // the D3DCommandBuffer being recorded (theft4: GTA IV, sub_829D76F0 `lwz r3,13500(r31)`; katamari-nx: 0x34CC->0x34B4)
+constexpr u32 SideBuffer = 16712;  // theft4: GTA IV, sub_829DF380 `stw r3,16712(r31)` (katamari-nx: 0x4158->0x4140)
+constexpr u32 AutoDepthStencil = 14808;   // InitializePresentationParameters' surfaces (theft4: GTA IV, placed +8 with the fields around them, not read by GTA IV's code; katamari-nx: 0x39E8->0x39D0)
+constexpr u32 AutoFrontBuffer = 14812;  // theft4: GTA IV, as AutoDepthStencil (katamari-nx: 0x39EC->0x39D4)
+constexpr u32 AutoBackBuffer = 14816;  // theft4: GTA IV, as AutoDepthStencil (katamari-nx: 0x39F0->0x39D8)
 }  // namespace off
 
 // Flags (0x2ABC) bits: 0x01 the draws that follow run in each tile's pass,

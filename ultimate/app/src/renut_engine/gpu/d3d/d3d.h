@@ -215,7 +215,7 @@ static_assert(sizeof(ControlPacket) == 48);
 
 // Public D3DDevice (0x2B00 bytes in N&B's XDK) followed by the CDevice-private
 // tail of the 0x5E00-byte allocation Direct3D_CreateDevice makes.
-constexpr u32 kDeviceAllocSize = 0x5700;  // katamari-nx: 0x5E00->0x5700
+constexpr u32 kDeviceAllocSize = 22400;  // theft4: GTA IV (2.0.6274), sub_829D0218 `li r3,22400` (katamari-nx: 0x5E00->0x5700)
 constexpr u32 kDeviceAlignment = 0x80;
 
 struct Device {
@@ -269,7 +269,7 @@ static_assert(offsetof(Device, m_ZFilter) == 0x2A8A);
 // the allocation, from its decompilation at 0x82634990).
 constexpr u32 kDeviceOffsetCreationThreadId = 10888;  // GetCurrentThreadId()
 constexpr u32 kDeviceOffsetIsTitleProcess = 10892;    // KeGetCurrentProcessType() == 2
-constexpr u32 kDeviceOffsetBehaviorFlags = 22264;     // Direct3D_CreateDevice arg 4 (katamari-nx: 23980->22264)
+constexpr u32 kDeviceOffsetBehaviorFlags = 22280;     // Direct3D_CreateDevice arg 4 (theft4: GTA IV, sub_829D0218 `stw r30,22280(r31)`; katamari-nx: 23980->22264)
 
 // Bound objects the Set* calls store in the CDevice-private area (guest VAs).
 // TU3's CDevice grew by 4 bytes from 0x2AC0 and by 8 from 0x2E30; the fields
@@ -295,7 +295,7 @@ constexpr u32 kDeviceOffsetMinTessellationLevel = 0x2980;
 // and render).
 constexpr u32 kDeviceOffsetPredication = 0x319C;  // katamari-nx: 0x31AC->0x319C
 // D3DCommandBuffer being recorded (BeginCommandBuffer sets, End clears).
-constexpr u32 kDeviceOffsetCommandBuffer = 13492;  // katamari-nx: 13516->13492
+constexpr u32 kDeviceOffsetCommandBuffer = 13500;  // theft4: GTA IV, sub_829D76F0 `lwz r3,13500(r31)` (katamari-nx: 13516->13492)
 // The leading part of the device the draw, clear and resolve paths read (up
 // to and including kDeviceOffsetPredication); a copy of it stands in for the
 // device when a recorded command buffer is replayed.
@@ -305,10 +305,10 @@ static_assert(kDeviceOffsetPredication + 4 <= kDeviceSnapshotSize);
 // m_pRing the inline end of BeginVertices / BeginIndexedVertices restores.
 constexpr u32 kDeviceOffsetVerticesRingEnd = 0x3474;  // katamari-nx: 0x3484->0x3474
 // Swap bookkeeping (D3DDevice_Swap 0x822554F8).
-constexpr u32 kDeviceOffsetSwapCount = 0x4098;  // katamari-nx: 0x40B0->0x4098
+constexpr u32 kDeviceOffsetSwapCount = 16544;  // theft4: GTA IV, Swap sub_829D5338 `lwz/stw r11,16544(r31)` (katamari-nx: 0x40B0->0x4098)
 constexpr u32 kDeviceOffsetFenceTag = 0x2A9C;         // current fence tag
 constexpr u32 kDeviceOffsetSwapFenceTag = 0x2AB0;     // fence tag at the last Swap
-constexpr u32 kDeviceOffsetPresentFenceTag = 0x3A44;  // fence tag of the last presented frame (katamari-nx: 0x3A5C->0x3A44)
+constexpr u32 kDeviceOffsetPresentFenceTag = 14924;  // fence tag of the last presented frame (theft4: GTA IV, Swap sub_829D5338 `stw r30,14924(r31)`; katamari-nx: 0x3A5C->0x3A44)
 constexpr u32 kDeviceOffsetSwapFlags = 0x2ABD;
 constexpr u8 kSwapFlagPending = 0x10;
 
