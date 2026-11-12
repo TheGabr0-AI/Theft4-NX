@@ -163,6 +163,11 @@ thread: trascurabile.
 
 ## 6. Piano dopo il run 71 (in ordine)
 
+> **2026-11-12:** su indicazione di Chansey il lavoro passa alla Ultimate Base (`20-ultimate-base-migration.md`): i
+> punti sotto restano validi come obiettivi, ma si misurano sulla base (che porta già cache DKSH offline, machine
+> copies, PGO + LTO, SMAA, risoluzione dinamica, kick XMA senza lock, attese su indirizzo). La run 72 resta il controllo
+> del vecchio albero.
+
 1. **Run 72: i lavori di sfondo dal core 2 al core 0** (una variabile, solo `game.toml`; la NRO aggiunge al profilo i
    thread di ReNut). Atteso: audio più vicino al 100 %, compilazioni più brevi. Verifica: righe `audio:`, `uam N compiles
    (avg ...)`, durata delle finestre in zone nuove, confrontati con il run 71 sullo stesso percorso.

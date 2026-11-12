@@ -66,3 +66,8 @@ confronto parte da lì con **una sola** differenza (09 §13).
 
 
 **2026-11-11, nessun run nuovo su console.** Lavoro solo su PC (D3D12): con ReNut la scena 3D non è più nera (causa: offset del device di SA2 nel riuso dei target, `18-renut-migration.md` §6b "R3, first round"); immagine ancora troppo scura. Nessuna build per la console.
+
+**2026-11-12, migrazione alla Ultimate Base (nessun run nuovo).** Indicazione di Chansey: rebase completo su
+`renut_nx_ultimate_base`. Checkpoint `checkpoint/pre-ultimate-base-2026-11-12` (= `7688d55`, il commit della run 72
+pronta). Audit, mappa delle differenze e piano per fasi U0-U13: `20-ultimate-base-migration.md`. La run 72 resta valida
+come controllo del vecchio albero; i run sulla base avranno la colonna "Base: ultimate `<commit>`".
