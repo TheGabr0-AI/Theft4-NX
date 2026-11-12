@@ -122,6 +122,35 @@ tag 10908 / 10928, flag dello Swap 10941. **Diversi** (cinque):
 U4 parte da qui: le zone della coda (+8 / +16 rispetto a Katamari) si riprendono da `gta4_d3d.h`, e
 `test_gta4_d3d.py` si fa girare sul nuovo `d3d.h`.
 
+### 2.5 U4: quello che i due header non dicono (2026-11-12)
+
+- **Offset in linea.** Oltre a `d3d.h` / `d3d_native.h` (U4a, `d3bf040`: 10 valori, test a 0 differenze), i corpi
+  degli hook della base scrivono offset del device in linea, quasi tutti annotati `katamari-nx: <N&B> -> <Katamari>`.
+  `tools/ultimate/device_offset_census.py` li mappa a GTA IV con le zone del doc 18 §2 (N&B fino a 10.943; −8 da 11.820
+  a 13.180; −16 da 13.232 a 16.728; −20 da 21.532) e cerca il valore GTA IV come spiazzamento nella libreria D3D di GTA
+  IV (829C7000-829E4600) del codice 0.10: **144 offset, 56 diversi per GTA IV, 18 in zone non mappate, 22 senza prova**
+  (`ultimate-reports/u4-device-offsets-base.txt`). La maggior parte sta nel percorso di **creazione nativa** del device
+  della base (XenonGpuInitialize, InitializeApiState, InitializePresentationParameters, ConfigureForOnePassZPass); nei
+  percorsi che GTA IV esegue con i suoi 23 hook ci sono `SetFence` (N&B 21.532 / 14.920 -> GTA IV 21.512 / 14.904, gli
+  stessi valori del renderer funzionante), la rampa gamma (14.988), il conteggio dei flip in Swap (16.552) e i campi
+  del tiling (12.720 / 12.724).
+- **Due percorsi del device.** La base crea il device in modo nativo, come Katamari / N&B (hook su
+  XenonGpu_Initialize, InitializeApiState, InitializePresentationParameters, Uninitialize, InsertCallback, Present,
+  i setter di stato...). Il renderer funzionante usa il percorso di sa2-nx (`Sa2CreateDevice`: l'originale
+  `Direct3D_CreateDevice` senza hardware, poi i passi dell'hardware path di 6274: flag 10942, gestore delle interruzioni
+  `829DF308`, comandi precostruiti `829D0B80`, `829DEF28`, `829DECC0`, `829CA608`, 41 parole a −1) con `NewSegment`,
+  `SubmitIndirect` e la coda di EndTiling come hook raw. La base ha **tolto** il percorso sa2. Gli hook di Katamari
+  (`hook_census.py`, `ultimate-reports/u4-hook-census-base.txt`): 335 vivi in file compilati, 9 su un inizio di
+  funzione GTA IV, 0 dei 23 binding GTA IV.
+- **Scelta per U4b** (la più verificabile): il percorso del device provato sulla console (runs 66-72) entra nel layer
+  di gioco GTA IV; i 23 indirizzi si legano alle funzioni della base dove il corpo è lo stesso (ring, fence, draw,
+  shader), con i valori GTA IV degli offset in linea che quei corpi usano; ogni altro binding di Katamari passa alla
+  forma `BANJO_RENUT_UNHOOKED_*` della base (nessun indirizzo Katamari resta legato). Il percorso di creazione nativa
+  resta non agganciato: i suoi offset non si toccano finché un passo di U5 non lo provi su GTA IV. Gli altri hook della
+  base di cui il doc 18 conosce l'indirizzo GTA IV (InsertCallback `829D8810`, InitializeApiState `829DECC0`,
+  InitializePresentationParameters `829DEF28`, SynchronizeToPresentationInterval `829D5158` / `829D50D8`,
+  SetPredication `829CD300`) sono candidati per U5, uno per volta sul PC.
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si
