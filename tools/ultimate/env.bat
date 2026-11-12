@@ -30,4 +30,10 @@ rem The code generator writes the loaded game image here (post_codegen.py's ro_c
 rem it). Game data: never committed.
 set "REXGLUE_DUMP_IMAGE=%~dp0..\..\ultimate\out\renut_image.bin"
 set "THEFT4_ULTIMATE=%~dp0..\..\ultimate"
+rem GTA IV's calling-convention census (docs/switch-port/20, U3, 2026-11-12): tools/cc_exit_census.py lists 572 indirect
+rem call sites that read a vector register the exit ABI calls dead (v8 493, v9 462, v7 360, ...), not yet each shown to
+rem be value-independent: the machine copies' liveness takes the older exit behaviour (docs/building.md, "A new game's
+rem calling convention"). The entry census's one hit (v0 in sub_82968AB8) is a loop-locals mirror whose first guest
+rem access is a write, so the hooks ABI stays on.
+set "SASRT_REG_LIVENESS_EXIT_ABI=0"
 exit /b 0

@@ -1,58 +1,44 @@
-# katamari-nx: named functions and function boundaries of Beautiful Katamari (docs/katamari-notes.md, "Code generation").
+# Theft4-NX (GTA IV EU base, 2.0.6274): function boundaries and fragments, from the 0.9 generator's configuration
+# (glue/rexglue-sdk-main/gta4-recomp/config-eu-base/gta4_eu_base_config.toml and gta4_eu_base_gaps.toml, unchanged
+# entries with their evidence). The bulk gaps are in gta4_eu_base_gaps_bulk.toml. Replaces Katamari's file (U3).
 [functions]
-# First codegen (2026-10-30): three "target not in any function", each a function reached only by a tail jump from a
-# thunk, after its neighbour's blr / bctr and padding (tools/ppc_dis.py):
-#   0x825387E8 from 0x82538814 (`addi r3,r3,-4; b 0x825387E8`): `addi r11,r3,4; lwz r10,4(r11); addi r3,r10,1;
-#     stw r3,4(r11); blr` (an AddRef through an adjusted this).
-#   0x8266DEA0 from 0x82270930 (`b 0x8266DEA0`): `mr r11,r4; mr r4,r3; mr r3,r11; lwz r10,0(r11); lwz r11,136(r10);
-#     bctr` (a virtual call through the second argument's vtable, slot 34).
-#   0x82408488 from 0x823DD968 (`addi r3,r11,288; b 0x82408488`): a table lookup that tail-calls sub_824A3650.
-"0x825387E8" = { }
-"0x8266DEA0" = { }
-"0x82408488" = { }
-# Second codegen: three "Unresolved conditional branch". Each target is a `li r3,0; blr` tail that the scanner left
-# outside the function branching to it (0x822AC5C0's function ends at the blr before it; sub_82685530 is a registered
-# start that branches back to 0x82685528, its entry stub's tail). Declared as functions of their own, the branches
-# become conditional tail calls with the same effect (return 0). 0x82685520 (`cmplwi cr6,r4,0; bne cr6,0x82685530`,
-# then the tail) is the entry stub of the function the scanner started at 0x82685530: declared as one function over
-# the whole body (the generator emits no fall-through into a next function, and refuses overlapping declarations).
-"0x822AC5E8" = { end = 0x822AC5F0 }
-"0x82685520" = { end = 0x826855C8 }
+# Branch targets the analysis leaves outside every function in this image
+# (first run: "UnresolvedCall ... target not in any function"). Equivalents
+# found by matching instruction windows against the USA v8 code.
+"0x82154100" = {}   # b from 0x821545A0; USA v8 0x8217C108 (branch target from sub_8217C5A8)
+"0x82A05828" = {}   # b from 0x8274D070; USA v8 0x82A77E28 (tail-call thunk)
+"0x82518A40" = {}   # b from 0x82234E08; USA v8 0x824FF7C0 (found by the USA analysis)
+"0x826EA240" = {}   # b from 0x826EA2F4; USA equivalent ambiguous (repetitive code)
 
-# katamari-nx (2026-10-30 evening, the register-diet codegen): split pieces that read non-volatile registers their
-# parent set up (tools/read_before_write.py on code generated WITH non_volatile_as_local, out/audit/gen2; the pieces
-# also listed in overrides.toml carry the mark there). Without it sub_824CF3F8 read a zeroed r31 and handed a wrong
-# frame to its __finally funclet: the boot crash of the first diet build.
-"0x824C97F0" = { share_registers = true }  # reads r30
-"0x824C9B80" = { share_registers = true }  # reads r30
-"0x827F91D4" = { share_registers = true }  # reads r31
-"0x828C74A8" = { share_registers = true }  # reads r24 r26 r27 r29
-"0x828C8DE8" = { share_registers = true }  # reads r30
-"0x828CC530" = { share_registers = true }  # reads r22
-"0x828D0AC8" = { share_registers = true }  # reads r29
-"0x828D27B0" = { share_registers = true }  # reads r30
-"0x828D2B28" = { share_registers = true }  # reads r17
-"0x828D6CA0" = { share_registers = true }  # reads r25
-"0x828D7780" = { share_registers = true }  # reads r15 r17 r27 r28 r29 r30
-"0x828E4F78" = { share_registers = true }  # reads r18 r19 r28
-"0x828ED618" = { share_registers = true }  # reads f26 f27 f28 f29 f30 r14 r22 r23 r26 r31
-"0x82904F58" = { share_registers = true }  # reads r22 r24
-"0x82912CF0" = { share_registers = true }  # reads r30
-"0x82917C90" = { share_registers = true }  # reads r26
-"0x8291A458" = { share_registers = true }  # reads r28 r29
-"0x82927520" = { share_registers = true }  # reads f31 r16 r17 r18 r23 r25 r28 r29
-"0x8292FC58" = { share_registers = true }  # reads r24 r25 r26
-"0x829304B8" = { share_registers = true }  # reads r25 r29
-"0x82939A30" = { share_registers = true }  # reads r28
-"0x8293C418" = { share_registers = true }  # reads r31
-"0x8293D220" = { share_registers = true }  # reads r22
-"0x829462A0" = { share_registers = true }  # reads r28 r30
-"0x829469A8" = { share_registers = true }  # reads r16 r22 r24 r25 r29
-"0x82949378" = { share_registers = true }  # reads r20 r28 r29 r30
-"0x82949DE8" = { share_registers = true }  # reads f31 r22 r23 r24 r25
-"0x82970030" = { share_registers = true }  # reads r28
-"0x829EC658" = { share_registers = true }  # reads v69 v72
-"0x829ECA00" = { share_registers = true }  # reads v69
-"0x829ECCC0" = { share_registers = true }  # reads v69 v72
-"0x829ECF28" = { share_registers = true }  # reads v69
-"0x829EE070" = { share_registers = true }  # reads v64 v65
+# Fragments that read registers their owner left live (registers as locals).
+# Found by tools/switch-codegen/read_before_write.py after a generation with
+# registers as locals; 0x829A88C0 (r30 ^ r30, a zeroing idiom) is a false
+# positive and is not marked.
+"0x8299BD94" = { share_registers = true }   # reads r25 before writing
+"0x829A83F4" = { share_registers = true }   # reads v64 v65 before writing
+"0x829A8C50" = { share_registers = true }   # reads r30 v64 v65 before writing
+"0x829AAE00" = { share_registers = true }   # reads r31 before writing
+"0x829AB658" = { share_registers = true }   # reads r31 before writing
+
+# Functions the analysis did not reach, found at run time as
+#   [FATAL] Call to invalid or unregistered function at guest address 0x...
+# (the PC build, tools/pc-eu-base, finds them first). Candidates from
+# tools/switch-codegen/gaps.py; one entry per address a run proved. A gap that
+# turns out to be the tail of the previous function needs { end = ... } on
+# that function instead (see gaps.py).
+"0x829F6F10" = {}   # gap 829F6F10-829F6F90 after 829F6EF0; indirect call after KeTlsGetValue (PC run 1)
+"0x829F6F30" = {}   # +0x20 in the same gap: several functions in a row (PC run 2)
+"0x829F6F50" = {}   # indirect call after KeTlsGetValue (PC run 3)
+"0x829F6F70" = {}   # indirect call after KeTlsGetValue (PC run 4)
+"0x829F6FD0" = {}   # indirect call after KeTlsGetValue (PC run 5)
+"0x829F7090" = {}   # indirect call after KeTlsGetValue (PC run 6)
+"0x82177920" = {}   # +0x10 inside sub_82177910: vtable target of the adjustor thunk at 82177910 (b 0x82177920); indirect call from the audio thread after XMACreateContext (PC run 17, null audio)
+"0x827D5200" = {}   # gap 827D5200-827D5220 after 827D51E0: indirect call from the main thread after the boot screens (PC run 17c, null audio)
+"0x82586A60" = {}   # gap 82586A60-82586AD0 after 82586A08: indirect call from the main thread while loading the city (PC run 17d, at 275 s)
+"0x82596BC0" = {}   # gap 82596BC0-82596BD0 after 82596BB0 (the bulk entry 0x82596BB0 declared 32 B, emitted 16 B): script command handler registered by sub_82596BD0 (bl 0x827D6C40 at 0x82597434, name at 0x82037290); main thread (Switch run 47, at 481 s); generated code patched by hand in run 48
+"0x82548078" = {}   # run 50: script command handler registered by sub_825485F8 (name at 0x8202C13C), in the gap after 82548058
+"0x82548098" = {}   # run 50: script command handler registered by sub_825485F8 (name at 0x8202C118)
+"0x82560930" = {}   # run 50: script command handler registered by sub_82564CE0 (name at 0x8202F488)
+"0x82572EB0" = {}   # run 50: script command handler registered by sub_82576068 (name at 0x8203242C)
+"0x82588EF0" = {}   # run 50: script command handler registered by sub_82590368 (name at 0x82034E20)
+"0x82590190" = {}   # run 50: script command handler registered by sub_82590368 (name at 0x82033DEC)
