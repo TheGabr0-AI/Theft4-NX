@@ -814,3 +814,6 @@ LibertyRecomp/gpu/shader/**/*.metallib
 
 # Theft4-NX: PowerPC code translated from the game (DevZer0D4Y hand edits, run 2026-10); never tracked
 glue/rexglue-sdk-main/include/rex/audio/nx_exact_wave_helpers.h
+
+# Ultimate Base SDK third-party libraries, taken from the pinned base commit (tools/ultimate/fetch_sdk_thirdparty.ps1)
+/ultimate/sdk/thirdparty/
