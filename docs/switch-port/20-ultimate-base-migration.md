@@ -151,6 +151,32 @@ U4 parte da qui: le zone della coda (+8 / +16 rispetto a Katamari) si riprendono
   InitializePresentationParameters `829DEF28`, SynchronizeToPresentationInterval `829D5158` / `829D50D8`,
   SetPredication `829CD300`) sono candidati per U5, uno per volta sul PC.
 
+### 2.6 U4b: lo stato (2026-11-12, sera)
+
+- **Binding di Katamari:** `tools/ultimate/unhook_katamari.py` ne ha resi non agganciati 323 (device 24, draw 13,
+  resource 39, shader 4, state 243). `hook_census.py`: **0 hook vivi** (`ultimate-reports/u4-hook-census-unhooked.txt`).
+  Le modifiche ai sorgenti sono nel working tree, **non committate**: aspettano la build PC della base.
+- **Confronto corpo per corpo** (base contro renderer funzionante, commenti esclusi):
+  `KickOff_hook`, `KickOffSegment_hook`, `BeginRingBig_hook`, `RingBufferDeviceAllocate_hook`,
+  `AllocateInlineData_hook`, `CBlocker_Check_hook` **identici** (si legano ai loro indirizzi GTA IV così come sono);
+  `BlockOnFence_hook` uguale salvo la nostra diagnostica dei 2 s; `SetFence` uguale salvo i due offset di coda
+  (0x5404 / 0x3A30 di Katamari -> 21.512 / 14.904); `D3DDevice_Swap_hook` della base senza il conteggio dei flip di
+  GTA IV (`word(16552)`: senza, lo Swap originale aspetta i flip) e con la rampa gamma a 0x3A84 (GTA IV 14.988);
+  `Sa2NewSegment_hook` e `Sa2CreateDevice` **assenti** nella base.
+- **Draw:** i corpi GTA IV di ClearF, Resolve, BeginTiling, EndTiling (il lavoro host in coda, poi la funzione del
+  gioco) si reggono su `QueueHostClear` / `QueueHostResolve`, **assenti** nella base (che fa clear, resolve e tiling in
+  modo nativo, `BeginTilingImpl` / `EndTilingImpl`, con offset in zone non mappate per GTA IV). Restano da confrontare
+  `D3DDevice_DrawVertices_hook`, `DrawIndexedVertices_hook`, `BeginVertices_hook`, `D3DResource_Destroy` e i tre di
+  `shader.cpp` (CreateVertexShader / CreatePixelShader / CreateVertexDeclaration, raw nel renderer funzionante: il 6274
+  restituisce l'oggetto shader con la parte fisica a +24).
+- **Da fare per chiudere U4:** portare nella base `Sa2CreateDevice` (con i passi dell'hardware path di 6274),
+  `Sa2NewSegment_hook`, i raw `829D77D8` / `829DDF28`, le correzioni di Swap e `SetFence`, `QueueHostClear` /
+  `QueueHostResolve` e i corpi raw di draw / resource / shader; legare i 23 indirizzi; `hook_census.py --strict` a 0
+  problemi sugli hook (23 binding, ognuno con un hook vivo su un inizio di funzione); gli indirizzi di Katamari che
+  restano nel codice compilato senza essere hook (`banjo_hand_natives.h` 93, `banjo_shared_hooks.h` 34,
+  `widescreen.cpp` 11, `banjo_reverb_native.cpp` 8, ...) rivisti uno per uno; rigenerare (`regenerate.ps1`, manifest
+  nuovo) e ripetere i censimenti; poi la build PC (U4 finisce col primo Swap sul PC).
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si
