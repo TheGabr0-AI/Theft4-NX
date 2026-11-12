@@ -114,7 +114,11 @@ benchmark, quelle dopo il profilo della stessa sessione (`tools/switch-game/wher
 <ELF del run>`). Il profilo GPU per tipo di lavoro (`renut_gpu_profile`, secondi tra le righe) costa pochi timestamp.
 Ogni modifica si confronta con la baseline del run 71 sulla stessa scena: introduzione, filmato, poi gioco a piedi e in
 auto. Da riportare sempre: fps e tempo GPU delle righe `[renut] ... game frames`, righe `audio:`, i blocchi visti
-(quando e quanto), cosa manca a schermo.
+(quando e quanto), cosa manca a schermo. **Dal run 72:** stesso percorso del run 71 (introduzione e filmato senza
+salti, a piedi fino all'auto, guida verso il primo obiettivo, oltre il quarto minuto): a piedi e in auto il frame rate
+cambia di quasi la metà, quindi un confronto vale solo sullo stesso tratto. Quando il README lo chiede, copiare nei log
+anche `deko3d_shaders.bin` e `pipeline_list.bin` della scheda (restano anche sulla scheda): servono a costruire e
+verificare la cache degli shader offline.
 
 **Smoke:** `switch-smoke.nro` della stessa cartella del run fa anche il
 passo 8 (deko3d contro NVK, `13-deko3d-spike.md`, ~1–2 minuti, schermo fermo

@@ -85,6 +85,7 @@ architettura, non applicabile; **R** non utile o potenzialmente regressiva. Stat
 | XMA asincrono, routing nativo, priorità a scadenza | nostri run 49, 64 | - | - | - | righe `audio:` | fatto (attivi) |
 | Funzioni del motore audio del gioco come natives | rr6-nx (Audio Worker 48 %, 86 % in tre funzioni), katamari | A | medio | da profilo | profilo del thread audio | profilo |
 | Lavoro spostato sul core 3 | renut-nx (`banjo_system_core_*`) | R finché non misurato | - | renut-nx: audio peggiore con le compilazioni lì | - | escluso senza misura (richiesta dell'utente) |
+| Lavori di sfondo di ReNut via dal core dell'audio (core 2 -> 0) | profilo del run 71 (§5) | D (un cvar) | nullo | audio meno affamato, compilazioni più brevi | run 72 contro 71 | **run 72** |
 
 ### 2.5 Compatibilità e funzioni
 
@@ -103,7 +104,77 @@ passata, `cpu by core`. Le prime ottimizzazioni si scelgono da lì.
 
 ## 4. Risultati
 
-| Run | Modifica | fps gameplay | GPU ms/frame | Audio % | Note |
-|---|---|---|---|---|---|
-| 70 | baseline (trace acceso) | 12,9-14,5 (fuori dal trace) | 67-75 | 62-70 | blocchi da trace ogni 30 s |
-| 71 | trace spento, profilatori accesi | - | - | - | da fare |
+| Run | Modifica | fps a piedi | fps in auto | GPU ms/frame (auto) | Audio % in gioco | Stalli | Note |
+|---|---|---|---|---|---|---|---|
+| 70 | baseline (trace acceso) | 12,9-14,5 (fuori dal trace) | - | 67-75 | 62-70 | 10-15 s ogni 30 s (il trace) | |
+| 71 | trace spento, profilatori accesi | 12,8-14,5 | **8,5-10,3** | **80-89** | 65-74 a piedi, **52-60 in auto** (fino a 121 uscite a secco in 10 s) | finestre di 12,8-15,2 s a 4-5 fps: compilazioni uam (1,5-2,9 s l'una) in zone nuove | la baseline vera |
+| 72 | lavori di sfondo di ReNut dal core 2 al core 0 (`banjo_background_compile_core = 0`); profilo esteso ai thread di ReNut | - | - | - | - | - | da fare |
+
+## 5. Run 71: lettura dei profili (`out/console-runs/71-logs`, 889 s, 0 fault)
+
+Clock standard per tutto il run, cache calda (385 varianti), trace spento (nessun blocco periodico: confermato
+dall'utente). Campionatore CPU dal secondo 240; profilo GPU ogni 10 s.
+
+**Stutter e cali di fps sono due cose diverse.**
+
+- **Stutter in zone nuove = compilazioni di varianti degli shader.** Le finestre che si allungano a 12,8-15,2 s (4-5 fps,
+  render thread a 230-248 ms a frame) sono quelle con nuove compilazioni uam (da 1 a 16 per finestra), che costano in
+  media **1,5-2,9 s l'una** contro 0,65 s quando la CPU è libera: il render thread aspetta lo shader. La cache calda le
+  elimina dove si è già stati; non dove non si è mai stati.
+- **Il frame rate basso è GPU e render thread insieme.** In auto, 3.400 draw a frame: GPU 80-89 ms, render thread di
+  ReNut 80-97 ms (non campionato: non era nella lista del campionatore; corretto nel run 72).
+
+**GPU per passata (in auto, 89 ms a frame, 59 frame):**
+
+| Passata | ms a frame | Draw a frame |
+|---|---|---|
+| Scena 1280x720 colore+depth (G-buffer, luci, forward) | 38,4 | 1.955 |
+| Shadow map 1280x1280 solo depth | **30,9** | **2.385** |
+| Resolve (colore) | 9,6 | - |
+| 1280x720 colore, depth resolve, 256x256, 320x180, presentazione, upload, resto | ~10 | - |
+
+Il costo segue **il numero dei draw** (13-20 µs a draw), non i pixel (una shadow map 1,6 MP solo depth non costa 31 ms
+di riempimento). Contatori deko3d a frame (in auto): ~3.400 draw, ~900 bind di pipeline (~750 di stato), **~118 barriere
+di frammento** (~80 invalidano le texture), 2-3 barriere complete; unione e alleggerimento delle barriere già attivi
+(`banjo_deko3d_barrier_merge`, `_lean`). Da qui le prossime ottimizzazioni GPU: costo fisso per draw (stato, costanti
+spinte, binding), le barriere (quali transizioni le producono), e il resolve (9,6 ms: i resolve multisample disegnati
+del G-buffer, 3 tile x 4, su target non compressi).
+
+**CPU per thread (campioni dal secondo 240):**
+
+| Thread | Ruolo | Cosa fa |
+|---|---|---|
+| id 16 (`0x82169400`) | **audio del gioco** (mixer) | **occupato**: cicli DSP NEON in `sub_821737C0` (~25 %), `sub_8216BFE8` (~25 %), `sub_82185E38` (~12 %), routing nativo `sub_8216D7E0` 3 %; contende uno spinlock con il 17 |
+| id 17 (`0x82167810`, `0x828C0968`) | audio (lato) | dorme (`KeDelayExecution` 46 %) e **gira su uno spinlock con `sched_yield`** (32 %) |
+| id 6 | thread principale | **aspetta il 97 %** (eventi, attese multiple): non è il collo di bottiglia |
+| id 9/10/11 | worker del gioco | aspettano; **14 % bloccati in `XEvent::Set`** sul `std::mutex` dell'evento (contesa) |
+| id 12 | render thread di GTA IV | 77 % in attesa della coda di ReNut |
+| id 2 | decoder XMA (host) | inattivo al 95 %: non è il problema dell'audio |
+
+**Core:** tutti i thread del gioco hanno maschera 7 (core 0-2); i due thread audio preferiscono il core 2 (`ideal 2`);
+**ReNut fissa sul core 2 anche tutti i suoi lavori di sfondo** (uam, ring cleaner, prebuild, salvataggio della cache),
+mentre il core 0 ha il thread principale che aspetta quasi sempre. Il core 2 è sovraccarico: spiega insieme l'audio
+affamato (il mixer non finisce in tempo) e le compilazioni 3-4 volte più lente. (`cpu by core` dà zero: il contatore
+per core non funziona in questa build; la lettura viene dalle maschere, dai core ideali e dalle quote dei thread.)
+
+**Allocazioni, decompressione, I/O:** nessun segno nei profili dei thread campionati (il thread principale non è
+occupato; nessun thread di streaming tra i più carichi). Il log a livello debug scrive ~40 righe al secondo dal suo
+thread: trascurabile.
+
+## 6. Piano dopo il run 71 (in ordine)
+
+1. **Run 72: i lavori di sfondo dal core 2 al core 0** (una variabile, solo `game.toml`; la NRO aggiunge al profilo i
+   thread di ReNut). Atteso: audio più vicino al 100 %, compilazioni più brevi. Verifica: righe `audio:`, `uam N compiles
+   (avg ...)`, durata delle finestre in zone nuove, confrontati con il run 71 sullo stesso percorso.
+2. **Cache DKSH offline** (rr6-nx `deko3d_variant_cache.py`, adattato): le nostre pipeline danno più costanti di
+   specializzazione di quelle di rr6 (905 vsout, 909 earlyz, 904, 906, ...), quindi le chiavi vanno ricostruite
+   dal nostro `render/pipeline.cpp`. Verifica senza console: le chiavi generate da `pipeline_list.bin` devono coincidere
+   con quelle di `deko3d_shaders.bin` della scheda (l'utente li copia con i log del run 72).
+3. **Audio, se il run 72 non basta:** il mixer (id 16) come natives a mano delle tre funzioni DSP (metodo di rr6-nx e
+   del nostro run 64, con test di equivalenza), e lo spinlock dell'id 17 (`xeKeKfAcquireSpinLock` con `sched_yield`).
+4. **Render thread** (dal profilo del run 72) e **GPU** (costo per draw, barriere, resolve): una modifica misurata per
+   run.
+5. **Contesa in `XEvent::Set`** (14 % dei worker): il `std::mutex` per evento dell'SDK.
+6. **RAM a 1600 MHz**: esperimento separato, solo dopo la baseline stock e le prime ottimizzazioni (richiesta
+   dell'utente): stesso percorso, A/B stock/1600, temperature e stabilità; la build di riferimento resta a clock
+   standard.
