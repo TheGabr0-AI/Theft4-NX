@@ -60,3 +60,17 @@ Every change to upstream files is marked `SwitchWakerHD patch N`.
 Check: `uam_dksh_test` (`-DWWHD_UAM_TEST=ON`) compiles a directory of GLSL files in one process and
 compares the DKSH bytes with reference files written by the `uam` tool (target `uam_tool`), one
 process per shader.
+
+Theft4-NX (docs/switch-port/20, U6; first in its docs/switch-port/16, M1): the PC tool and test built on
+the MSVC ABI (Visual Studio's clang, `tools/ultimate/build_deko3d_tools.bat`) instead of MinGW. Build
+changes only, each under `_MSC_VER` / `_WIN32 && !__MINGW32__` / `UAM_MSVC_ABI` but the type of
+`ureg_DECL_output_masked`'s `name` (now its header's `enum tgsi_semantic`, the same type for GCC): SRW
+locks for `c11/threads.h`'s plain mutexes (no pthreads), the short options without getopt in
+`source/main.cpp` (so `-v`, not `--version`), no `signbit` macro over `<cmath>`'s, `NOMINMAX`
+`WIN32_LEAN_AND_MEAN` `_CRT_SECURE_NO_WARNINGS` `strtok_r=strtok_s`, a 16 MB stack for `uam` and
+`uam_dksh_test` (GTA IV's largest vertex shaders overflowed Windows' 1 MB). Nothing changes for the
+Switch build (the one unguarded change is a type GCC already gave the parameter). On the PC the library
+and the tool give the same DKSH bytes on GTA IV's package (`tools/ultimate/gta4_dksh_cache.py`, step
+2). That the console's GCC build gives the same bytes is not shown on the PC: the console appends what it
+compiles to its `deko3d_shaders.bin`, so its own records can be compared with this tool's for the same
+keys after a run.

@@ -1,5 +1,7 @@
 #include "compiler_iface.h"
+#ifndef _MSC_VER
 #include <getopt.h>
+#endif
 
 static int usage(const char* prog)
 {
@@ -26,6 +28,9 @@ int main(int argc, char* argv[])
 	if (const char* flags = getenv("UAM_BANJO_FLAGS"))
 		nv50_ir_set_banjo_flags((unsigned)strtoul(flags, nullptr, 0));
 
+#ifdef _MSC_VER
+	static const void* long_options = nullptr;
+#else
 	static struct option long_options[] =
 	{
 		{ "out",     required_argument, NULL, 'o' },
@@ -36,6 +41,24 @@ int main(int argc, char* argv[])
 		{ "version", no_argument,       NULL, 'v' },
 		{ NULL, 0, NULL, 0 }
 	};
+#endif
+
+#ifdef _MSC_VER
+	// Theft4-NX (docs/switch-port/16 M1, again in 20 U6): no getopt on the MSVC ABI (the PC tool built with Visual
+	// Studio's clang); the short options only, as tools/deko3d_*.py pass them.
+	int optind = 1;
+	const char* optarg = nullptr;
+	auto getopt_long = [&](int, char**, const char*, const void*, int*) -> int {
+		if (optind >= argc || argv[optind][0] != '-' || !argv[optind][1]) return -1;
+		const char c = argv[optind][1];
+		++optind;
+		if (c == 'o' || c == 'r' || c == 't' || c == 's') {
+			if (optind >= argc) return 0;
+			optarg = argv[optind++];
+		}
+		return c;
+	};
+#endif
 
 	int opt, optidx = 0;
 	while ((opt = getopt_long(argc, argv, "o:r:t:s:?v", long_options, &optidx)) != -1)

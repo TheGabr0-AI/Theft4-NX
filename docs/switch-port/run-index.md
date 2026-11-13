@@ -80,3 +80,9 @@ stack forwarding: da risolvere prima di ogni build Switch): `20-ultimate-base-mi
 **2026-11-13, U5 sulla base: solo PC, nessun run su console.** Stack forwarding corretto (`5000be5`: 0 differenze su
 8,5 M controlli); correzioni del renderer confrontate con la base, avvio PC affidabile (8 su 8), rampa gamma del gioco
 accesa (§2.8-§2.9). Il primo run su console resta U8, dopo la build Switch (U7).
+
+**2026-11-13, U6 sulla base: solo PC, nessun run su console.** Pacchetto shader per la Switch (1.370 shader, 0 falliti)
+e cache DKSH offline (4.287 varianti, 0 fallite) fatti con gli strumenti della base; `20-ultimate-base-migration.md`
+§2.10. Usati come dati, senza analizzarli: `pipeline_list.bin` e `deko3d_shaders.bin` della SD in
+`out/console-runs/72-logs` (NRO `5d542d6`, la build del run 72). Con questi si è verificato che i 409 DKSH compilati
+dalla console coincidono con quelli del PC.

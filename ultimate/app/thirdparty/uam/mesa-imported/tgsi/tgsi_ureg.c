@@ -476,7 +476,7 @@ out:
 
 struct ureg_dst
 ureg_DECL_output_masked(struct ureg_program *ureg,
-                        unsigned name,
+                        enum tgsi_semantic name,  /* Theft4-NX: the header's type (MSVC ABI enums are int) */
                         unsigned index,
                         unsigned usage_mask,
                         unsigned array_id,

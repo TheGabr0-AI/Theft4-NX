@@ -1,0 +1,56 @@
+{
+ "tool": "tools/ultimate/gta4_dksh_cache.py",
+ "repository_commit": "db37f0075743fc9c634488885da0cfc70d39c660",
+ "base_commit": "8de5d51a66d14c9bceb90811a818c6ee3906057f",
+ "tools": {
+  "spirv_cross_commit": "22b22f5685d868828be01c9ac00c31902e60afd9",
+  "uam": "uam 1.1.0 - Built on Nov 13 2026 13:55:46",
+  "uam_sha256": "4acc1351a129ef8dacb6b2f46b6477b3e6885a15daaf9aa2b5f557e079b86ce2",
+  "cache_tag": "uam110-sw8-bnx4",
+  "xenos_recomp_sha256": "283d06ad245d639ffd3f384eca5b3106993b621c68e3bd6579153a8edf5ac3cb"
+ },
+ "containers": {
+  "combined_sha256": "a7dae5722ea05220472564cbb7c6e4c57ab173ef65c6cdcc0469b425a4e04484",
+  "count": 1370
+ },
+ "package": {
+  "glsl_opt": {
+   "combined_sha256": "01f9b934a47133ee15f34f37a3861b4fd8254958d4a736b2b80b67d9203cef2b",
+   "count": 1370
+  },
+  "deko3d_glsl_bin_sha256": "7963cb14a980f3a0bb068a8255dde45d798f8ea14844d21555b3034bdd64e596",
+  "shader_cache_switch_cpp_sha256": "061feff7c2a071f761b122e29b3aa4342cec78935d29eaa12d815265105c7d2d"
+ },
+ "lists": [
+  {
+   "file": "pc-u5.pipeline_list.bin",
+   "sha256": "44532e27ece870eeab7f4c0cc59104340a0e22945c5535890175d54337f8bc4e",
+   "version": 7,
+   "pipelines": 616,
+   "shaders": 238,
+   "shaders_not_in_package": 0
+  },
+  {
+   "file": "console-run72.pipeline_list.bin",
+   "sha256": "cfe402f0f5bbd2b1a2cb2e0bb817ac3ad6f6b8db6b5b5cb8fc8ab12a43de0a72",
+   "version": 4,
+   "pipelines": 651,
+   "shaders": 356,
+   "shaders_not_in_package": 0
+  }
+ ],
+ "runtime_logs": [],
+ "merged_cache": null,
+ "options": [
+  "--generic",
+  "--plain-guess shader_cache_switch.cpp"
+ ],
+ "cache": {
+  "file": "deko3d_shaders.bin",
+  "sha256": "1d6f7737741daedb1be3ac82e9138ebb35d29d45f7e6b7cb49824f7992aedc4e",
+  "bytes": 23680524,
+  "records": 4287,
+  "exported_variants": 4287,
+  "variants_sha256": "cf40a483020d4b615ef2e0a5d693c99cee3bb26dea25533ff69549519c3b6e43"
+ }
+}

@@ -119,7 +119,7 @@ exp2(double d)
 /*
  * signbit() is a macro on Linux.  Not available on Windows.
  */
-#ifndef signbit
+#if !defined(signbit) && !defined(_MSC_VER)  /* Theft4-NX: the MSVC ABI has std::signbit (cmath) */
 #define signbit(x) ((x) < 0.0f)
 #endif
 

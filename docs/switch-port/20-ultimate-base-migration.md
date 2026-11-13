@@ -312,6 +312,87 @@ Ogni correzione verificata del renderer di Theft4-NX (R3, runs 66-70) confrontat
 - **Verifica PC della build finale** (D3D12, default nuovi, 120 s): scena d'apertura giusta (stessa inquadratura di R3 a
   90 s, personaggi interi), 67 fps senza limite, autoverifiche a 0 differenze, nessun errore del renderer; 8 avvii su 8.
 
+### 2.10 U6: shader per la Switch e cache DKSH offline (2026-11-13, solo PC)
+
+Gli strumenti della base (`switch_shaders.ps1`, `deko3d_shaders.py`, `deko3d_glsl_opt.py`, `deko3d_shader_package.py`,
+`renut_switch_shader_cache.py`, `deko3d_variant_cache.py`) si usano così come sono. Per GTA IV e per questa macchina
+servono quattro adattamenti; due sono difetti che la catena della base non segnalava.
+
+**Procedura** (riproducibile; ogni prodotto è un dato del gioco in una cartella ignorata da git, mai nel repository):
+
+1. Strumenti PC, una volta: `tools/ultimate/build_deko3d_tools.bat` con `THEFT4_SPIRV_CROSS_SRC` = un albero di
+   SPIRV-Cross a `22b22f5685d868828be01c9ac00c31902e60afd9` (il commit che `thirdparty/MoltenVK/SPIRV-Cross` di
+   UnleashedRecomp-NX fissa, la copia che `deko3d_build_tools.sh` della base nomina; `git archive` di quel commit più un
+   file `COMMIT` che lo nomina). Produce `ultimate/out/deko3d_tools/{spirv-cross-build/spirv-cross.exe,
+   uam-build/uam.exe, uam-build/uam_dksh_test.exe}`.
+2. Build PC: `tools/ultimate/build_pc.bat` (ora riempie da sé `ultimate/out/renut_shader_dump`, punto 4 sotto).
+3. `powershell -File ultimate\tools\switch_shaders.ps1` con `THEFT4_PYTHON`: `ultimate/app/out/renut_switch`
+   (`deko3d_glsl.bin` + `deko3d_glsl_switch.cpp`, `shader_cache_switch.cpp` + `spirv_cache.zst`: gli ingressi della NRO
+   di U7) e `ultimate/out/deko3d_shaders/glsl_opt`.
+4. `python tools/ultimate/gta4_dksh_cache.py --list <liste> [--runtime-log <game.log>] [--merge <cache della SD>]
+   [--console-cache <cache della SD>] --manifest <json>`: `ultimate/out/deko3d_shaders/deko3d_shaders.bin` (+
+   `.variants.txt`), da mettere accanto alla NRO. Il nome vale per i flag di uam di default (1471,
+   `banjo_renut_deko3d.cpp`); con altri flag la console cerca `deko3d_shaders_f<flag>.bin`.
+
+**Adattamenti e difetti trovati:**
+
+| Punto | Trovato | Fatto |
+|---|---|---|
+| Python | `switch_shaders.ps1` ha `C:\Python314\python.exe` scritto fisso | legge `THEFT4_PYTHON` se c'è (una riga) |
+| uam per PC | lo script della base usa il clang64 MinGW di devkitPro, che qui non c'è; l'uam della base sull'ABI MSVC non compila (`c11/threads.h` vuole pthread) | riportate le 5 modifiche di build del vecchio albero (`16-deko3d-devlog.md` M1): lock SRW, opzioni brevi senza getopt, `signbit`, tipo dell'enum di `ureg_DECL_output_masked`, stack di 16 MB per i vertex shader più grandi di GTA IV. Tutte sotto `_MSC_VER` / ABI MSVC tranne il tipo, che per GCC era già quello; annotate in `PATCHES.md`. La build Switch non cambia |
+| **Nomi dei contenitori** | il nostro estrattore (run 61) scrive `<HASH>.<vs\|ps>.bin`, la base `<vs\|ps>_<xxh3>.bin` (stesso hash: verificato su tutti i 1.370). XenosRecomp dà all'HLSL esportato il nome del file d'ingresso, e `renut_early_alpha.py` cerca `ps_*.hlsl`: **ha elaborato 0 shader, senza errori**, nella build PC e in quella Switch. E il passo di cattura della build PC (`collect_captured_shaders.cmake`) confronta i nomi: in U4b, con la cache vuota del primo avvio, aveva copiato **1.250 duplicati** (stessi byte, nome diverso) nella cartella dei contenitori di eu-private attraverso il junction | `tools/ultimate/gta4_shader_dump.py`: copia i contenitori in `ultimate/out/renut_shader_dump` (una cartella vera, non più un junction) col nome della base, e controlla per ognuno intestazione, stadio, dimensione e hash. Chiamato da `build_pc.bat`. I 1.250 duplicati sono stati **spostati, non cancellati**, in `eu-private/offline-shaders/pc-captures-u4b` (verificati identici byte per byte agli originali); `app/out/pc/shader_capture` rinominata `shader_capture-u4b-duplicates` |
+| Early alpha su GTA IV | con i nomi giusti `renut_early_alpha.py` vede i 704 pixel shader, ma non ne riscrive nessuno: 17 "little" (guadagno troppo piccolo), 687 "unsupported", quasi tutti per **costanti con nome** (`globalScreenSize` 101, `globalFogParams` 88, `gShadowParam14151617` 59...): lo strumento conosce solo la forma `g_C(N)` | non toccato: è un'ottimizzazione (U10), da misurare. Gli shader restano identici (tabella PC = tabella Switch, sotto) |
+
+**Copertura e verifiche** (`gta4_dksh_cache.py`, manifest `docs/switch-port/ultimate-manifests/dksh-u6.json`):
+
+- **Pacchetto:** 1.370 shader (666 vertex, 704 pixel), tutti tradotti; SPIRV-Cross e uam sulla variante di default **0
+  falliti**; 48 passate GLSL della base; `deko3d_glsl.bin` 1.970 KB (21 MB di GLSL). Ogni voce della tabella della NRO ha
+  il suo testo e ogni testo una voce; la tabella del pacchetto è ordinata e unica, con dimensioni e stadi giusti; 25 voci
+  scompattate col dizionario del pacchetto sono uguali byte per byte ai testi.
+- **Tabella:** quella della build PC (fatta da 2.620 file con i duplicati) e quella rifatta dai 1.370 sono **identiche**
+  voce per voce (offset e dimensioni di DXIL e SPIR-V esclusi), con i 2.862 input dei vertici e i 2.707 literal. XenosRecomp
+  scarta i duplicati per hash: 1.370 voci, nessuna ripetuta.
+- **uam, libreria contro strumento** (`uam_dksh_test`, ogni 10° testo + i 10 più grandi): 147 su 147 DKSH identici; uno
+  shader che non compila dà l'errore nel log e la compilazione successiva riesce. Lo shader più lento richiede 28 s sul PC
+  (il DKSH più grande è un pixel shader da 478 KB): sulla console, senza cache, una variante così sarebbe uno stallo
+  lungo.
+- **uam del PC contro la console:** il `deko3d_shaders.bin` della SD in `out/console-runs/72-logs` (run con la NRO
+  `5d542d6`, la build del run 72, vecchio renderer ReNut) ha 409 record, **tutti compilati dalla console** (nessun prefisso
+  ordinato da uno strumento PC). Ricostruite le loro varianti dal vecchio pacchetto (`out/renut-switch/deko3d/glsl_opt`) e
+  dalla lista della stessa SD con `deko3d_variant_cache.py --export-variants`: ritrovate **409 chiavi su 409**, e i DKSH
+  compilati sul PC sono **identici byte per byte** a quelli della console, con l'uam PC del vecchio albero e con quello della
+  base costruito qui. Quindi il compilatore (clang con ABI MSVC sul PC, GCC di devkitA64 sulla console) non cambia l'uscita
+  su quei 409, e lo strumento della base calcola le chiavi come la console. Il passo 5 dello script (`--console-cache`)
+  ripete il confronto su una SD della base dopo U8.
+- **Cache:** due liste. Quella delle corse PC di U5 (`pc-u5`, versione 7, la chiave della base: 616 pipeline, 238 shader)
+  e quella della console del vecchio renderer (`console-run72`, versione 4, i primi 192 byte della chiave identici
+  alla base: 651 pipeline, 356 shader). **0 shader delle liste mancano dal pacchetto.** Con `--generic --plain-guess`:
+  10.755 pipeline, **4.287 varianti di stadio** (1.320 generiche che le liste non avevano), **0 fallite**, 23.125 KB; ogni
+  chiave controllata contro il suo testo, ogni variante ha il suo record. **Riproducibile:** rifatta da zero in un altro
+  file, stesso SHA-256 (`1d6f7737…`, nel manifest con gli hash di ogni ingresso).
+- **Build PC col nuovo `build_pc.bat`:** compila; 125 s su D3D12, scena d'apertura giusta (70 s e 90 s), 67 fps, 0
+  shader catturati, nessun errore.
+
+**Shader mancanti o non compilabili, sulla console** (dal codice della base, `shader_library.cpp`, `hooks/shader.cpp`,
+`banjo_renut_deko3d.cpp`):
+
+- un contenitore che la tabella non ha viene scritto in `shader_capture/` accanto alla NRO, una volta per hash; la build
+  successiva lo aggiunge (`gta4_shader_dump.py --dumps <cartella>`);
+- un hash della tabella senza GLSL nel pacchetto: "[deko3d] shader ... is in no GLSL package" (le prime 16 volte) e
+  "Creating shader ... failed"; lo shader non si riprova e i suoi draw non disegnano;
+- una variante che la cache non ha viene compilata in gioco da uam, su un thread in background, e aggiunta in coda al
+  file. Intanto disegna la variante generica, che la cache ha per ogni shader;
+- una cache di un altro compilatore (tag diverso da `uam110-sw8-bnx4`) viene ricominciata da zero; un record
+  troncato in coda viene tagliato.
+
+**Limiti, fino a U8:** le chiavi vengono da liste che non sono quelle della base sulla console. La lista PC ha la chiave
+giusta, ma alcuni campi si riempiono solo su deko3d (la funzione d'alfa con `sasrt` acceso, le parole di fetch). La lista
+della console ha la chiave vecchia, e lo strumento la completa con le stime della base: alfa 8 / 7 / 5 e fetch "plain".
+Il primo run U8 dirà quante varianti compila ancora ("uam: run-time variant" nel log, record in coda alla cache della
+SD). Dopo U8 si rifà la cache con
+`--list <pipeline_list.bin della SD> --runtime-log <game.log> --merge <deko3d_shaders.bin della SD> --console-cache
+<lo stesso>` e la si controlla prima di ogni misura ("uam 0 compiles").
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si
@@ -338,4 +419,5 @@ Ogni correzione verificata del renderer di Theft4-NX (R3, runs 66-70) confrontat
 | U4a | 2026-11-12 | `d3bf040`, `9e3e75a`, `e012b96`, `7fd9864` | i 10 valori del layout GTA IV nella base (test 0 differenze); censimento degli offset in linea (144, 56 diversi); script per sganciare i binding di Katamari (§2.4-§2.6) |
 | U4b | 2026-11-13 | (questo commit) | 23 hook GTA IV legati ai corpi della base, percorso del device di sa2-nx, Swap / SetFence / gamma / clear / resolve / tiling adattati, 323 binding di Katamari sganciati; `hook_census.py --strict` 0 problemi; rigenerazione `gen-u4b-hooks.json` (`08e5df6f…`), 0 chiamate dirette ai binding; build PC completa con gli shader; **primo avvio completo sul PC** (D3D12, 120 s): scena d'apertura giusta come R3, 60 fps, nessun errore di memoria fisica o chiamata a guest 0. Aperto: 60.434 inoltri di `stack_forward.py` sbagliati su 7,7 M (da risolvere prima di ogni build Switch). §2.7 |
 | U5a | 2026-11-13 | `5000be5` | `stack_forward.py` corretto alla radice (chiamate e salti nel corpo delle istruzioni); 4 punti sbagliati trovati col reporter + PDB; rigenerazione `gen-u5-stackfwd.json` (`3e76d58a…`, 67 inoltri in 39 funzioni); PC: 8,5 M inoltri controllati, **0 differenze**. §2.8 |
-| U5b | 2026-11-13 | (questo commit) | correzioni del vecchio renderer confrontate con la base: 7e3, ripristino della depth e resolve MS coperti; scambio dei mezzi tile in pixel guest riportato; attesa delle fence D3D12 per valore e vsync PC spento (avvii 12/12 invece di 7/12); rampa gamma del gioco accesa; Zcull pronto per U7; percorso SA2 identico, GuestPtr della base corretto su Switch, chiamate in uscita senza problemi reali con `EXIT_ABI=0`. §2.9 |
+| U5b | 2026-11-13 | `db37f00` | correzioni del vecchio renderer confrontate con la base: 7e3, ripristino della depth e resolve MS coperti; scambio dei mezzi tile in pixel guest riportato; attesa delle fence D3D12 per valore e vsync PC spento (avvii 12/12 invece di 7/12); rampa gamma del gioco accesa; Zcull pronto per U7; percorso SA2 identico, GuestPtr della base corretto su Switch, chiamate in uscita senza problemi reali con `EXIT_ABI=0`. §2.9 |
+| U6 | 2026-11-13 | (questo commit) | solo PC. Strumenti Switch della base integrati: uam e SPIRV-Cross per PC (`build_deko3d_tools.bat`, uam sull'ABI MSVC), contenitori coi nomi della base (`gta4_shader_dump.py`; i vecchi nomi nascondevano i pixel shader all'early alpha e avevano fatto copiare 1.250 duplicati in eu-private, ora spostati), cache e controlli (`gta4_dksh_cache.py`). 1.370 shader tradotti e compilati, 0 falliti; tabella PC = tabella Switch; cache di 4.287 varianti da due liste, 0 fallite, ogni chiave controllata; i 409 DKSH che la console aveva compilato nel run 72 rifatti identici sul PC. Manifest `dksh-u6.json`. §2.10 |

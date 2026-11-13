@@ -4,6 +4,24 @@
 // (every lock a no-op), which let two threads build Mesa's built-in GLSL function library at the
 // same time and damage the ralloc heap. uam stays NOT reentrant (static gl_context in
 // glsl_frontend.cpp): this only keeps Mesa's global tables consistent; compile on one thread.
+#if defined(_WIN32) && !defined(__MINGW32__)
+// Theft4-NX (docs/switch-port/16 M1, again in 20 U6): the PC tool on the MSVC ABI (Visual Studio's clang) has no
+// pthreads. Only plain mutexes are used (the static _MTX_INITIALIZER_NP; nothing calls mtx_init): SRW locks.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+typedef SRWLOCK mtx_t;
+enum { mtx_plain = 0, mtx_recursive = 1, mtx_timed = 2 };
+static inline int mtx_init(mtx_t *m, int type) { (void)type; InitializeSRWLock(m); return 0; }
+static inline void mtx_destroy(mtx_t *m) { (void)m; }
+static inline int mtx_lock(mtx_t *m) { AcquireSRWLockExclusive(m); return 0; }
+static inline int mtx_unlock(mtx_t *m) { ReleaseSRWLockExclusive(m); return 0; }
+#define _MTX_INITIALIZER_NP SRWLOCK_INIT
+#else
 #include <pthread.h>
 
 typedef pthread_mutex_t mtx_t;
@@ -23,3 +41,4 @@ static inline int mtx_lock(mtx_t *m) { return pthread_mutex_lock(m); }
 static inline int mtx_unlock(mtx_t *m) { return pthread_mutex_unlock(m); }
 
 #define _MTX_INITIALIZER_NP PTHREAD_MUTEX_INITIALIZER
+#endif

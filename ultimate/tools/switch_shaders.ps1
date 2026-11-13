@@ -15,7 +15,8 @@
 param([switch]$NoCentroid)
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$py = "C:\Python314\python.exe"
+# Theft4-NX (docs/switch-port/20, U6): the Windows Python of tools\ultimate\env.bat (THEFT4_PYTHON) when set.
+$py = if ($env:THEFT4_PYTHON) { $env:THEFT4_PYTHON } else { "C:\Python314\python.exe" }
 $exe = Join-Path $root "app\out\pc\xenos_recomp\build\XenosRecomp\XenosRecomp.exe"
 $common = Join-Path $root "app\thirdparty\reblue-XenosRecomp\XenosRecomp\shader_common.h"
 $dump = Join-Path $root "out\renut_shader_dump"

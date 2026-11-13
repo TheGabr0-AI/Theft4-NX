@@ -14,6 +14,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 set(UAM_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+# Theft4-NX (docs/switch-port/16 M1, again in 20 U6): the PC tool on the MSVC ABI (Visual Studio's clang, clang-cl or
+# the GNU driver: CMake's MSVC is set only for the first). windows.h without min/max macros.
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT MINGW AND NOT DEFINED NX_ROOT)
+  set(UAM_MSVC_ABI ON)
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS strtok_r=strtok_s)
+endif()
 set(UAM_MESA ${UAM_DIR}/mesa-imported)
 set(UAM_GEN ${UAM_DIR}/generated)
 
@@ -75,6 +81,11 @@ if(NOT DEFINED NX_ROOT)
   set_target_properties(uam_tool PROPERTIES OUTPUT_NAME uam CXX_STANDARD 11)
   target_compile_options(uam_tool PRIVATE -w)
   target_link_libraries(uam_tool PRIVATE uamlib)
+  if(UAM_MSVC_ABI)
+    # Theft4-NX (docs/switch-port/16 M1): Mesa's parser and nv50_ir recurse deeply; the largest GTA IV vertex shaders
+    # overflowed Windows' 1 MB default stack. The console's compile thread has 8 MB.
+    target_link_options(uam_tool PRIVATE "LINKER:/STACK:16777216")
+  endif()
 endif()
 
 option(WWHD_UAM_TEST "build uam_dksh_test (desktop)" OFF)
@@ -82,4 +93,7 @@ if(WWHD_UAM_TEST AND NOT DEFINED NX_ROOT)
   add_executable(uam_dksh_test ${UAM_DIR}/test/uam_dksh_test.cpp)
   set_target_properties(uam_dksh_test PROPERTIES CXX_STANDARD 17)
   target_link_libraries(uam_dksh_test PRIVATE uamlib)
+  if(UAM_MSVC_ABI)
+    target_link_options(uam_dksh_test PRIVATE "LINKER:/STACK:16777216")  # Theft4-NX: as uam_tool above
+  endif()
 endif()
