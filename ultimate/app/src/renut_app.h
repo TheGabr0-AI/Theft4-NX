@@ -210,6 +210,11 @@ public:
 #endif
 
     void OnPostSetup() override {
+#if defined(THEFT4_BUILD_COMMIT)
+        // theft4-nx (2026-11-13, U7): which tree this NRO was built from (tools/ultimate/build_switch.bat sets it on
+        // main.cpp alone: the repository's commit, "-dirty" with uncommitted changes in ultimate/ or tools/ultimate/).
+        REXLOG_INFO("theft4-nx: GTA IV on the Ultimate Base, build {} ({})", THEFT4_BUILD_COMMIT, THEFT4_BUILD_NAME);
+#endif
         // katamari-nx (2026-10-31): DLC packages in the "dlc" folder next to the NRO / exe installed before the game
         // starts (reNut upstream's installer, renut_engine/dlc_install.cpp, as banjo-nx does).
         renut::dlc::InstallPackages(runtime());
@@ -262,12 +267,12 @@ public:
     }
 
     // A game_root folder next to the executable is used when no path was given.
-    // On the Switch that is sdmc:/switch/katamari-nx/game_root (the extracted disc).
+    // On the Switch that is sdmc:/switch/theft4-ultimate/game_root (the extracted disc).
     void OnConfigurePaths(rex::PathConfig& paths) override {
 #if defined(KATAMARI_BUILTIN_CONFIG)
         // The player's settings file. Not renut.toml: the test builds' full one, left on an SD card, would override
-        // every built-in setting.
-        paths.config_path = rex::filesystem::GetExecutableFolder() / "katamari.toml";
+        // every built-in setting. theft4-nx (2026-11-13, U7): GTA IV's, gta4.toml (app/gta4_switch.toml).
+        paths.config_path = rex::filesystem::GetExecutableFolder() / "gta4.toml";
 #endif
         if (paths.game_data_root.empty()) {
             const auto folder = rex::filesystem::GetExecutableFolder();
@@ -277,6 +282,19 @@ public:
                 paths.game_data_root = extracted;
             }
         }
+#if REX_PLATFORM_SWITCH
+        // theft4-nx (2026-11-13, U7): without a game_root beside the NRO, the game files the older Theft4-NX tree reads
+        // (sdmc:/switch/theft4/game, read only): one copy of the game on the card for both NROs. The path is decided
+        // before any toml is read (rex_app.cpp SetupEnvironment), so a toml's game_data_root cannot set it; the root
+        // form, as GetExecutablePath gives it (filesystem_posix.cpp: libstdc++ takes "sdmc:/..." as relative).
+        if (paths.game_data_root.empty()) {
+            std::error_code ec;
+            const std::filesystem::path shared = "/switch/theft4/game";
+            if (std::filesystem::is_regular_file(shared / "default.xex", ec)) {
+                paths.game_data_root = shared;
+            }
+        }
+#endif
         renut::dlc::SetUserDataRoot(paths.user_data_root);  // the folder the DLC installer checks for installed ones
     }
 

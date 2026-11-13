@@ -1668,6 +1668,15 @@ namespace plume {
         }
     }
 
+    // theft4-nx (2026-11-13, from Theft4-NX's 1846a14; plume_deko3d.h).
+    void Deko3DInvalidateZcull(RenderCommandList *commandList) {
+        Deko3DCommandList *cl = static_cast<Deko3DCommandList *>(commandList);
+        if (!cl || !Deko3DGetOptions().zcull)
+            return;
+        cl->flushBarriers();
+        dkCmdBufBarrier(cl->cmd, DkBarrier_None, DkInvalidateFlags_Zcull);
+    }
+
     // renut-ultimate (2026-11-08, Deko3DOptions::depthResolveLazy).
     void Deko3DCommandList::deferBoundDepth() {
         if (!depthDirty)

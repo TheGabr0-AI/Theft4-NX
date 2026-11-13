@@ -14769,6 +14769,14 @@ bool RestoreDepthFromColorLocked(HostSurface *depth, HostSurface *color) {
   push.param0 = GpuTextureFormat(depth->format_word & 0x3F) == GpuTextureFormat::Fmt24_8_Float ? 1.0f : 0.0f;
   cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
   cmd->drawInstanced(3, 1, 0, 0);
+#if defined(PLUME_DEKO3D)
+  // theft4-nx (2026-11-13, U7; from Theft4-NX's run 68 fix 1846a14, on the console since run 70's right scene): the
+  // depth came from the pixel shader, which Zcull never sees; it kept describing the depth cleared just above, and
+  // GTA IV's lighting tests this depth right after (light volumes, LESS against reverse Z). Dropped, as plume does after
+  // a copy into a depth target (plume_deko3d_commands.cpp, Deko3DInvalidateZcull: nothing with banjo_deko3d_zcull off).
+  if (IsDeko3D())
+    plume::Deko3DInvalidateZcull(cmd);
+#endif
   ++depth->writes;
   depth->write_seq = ++g_surface_write_seq;
   // The draw path binds its own layout, pipeline, targets and viewport again.

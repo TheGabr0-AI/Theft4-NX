@@ -1,0 +1,33 @@
+# GTA IV (EU) for the Switch: the fixed settings, compiled into the NRO (app/CMakeLists.txt, src/renut_app.h
+# BuiltInConfig) and applied before the SD card's gta4.toml, which holds the player's options (app/gta4_switch.toml).
+# theft4-nx (2026-11-13, docs/switch-port/20, U7). Not katamari_switch_defaults.toml: that file is Beautiful Katamari's
+# (its native renderer's keys, its hand-written natives at Katamari's addresses, its fur shells, and the game gamma ramp
+# turned off). Every key not written here keeps the code's default, which is what the PC runs of U4b-U6 checked on GTA IV
+# (the opening scene right, docs/switch-port/20 sections 2.7-2.10). Only the keys the Switch needs, and the base's
+# Switch choices that do not depend on the game, are set here.
+
+# The renderer: Renut's, on deko3d (the NRO links no Vulkan driver: REXGLUE_SWITCH_NVK off).
+banjo_renderer = "renut"
+renut_gpu_backend = "deko3d"
+
+# GTA IV's gamma ramp on the output, as the Xbox 360's display does (docs/switch-port/20 section 2.9: the ramp is not
+# the identity; without it the midtones are lighter and the sky washed out). The code's default; written here so that no
+# copy of Katamari's file can turn it off.
+banjo_renut_game_gamma = true
+
+# No four-core mode: no NPDM is written for any forwarder, and core 3 stays the system's (the user: no thread moved and
+# no affinity changed without a measurement; the console's usual three cores, as in runs 70-72).
+banjo_forwarder_program_id = ""
+banjo_system_core = 0
+
+# The localized copies' guard: off (the everyday NRO has no guard forms; a guard run uses the guard NRO and a toml of
+# its own: ultimate/tools/build_switch_guard.bat).
+banjo_hot_guard_calls = 0
+banjo_hot_guard_period = 0
+
+# The base's Switch choices for its renderer (katamari_switch_defaults.toml), game-agnostic: the display-synchronised
+# frame limiter. The frame rate cap itself (frame_cap) is the player's option, gta4.toml.
+banjo_display_sync = true
+
+# A test NRO (U7-U8): the log stays on (logs/ beside the NRO), as the code's defaults have it: log_level "info",
+# log_file_writer true, the FPS overlay and the 1 s stall watchdog. A release turns them off (U12).

@@ -1,0 +1,34 @@
+# GTA IV for the Switch: your options. Every other setting is built into the NRO (app/gta4_switch_defaults.toml).
+# Delete this file and the game writes it again at the next start. A key of the built-in settings written here
+# overrides it (test runs).
+
+# Samples per pixel of the game's edge smoothing (MSAA): 1 (off, the default), 2 or 4. With 1 the renderer's SMAA
+# smooths the edges instead.
+msaa_level = 1
+
+# Frame rate cap: "Off" (the game's own pacing) or "30".
+frame_cap = "Off"
+
+# Face buttons by position, as on an Xbox pad (bottom = A). false = by letter.
+input_xbox_layout = true
+
+# Button mapping: the Switch buttons that press each Xbox button. Empty = default.
+# Buttons: A B X Y L R ZL ZR PLUS MINUS LSTICK RSTICK UP DOWN LEFT RIGHT SL SR NONE. Example: a = "B, ZR"
+
+[input_p1]
+a = ""
+b = ""
+x = ""
+y = ""
+lb = ""
+rb = ""
+lt = ""
+rt = ""
+start = ""
+back = ""
+ls = ""
+rs = ""
+up = ""
+down = ""
+left = ""
+right = ""
