@@ -71,3 +71,8 @@ confronto parte da lì con **una sola** differenza (09 §13).
 `renut_nx_ultimate_base`. Checkpoint `checkpoint/pre-ultimate-base-2026-11-12` (= `7688d55`, il commit della run 72
 pronta). Audit, mappa delle differenze e piano per fasi U0-U13: `20-ultimate-base-migration.md`. La run 72 resta valida
 come controllo del vecchio albero; i run sulla base avranno la colonna "Base: ultimate `<commit>`".
+
+**2026-11-13, U4b sulla base: solo PC (D3D12), nessun run su console.** Primo avvio completo di GTA IV sulla Ultimate
+Base (`renut.exe` della base, i 23 hook GTA IV): 120 s fino alla scena d'apertura, giusta come nelle catture R3, 60 fps
+sul PC; nessun errore di memoria fisica, nessuna chiamata a guest 0. Dettagli e problemi aperti (autoverifica dello
+stack forwarding: da risolvere prima di ogni build Switch): `20-ultimate-base-migration.md` §2.7.

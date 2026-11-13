@@ -19,7 +19,11 @@ namespace renut::gpu::records {
 namespace {
 
 // Records are small (headers + a few host pointers); 64 MiB is ample.
-constexpr u32 kHeapSize = 64u << 20;
+// theft4 (2026-11-12, as the working renderer since 2026-11-11): GTA IV fills the console's 512 MB of physical memory;
+// with 64 MiB taken here its own physical allocations failed at boot (this base's first PC run, 2026-11-12:
+// "PhysicalHeap::Alloc unable to alloc physical memory", then a call to guest 0). The heap holds the records of
+// natively created resources, which GTA IV's path does not create (its resources stay its own Direct3D's): 1 MiB.
+constexpr u32 kHeapSize = 1u << 20;
 
 std::mutex g_heap_mutex;  // o1heap is not internally synchronised
 O1HeapInstance *g_heap = nullptr;

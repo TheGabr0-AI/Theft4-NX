@@ -10382,6 +10382,8 @@ int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayCon
     if (declaration_va) {
       if (declaration_va != g_last_declaration_va) {
         g_last_declaration = FindRecord<VertexDeclarationRecord>(declaration_va, RecordKind::VertexDeclaration);
+        if (!g_last_declaration)  // theft4: or one GTA IV's own Direct3D created (d3d/hooks/shader.cpp)
+          g_last_declaration = const_cast<VertexDeclarationRecord *>(FindGuestDeclarationLocked(declaration_va));
         g_last_declaration_va = g_last_declaration ? declaration_va : 0;
       }
       declaration = g_last_declaration_va == declaration_va ? g_last_declaration : nullptr;
@@ -11994,6 +11996,8 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
     if (declaration_va != g_last_declaration_va) {
       g_last_declaration =
           FindRecord<VertexDeclarationRecord>(declaration_va, RecordKind::VertexDeclaration);
+      if (!g_last_declaration)  // theft4: or one GTA IV's own Direct3D created (d3d/hooks/shader.cpp)
+        g_last_declaration = const_cast<VertexDeclarationRecord *>(FindGuestDeclarationLocked(declaration_va));
       g_last_declaration_va = g_last_declaration ? declaration_va : 0;
     }
     declaration = g_last_declaration_va == declaration_va ? g_last_declaration : nullptr;

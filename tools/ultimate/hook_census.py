@@ -30,9 +30,9 @@ CODE_SUFFIXES = ('.cpp', '.cc', '.c', '.h', '.hpp', '.inc')
 HOOK_MACROS = {
     # macro: liveness
     'BANJO_RENUT_HOOK': 'katamari_renut_hooks',
-    'BANJO_RENUT_HOOK_SHARED': 'katamari_renut_hooks',
+    'BANJO_RENUT_HOOK_SHARED': 'never',  # only renut_native_sub_X, for another renderer's hook: no hook at sub_X
     'BANJO_RENUT_HOOK_RAW': 'katamari_renut_hooks',
-    'BANJO_RENUT_HOOK_RAW_SHARED': 'katamari_renut_hooks',
+    'BANJO_RENUT_HOOK_RAW_SHARED': 'never',  # the same
     'BANJO_RENUT_UNHOOKED_HOOK': 'never',
     'BANJO_RENUT_UNHOOKED_HOOK_SHARED': 'never',
     'BANJO_RENUT_UNHOOKED_HOOK_RAW': 'never',
@@ -217,11 +217,15 @@ def main():
     compiled = compiled_files(ult)
     built = lambda p: os.path.normcase(p) in compiled
 
-    bindings, reviewed = {}, {}
+    bindings, reviewed, reviewed_files = {}, {}, {}
     if os.path.isfile(a.bindings):
         for row in csv.DictReader(l for l in open(a.bindings, encoding='utf-8') if not l.startswith('#')):
+            kind = row['kind'].strip()
+            if kind == 'reviewed-file':  # every non-hook address in that file, for the reason given
+                reviewed_files[row['address'].strip().replace('\\', '/')] = row
+                continue
             addr = row['address'].strip().upper().removeprefix('0X')
-            (reviewed if row['kind'].strip() == 'reviewed' else bindings)[addr] = row
+            (reviewed if kind == 'reviewed' else bindings)[addr] = row
 
     out, problems = [], []
     rel = lambda p: os.path.relpath(p, os.path.dirname(ult)).replace('\\', '/')
@@ -252,7 +256,8 @@ def main():
     out.append('')
     out.append('== other guest addresses in code (address, GTA IV function start?, reviewed?, place, text)')
     for o in sorted(others, key=lambda o: (o['addr'], o['file'], o['line'])):
-        tag = 'binding' if o['addr'] in bindings else ('reviewed' if o['addr'] in reviewed else '-')
+        tag = 'binding' if o['addr'] in bindings else ('reviewed' if o['addr'] in reviewed else (
+            'rev-file' if rel(o['file']) in reviewed_files else '-'))
         out.append(f"{o['addr']} {'start' if o['addr'] in starts else 'no-start':<8} {tag:<8} "
                    f"{'built' if built(o['file']) else 'not-built':<9} {rel(o['file'])}:{o['line']}  {o['text']}")
         if tag == '-' and built(o['file']):
@@ -272,7 +277,8 @@ def main():
     if a.report:
         open(a.report, 'w', encoding='utf-8', newline='\n').write(text)
     print(f'hook_census: {len(hooks)} hook definitions ({len(live)} live), {len(others)} other addresses in code, '
-          f'{len(bindings)} bindings, {len(reviewed)} reviewed, {len(starts)} function starts; problems {len(problems)}'
+          f'{len(bindings)} bindings, {len(reviewed)} reviewed addresses, {len(reviewed_files)} reviewed files, '
+          f'{len(starts)} function starts; problems {len(problems)}'
           + (f' -> {a.report}' if a.report else ''))
     if a.strict and problems:
         sys.exit(1)

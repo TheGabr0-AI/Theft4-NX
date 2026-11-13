@@ -527,6 +527,40 @@ void ApplyBindingLocked(u32 id) {
   shader->applied_binding = id;
 }
 
+// theft4 (2026-11-12): the game's own vertex declarations (resources.h).
+namespace {
+std::unordered_map<u32, std::unique_ptr<VertexDeclarationRecord>> g_guest_declarations;
+}  // namespace
+
+const VertexDeclarationRecord *FindGuestDeclarationLocked(u32 declaration_va) {
+  auto it = g_guest_declarations.find(declaration_va);
+  return it != g_guest_declarations.end() ? it->second.get() : nullptr;
+}
+
+void ReleaseGuestDeclarationLocked(u32 declaration_va) {
+  auto it = g_guest_declarations.find(declaration_va);
+  if (it == g_guest_declarations.end())
+    return;
+  InvalidateFastDrawForRecordLocked(it->second.get());  // as DestroyVertexDeclarationRecord: a fast draw may hold it
+  ForgetVertexDeclarationLocked(declaration_va);
+  g_guest_declarations.erase(it);
+}
+
+// The host side of a declaration the game's Direct3D made from pElements (D3DVERTEXELEMENT9[], up to D3DDECL_END:
+// Stream 0xFF), in order with the draws.
+void RegisterGuestDeclaration(u32 declaration_va, const GuestVertexElement *elements) {
+  auto declaration = std::make_shared<VertexDeclarationRecord>();
+  declaration->x360.resource.Common = u32(d3d::ResourceType::VertexDeclaration);
+  declaration->self_va = declaration_va;
+  for (u32 i = 0; i < 64 && u32(elements[i].Stream) != 0xFF && u32(elements[i].Type) != kDeclTypeUnused; ++i)
+    declaration->elements.push_back(elements[i]);
+  BuildDeclarationLayout(*declaration);
+  render_thread::Queue([declaration_va, declaration] {
+    ReleaseGuestDeclarationLocked(declaration_va);
+    g_guest_declarations[declaration_va] = std::make_unique<VertexDeclarationRecord>(*declaration);
+  });
+}
+
 } // namespace renut::gpu
 
 namespace {
@@ -796,9 +830,47 @@ void D3DVertexShader_Bind_hook(u32 shader_va, u32 declaration_va, mapped_u32 str
 
 } // namespace
 
-BANJO_RENUT_HOOK(sub_824D6120, D3DDevice_CreateVertexShader_hook);  // D3DDevice_CreateVertexShader  // katamari-nx: N&B sub_826377C0, signature 0.85 (next 0.55)
-BANJO_RENUT_HOOK(sub_824D6010, D3DDevice_CreatePixelShader_hook);  // D3DDevice_CreatePixelShader  // katamari-nx: N&B sub_826375D8, D3DDevice_CreatePixelShader: CreateVertexShader takes sub_824D6120 (0.85); this one's next best, 0.66
-BANJO_RENUT_HOOK(sub_824D4C50, D3DDevice_CreateVertexDeclaration_hook);  // D3DDevice_CreateVertexDeclaration  // katamari-nx: N&B sub_826379A0, signature 0.77 (next 0.47)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824D6120, D3DDevice_CreateVertexShader_hook);  // D3DDevice_CreateVertexShader  // katamari-nx: N&B sub_826377C0, signature 0.85 (next 0.55)  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824D6010, D3DDevice_CreatePixelShader_hook);  // D3DDevice_CreatePixelShader  // katamari-nx: N&B sub_826375D8, D3DDevice_CreatePixelShader: CreateVertexShader takes sub_824D6120 (0.85); this one's next best, 0.66  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824D4C50, D3DDevice_CreateVertexDeclaration_hook);  // D3DDevice_CreateVertexDeclaration  // katamari-nx: N&B sub_826379A0, signature 0.77 (next 0.47)  // theft4: not hooked on GTA IV (Katamari's address)
 BANJO_RENUT_UNHOOKED_HOOK(sub_8263FBD0, D3DVertexShader_Bind_hook);  // D3DVertexShader_Bind  // katamari-nx: not hooked (D3DVertexShader_Bind: no clear counterpart (sig 0.35/0.28))
-BANJO_RENUT_HOOK(sub_824D4838, XGRegisterVertexShader_hook);  // XGRegisterVertexShader  // katamari-nx: N&B sub_826376C8, signature 0.91 (next 0.32)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824D4838, XGRegisterVertexShader_hook);  // XGRegisterVertexShader  // katamari-nx: N&B sub_826376C8, signature 0.91 (next 0.32)  // theft4: not hooked on GTA IV (Katamari's address)
 BANJO_RENUT_UNHOOKED_HOOK(sub_826375A0, XGRegisterPixelShader_hook);  // XGRegisterPixelShader  // katamari-nx: not hooked (XGRegisterPixelShader: no counterpart (sig 0.26))
+
+// ---------------------------------------------------------------------------------------------------------------------
+// theft4 (2026-11-12, docs/switch-port/20 U4b): GTA IV's shader and declaration creation (European base, Direct3D
+// 2.0.6274), as the renderer GTA IV ran on the console (runs 66-72) hooks it: GTA IV's own function makes the object
+// (D3DDevice_CreateVertexShader / CreatePixelShader take the microcode container, whose physical part follows the
+// virtual part, and return the shader object with a copy of the container at the offsets N&B's objects have it:
+// +0x368 vertex, sub_829D1818 copies to +872; +0x28 pixel, sub_829D1708 copies to +40), then the host side is
+// registered (RegisterGuestShader by the container's hash; RegisterGuestDeclaration). The base's native bodies, which
+// make the objects themselves as records, are for games whose state setters Renut hooks too; GTA IV's stay its own.
+// D3DVertexShader *D3DDevice_CreateVertexShader(const DWORD *pFunction) [sub_829D1818]
+BANJO_RENUT_HOOK_RAW(sub_829D1818) {
+  const u32 function_va = ctx.r3.u32;
+  const auto *header = GuestPtr<const d3d::ShaderContainer>(function_va);
+  const u32 physical = header ? function_va + u32(header->virtualSize) : 0;
+  __imp__sub_829D1818(ctx, base);
+  if (const u32 shader = ctx.r3.u32; shader && physical)
+    RegisterGuestShader(shader, physical, false);
+}
+
+// D3DPixelShader *D3DDevice_CreatePixelShader(const DWORD *pFunction) [sub_829D1708]
+BANJO_RENUT_HOOK_RAW(sub_829D1708) {
+  const u32 function_va = ctx.r3.u32;
+  const auto *header = GuestPtr<const d3d::ShaderContainer>(function_va);
+  const u32 physical = header ? function_va + u32(header->virtualSize) : 0;
+  __imp__sub_829D1708(ctx, base);
+  if (const u32 shader = ctx.r3.u32; shader && physical)
+    RegisterGuestShader(shader, physical, true);
+}
+
+// D3DVertexDeclaration *D3DDevice_CreateVertexDeclaration(const D3DVERTEXELEMENT9*) [sub_829D1598; SA2 sub_8255E198;
+// N&B 0x8264EA90]: counts the elements up to Stream 0xFF, allocates and fills the object (sub_829D14A8).
+BANJO_RENUT_HOOK_RAW(sub_829D1598) {
+  const u32 elements_va = ctx.r3.u32;
+  __imp__sub_829D1598(ctx, base);
+  const u32 declaration = ctx.r3.u32;
+  if (const auto *elements = declaration ? GuestPtr<const GuestVertexElement>(elements_va) : nullptr)
+    RegisterGuestDeclaration(declaration, elements);
+}

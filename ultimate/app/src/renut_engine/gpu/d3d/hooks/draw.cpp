@@ -59,7 +59,9 @@ constexpr u32 kRenderStateHiZWriteEnable = 97;
 // Guest memory Begin*Vertices hands out; the game writes one draw's vertices
 // into it before its next D3D call. One per device, as devices record on
 // different threads.
-constexpr u32 kVerticesScratchSize = 4u << 20;
+// theft4 (2026-11-13, as the working renderer since 2026-11-11): guest physical memory is short in GTA IV
+// (guest_records.cpp); one inline draw's vertices fit in 1 MiB.
+constexpr u32 kVerticesScratchSize = 1u << 20;
 std::mutex g_vertices_scratch_mutex;  // devices call from their own threads
 std::unordered_map<u32, u32> g_vertices_scratch;
 
@@ -607,30 +609,177 @@ void D3DDevice_SetPixelShader_hook(u32 device, u32 shader) {
 
 } // namespace
 
-BANJO_RENUT_HOOK(sub_824D9D08, D3DDevice_DrawVertices_hook);  // D3DDevice_DrawVertices  // katamari-nx: N&B sub_821FB880, signature 0.90 (next 0.77)
-BANJO_RENUT_HOOK(sub_824DA0F0, D3DDevice_DrawIndexedVertices_hook);  // D3DDevice_DrawIndexedVertices  // katamari-nx: N&B sub_8263F358, signature 0.87 (next 0.78)
-BANJO_RENUT_HOOK(sub_824DA9C0, D3DDevice_DrawIndexedTessellatedVertices_hook);  // D3DDevice_DrawIndexedTessellatedVertices  // katamari-nx: N&B sub_821FF958, signature 0.86 (next 0.65)
-BANJO_RENUT_HOOK(sub_824D9758, D3DDevice_DrawVerticesUP_hook);  // D3DDevice_DrawVerticesUP  // katamari-nx: N&B sub_821FD698, D3DDevice_DrawVerticesUP: BeginVertices-style reserve, reads VerticesRingEnd +13428 (N&B +13444) and the flags +10940; sig 0.69/0.55
+BANJO_RENUT_UNHOOKED_HOOK(sub_824D9D08, D3DDevice_DrawVertices_hook);  // D3DDevice_DrawVertices  // katamari-nx: N&B sub_821FB880, signature 0.90 (next 0.77)  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824DA0F0, D3DDevice_DrawIndexedVertices_hook);  // D3DDevice_DrawIndexedVertices  // katamari-nx: N&B sub_8263F358, signature 0.87 (next 0.78)  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824DA9C0, D3DDevice_DrawIndexedTessellatedVertices_hook);  // D3DDevice_DrawIndexedTessellatedVertices  // katamari-nx: N&B sub_821FF958, signature 0.86 (next 0.65)  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824D9758, D3DDevice_DrawVerticesUP_hook);  // D3DDevice_DrawVerticesUP  // katamari-nx: N&B sub_821FD698, D3DDevice_DrawVerticesUP: BeginVertices-style reserve, reads VerticesRingEnd +13428 (N&B +13444) and the flags +10940; sig 0.69/0.55  // theft4: not hooked on GTA IV (Katamari's address)
 BANJO_RENUT_UNHOOKED_HOOK(sub_8263F2B8, D3DDevice_DrawIndexedVerticesUP_hook);  // D3DDevice_DrawIndexedVerticesUP  // katamari-nx: not hooked (D3DDevice_DrawIndexedVerticesUP: no counterpart found (sig 0.32))
-BANJO_RENUT_HOOK(sub_824D92B8, D3DDevice_BeginVertices_hook);  // D3DDevice_BeginVertices  // katamari-nx: N&B sub_821FBD30, signature 0.87 (next 0.70)
-BANJO_RENUT_HOOK(sub_824F3248, D3DDevice_ClearF_hook);  // D3DDevice_ClearF  // katamari-nx: N&B sub_8224F110, D3DDevice_ClearF: sig 0.71/0.40; reads the targets +12432.. and tiling surfaces +12720.. as N&B +12448 / +12736
-BANJO_RENUT_HOOK(sub_824F3370, D3DDevice_Clear_hook);  // D3DDevice_Clear  // katamari-nx: N&B sub_8224F238, signature 0.84 (next 0.36)
-BANJO_RENUT_HOOK(sub_824F12B8, D3DDevice_Resolve_hook);  // D3DDevice_Resolve  // katamari-nx: N&B sub_821FC7A0, signature 0.78 (next 0.33)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824D92B8, D3DDevice_BeginVertices_hook);  // D3DDevice_BeginVertices  // katamari-nx: N&B sub_821FBD30, signature 0.87 (next 0.70)  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824F3248, D3DDevice_ClearF_hook);  // D3DDevice_ClearF  // katamari-nx: N&B sub_8224F110, D3DDevice_ClearF: sig 0.71/0.40; reads the targets +12432.. and tiling surfaces +12720.. as N&B +12448 / +12736  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824F3370, D3DDevice_Clear_hook);  // D3DDevice_Clear  // katamari-nx: N&B sub_8224F238, signature 0.84 (next 0.36)  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824F12B8, D3DDevice_Resolve_hook);  // D3DDevice_Resolve  // katamari-nx: N&B sub_821FC7A0, signature 0.78 (next 0.33)  // theft4: not hooked on GTA IV (Katamari's address)
 BANJO_RENUT_UNHOOKED_HOOK_SHARED(sub_82246798, D3DDevice_BeginTiling_hook);  // D3DDevice_BeginTiling: N&B's update form, see below
 BANJO_RENUT_UNHOOKED_HOOK(sub_821E17C0, D3DDevice_EndTiling_hook);  // D3DDevice_EndTiling: N&B's update form, see below
 // katamari-nx (2026-10-30): XDK 2.0.5632's BeginTiling (sub_824EFBC8: it stores the count at TileCount +0x31C4 and
 // the targets at TilingSurfaces +0x31B0, where the zones put N&B's fields; the game calls it at 0x8271E62C) and
 // EndTiling (sub_824F0150: sig 0.66/0.36, resolves through Resolve sub_824F12B8; called at 0x8272F2E0..0x8272F384),
 // with their full arguments read from the registers (the float argument takes r8's place: ClearStencil is r9).
-BANJO_RENUT_HOOK_RAW(sub_824EFBC8) {
+BANJO_RENUT_UNHOOKED_HOOK_RAW(sub_824EFBC8) {  // theft4: not hooked on GTA IV (Katamari's address)
   BeginTilingImpl(ctx.r3.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r4.u32, float(ctx.f1.f64), ctx.r9.u32);
 }
-BANJO_RENUT_HOOK_RAW(sub_824F0150) {
+BANJO_RENUT_UNHOOKED_HOOK_RAW(sub_824F0150) {  // theft4: not hooked on GTA IV (Katamari's address)
   ctx.r3.u64 = EndTilingImpl(ctx.r3.u32, true, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, float(ctx.f1.f64),
                              ctx.r9.u32, ctx.r10.u32);
 }
 BANJO_RENUT_UNHOOKED_HOOK_SHARED(sub_82237FE8, D3DDevice_BeginExport_hook);  // D3DDevice_BeginExport  // katamari-nx: not hooked (D3DDevice_BeginExport: XDK 2.0.5632 has no memexport functions (as feedingfrenzy2-nx found for 6534))
 BANJO_RENUT_UNHOOKED_HOOK_SHARED(sub_82237D80, D3DDevice_EndExport_hook);  // D3DDevice_EndExport  // katamari-nx: not hooked (D3DDevice_EndExport: as above)
-BANJO_RENUT_HOOK(sub_824E9428, D3DDevice_Present_hook);  // D3DDevice_Present  // katamari-nx: N&B sub_826352B8, D3DDevice_Present: SynchronizeToPresentationInterval sub_824E89E8, Resolve sub_824F12B8, KickOff sub_824E0298, then Swap sub_824E8E90; sig 0.43/0.26
-BANJO_RENUT_HOOK(sub_824D4930, D3DDevice_SetVertexShader_hook);  // D3DDevice_SetVertexShader  // katamari-nx: N&B sub_821F90D8, signature 0.87 (next 0.75)
-BANJO_RENUT_HOOK(sub_824D4630, D3DDevice_SetPixelShader_hook);  // D3DDevice_SetPixelShader  // katamari-nx: N&B sub_821F58A8, signature 0.85 (next 0.73)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824E9428, D3DDevice_Present_hook);  // D3DDevice_Present  // katamari-nx: N&B sub_826352B8, D3DDevice_Present: SynchronizeToPresentationInterval sub_824E89E8, Resolve sub_824F12B8, KickOff sub_824E0298, then Swap sub_824E8E90; sig 0.43/0.26  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824D4930, D3DDevice_SetVertexShader_hook);  // D3DDevice_SetVertexShader  // katamari-nx: N&B sub_821F90D8, signature 0.87 (next 0.75)  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824D4630, D3DDevice_SetPixelShader_hook);  // D3DDevice_SetPixelShader  // katamari-nx: N&B sub_821F58A8, signature 0.85 (next 0.73)  // theft4: not hooked on GTA IV (Katamari's address)
+
+// ---------------------------------------------------------------------------------------------------------------------
+// theft4 (2026-11-12, docs/switch-port/20 U4b): GTA IV's draw-side bindings, from the renderer GTA IV ran on the
+// console (runs 66-72; thirdparty/renut's hooks/draw.cpp, R2-R3), unchanged but for the hook forms (the base's
+// BANJO_RENUT_HOOK_SHARED defines no hook at the address: the plain form). DrawVertices, DrawIndexedVertices and
+// BeginVertices bind the base's own bodies (the same as the working renderer's, compared line by line); ClearF,
+// Resolve, BeginTiling and EndTiling queue the host work, then run GTA IV's own function for the device work, where
+// the base's bodies do it natively in N&B's layout (native::Clear, native::Resolve, BeginTilingImpl).
+
+// Clear and Resolve: the host work is queued from the device as it is at the call (the same snapshot N&B's hooks
+// take), then SA2's own function does the device work N&B's hooks did natively (d3d_native.h is N&B's layout): its
+// packets go into the ring sink, its inline data into the scratch (device.cpp), its fences through the hooked
+// BlockOnFence and KickOff. SA2's Clear (sub_82563AB0) calls ClearF once per rect, and the game calls ClearF directly
+// too, so ClearF is the hook.
+
+namespace {
+
+void QueueHostClear(u32 device, u32 flags, const ClearRect *rect, const float color[4], float z, u32 stencil) {
+  if (IsRecordingCommandBuffer(device))
+    RecordClear(device, flags, rect, color, z, stencil);
+  else if (Active())
+    QueueClear(device, flags, rect, color, z, stencil);
+}
+
+void QueueHostResolve(u32 device, u32 flags, const ClearRect *rect, u32 dest_texture, i32 dest_x, i32 dest_y,
+                      u32 dest_level, u32 dest_slice, u32 color_va, float clear_z, u32 clear_stencil) {
+  float color[4] = {0, 0, 0, 0};
+  const bool has_color = color_va && ReadVector4(color_va, color);
+  if (IsRecordingCommandBuffer(device)) {
+    RecordResolve(device, flags, rect, dest_texture, dest_x, dest_y, dest_level, dest_slice,
+                  has_color ? color : nullptr, clear_z, clear_stencil);
+  } else if (Active()) {
+    QueueResolve(device, flags, rect, dest_texture, dest_x, dest_y, dest_level, dest_slice,
+                 has_color ? color : nullptr, clear_z, clear_stencil);
+  }
+}
+
+}  // namespace
+
+// theft4 (2026-11-10): GTA IV's addresses (European base, Direct3D 2.0.6274; SA2's and N&B's in brackets). GTA IV has
+// no D3DDevice_DrawVerticesUP of its own: its inline draws are BeginVertices and the three-instruction EndVertices
+// (sub_829CCAB0, which restores m_pRing from kDeviceOffsetVerticesRingEnd).
+BANJO_RENUT_HOOK(sub_829CCAC0, D3DDevice_DrawVertices_hook);  // D3DDevice_DrawVertices [sub_82565C60; 0x8222C7A0]
+BANJO_RENUT_HOOK(sub_829CCEA8, D3DDevice_DrawIndexedVertices_hook);  // D3DDevice_DrawIndexedVertices [sub_82566078; 0x826567C8]
+BANJO_RENUT_HOOK(sub_829CC610, D3DDevice_BeginVertices_hook);  // D3DDevice_BeginVertices [sub_82565758; 0x8222CC50]
+
+namespace {
+// Set while GTA IV's BeginTiling runs: its ClearF is of one tile's worth of EDRAM, which on the host is the whole
+// tiled target (Renut's BeginTiling hook for N&B: "whole_target").
+thread_local bool t_begin_tiling_clear = false;
+}  // namespace
+
+// void D3DDevice_ClearF(D3DDevice*, DWORD Flags, const D3DRECT *pRect, const D3DVECTOR4 *pColor, float Z,
+//     DWORD Stencil) [sub_829D49A0; SA2 sub_82563978; N&B 0x822811A0]: Z in f1 (r7's slot), Stencil in r8. BeginTiling
+// (sub_829CD470) calls it with flags 0x3F.
+BANJO_RENUT_HOOK_RAW(sub_829D49A0) {
+  const u32 device = ctx.r3.u32, flags = ctx.r4.u32, rect_va = ctx.r5.u32, color_va = ctx.r6.u32;
+  ClearRect rect;
+  const bool has_rect = !t_begin_tiling_clear && rect_va && ReadRect(rect_va, rect);
+  float color[4] = {0, 0, 0, 0};
+  if (color_va)
+    ReadVector4(color_va, color);
+  QueueHostClear(device, flags, has_rect ? &rect : nullptr, color, float(ctx.f1.f64), ctx.r8.u32);
+  __imp__sub_829D49A0(ctx, base);
+}
+
+// void D3DDevice_Resolve(D3DDevice*, DWORD Flags, const D3DRECT *pSourceRect, D3DBaseTexture *pDestTexture,
+//     const D3DPOINT *pDestPoint, UINT DestLevel, UINT DestSliceOrFace, const D3DVECTOR4 *pClearColor, float ClearZ,
+//     DWORD ClearStencil, const D3DRESOLVE_PARAMETERS *pParameters) [sub_829CB7C8; SA2 sub_825656F8; N&B 0x8222D6C8]:
+// ClearZ in f1, ClearStencil and pParameters in the caller's argument words at +92 and +100 (EndTiling stores them
+// there before its calls). The game's eight callers and EndTiling's per-tile resolves come here.
+BANJO_RENUT_HOOK_RAW(sub_829CB7C8) {
+  const u32 device = ctx.r3.u32, flags = ctx.r4.u32, rect_va = ctx.r5.u32, dest_texture = ctx.r6.u32;
+  const u32 point_va = ctx.r7.u32, dest_level = ctx.r8.u32, dest_slice = ctx.r9.u32, color_va = ctx.r10.u32;
+  const u32 clear_stencil = LoadU32(ctx.r1.u32 + 92);
+  ClearRect rect;
+  bool has_rect = rect_va && ReadRect(rect_va, rect);
+  // theft4 (2026-11-11): GTA IV's last resolve of each 3D frame (the frame into its front buffer) passes
+  // (0,0)-(-1,-1), the right and bottom edges as unsigned: to the surface's edge. Taken as signed, nothing was copied.
+  // The renderer clamps the rect to the host target (ResolveLocked), so a negative edge becomes "to the edge" here and
+  // nothing else changes: while tiling the rect is in screen coordinates (EndTiling's second and third tiles are
+  // (0,256)-(1280,512) and (0,512)-(1280,768)), larger than the tile-sized guest surface, and the host target covers
+  // every tile. Clipping it to the guest surface (round 2) emptied those two tiles' resolves.
+  if (has_rect) {
+    rect.x1 = std::max(rect.x1, 0);
+    rect.y1 = std::max(rect.y1, 0);
+    if (rect.x2 < 0)
+      rect.x2 = 0x7FFFFFFF;
+    if (rect.y2 < 0)
+      rect.y2 = 0x7FFFFFFF;
+    if (rect.x1 == 0 && rect.y1 == 0 && rect.x2 == 0x7FFFFFFF && rect.y2 == 0x7FFFFFFF)
+      has_rect = false;  // the whole surface
+  }
+  i32 dest_x = 0, dest_y = 0;
+  if (const auto *p = point_va ? GuestPtr<const be_u32>(point_va) : nullptr) {
+    dest_x = i32(u32(p[0]));
+    dest_y = i32(u32(p[1]));
+  }
+  QueueHostResolve(device, flags, has_rect ? &rect : nullptr, dest_texture, dest_x, dest_y, dest_level, dest_slice,
+                   color_va, float(ctx.f1.f64), clear_stencil);
+  __imp__sub_829CB7C8(ctx, base);
+}
+
+// void D3DDevice_BeginTiling(D3DDevice*, DWORD Flags, DWORD Count, const D3DRECT *pTileRects,
+//     const D3DVECTOR4 *pClearColor, float ClearZ, DWORD ClearStencil) [sub_829CD470; N&B 0x822788A0]. GTA IV draws its
+// 3D scene between BeginTiling and EndTiling (docs/switch-port/18, section 6). The surfaces bound from here to
+// EndTiling are backed by targets covering every tile, and the tiles' draws are drawn once, as Renut does for N&B; the
+// device work (the tile words, the predication, the clear's packets) stays GTA IV's own function.
+BANJO_RENUT_HOOK_RAW(sub_829CD470) {
+  const u32 device = ctx.r3.u32, count = ctx.r5.u32, rects_va = ctx.r6.u32;
+  if (!IsRecordingCommandBuffer(device)) {
+    std::vector<ClearRect> tiles;
+    u32 width = 0, height = 0;
+    for (u32 i = 0; i < count && i < 15; ++i) {
+      ClearRect rect;
+      if (!ReadRect(rects_va + i * 16, rect))
+        break;
+      tiles.push_back(rect);
+      width = std::max(width, u32(rect.x2));
+      height = std::max(height, u32(rect.y2));
+    }
+    FlushDeferredVertices(device);
+    render_thread::Queue([tiles, width, height] {
+      SetTilingExtentLocked(width, height);
+      SetTilesLocked(tiles.data(), u32(tiles.size()));
+    });
+  }
+  t_begin_tiling_clear = true;
+  __imp__sub_829CD470(ctx, base);
+  t_begin_tiling_clear = false;
+}
+
+// HRESULT D3DDevice_EndTiling(D3DDevice*, DWORD ResolveFlags, const D3DRECT *pResolveRects,
+//     D3DBaseTexture *pDestTexture, const D3DVECTOR4 *pClearColor, float ClearZ, DWORD ClearStencil,
+//     const D3DRESOLVE_PARAMETERS *pParameters) [sub_829CD908; N&B 0x82212328]. GTA IV's own function resolves each
+// tile's rect through the hooked Resolve (the host reads each rect from the full-size target) and ends in the hooked
+// tail (hooks/device.cpp, sub_829DDF28). After it the tiling extent is off.
+BANJO_RENUT_HOOK_RAW(sub_829CD908) {
+  const u32 device = ctx.r3.u32;
+  __imp__sub_829CD908(ctx, base);
+  if (!IsRecordingCommandBuffer(device)) {
+    render_thread::Queue([] {
+      SetTilingExtentLocked(0, 0);
+      SetTilesLocked(nullptr, 0);
+    });
+  }
+}

@@ -155,4 +155,11 @@ plume::RenderShader *GetHostShader(ShaderRecord *shader);
 void DestroyShaderRecord(ShaderRecord *shader);
 void DestroyVertexDeclarationRecord(VertexDeclarationRecord *declaration);
 
+// theft4 (2026-11-12, from sa2-nx's renderer, which GTA IV ran on the console): the vertex declarations GTA IV's own
+// Direct3D creates (sub_829D1598), by object address: their host side, made when the game makes them
+// (d3d/hooks/shader.cpp), found by the draws where FindRecord finds none, dropped with the resource. Requires
+// State().mutex (render thread).
+const VertexDeclarationRecord *FindGuestDeclarationLocked(u32 declaration_va);
+void ReleaseGuestDeclarationLocked(u32 declaration_va);
+
 } // namespace renut::gpu

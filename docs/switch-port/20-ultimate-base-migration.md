@@ -177,6 +177,67 @@ U4 parte da qui: le zone della coda (+8 / +16 rispetto a Katamari) si riprendono
   `widescreen.cpp` 11, `banjo_reverb_native.cpp` 8, ...) rivisti uno per uno; rigenerare (`regenerate.ps1`, manifest
   nuovo) e ripetere i censimenti; poi la build PC (U4 finisce col primo Swap sul PC).
 
+### 2.7 U4b: i 23 hook legati, la prima build PC, il primo avvio completo (2026-11-12 notte / 2026-11-13)
+
+- **Codice portato nella base** (ogni pezzo dal renderer che GTA IV ha fatto girare sulla console, runs 66-72):
+  `device.cpp`: `Gta4CreateDevice` (il percorso di sa2-nx con i passi dell'hardware path di 6274), `Gta4NewSegment_hook`,
+  i raw `829D77D8` / `829DDF28`, i valori GTA IV delle costanti del percorso (sink 1 MiB, side buffer 16.712, −1 a
+  21.540 / 21.544 / 14.920, qword `0x82A9E568`, sezioni critiche 14.928 / 14.956, frequenza 21.568, 41 parole a 21.680,
+  slot `0x82000768`), `SetFence` (21.512 / 14.904), Swap (conteggio dei flip a 16.552, rampa gamma a 14.988),
+  `GetCurrentThreadId` = `sub_829A27C0` (l'unica funzione di GTA IV con le stesse tre istruzioni); `draw.cpp`:
+  `QueueHostClear` / `QueueHostResolve` e i raw di ClearF, Resolve, BeginTiling, EndTiling; `shader.cpp`: il registro
+  delle dichiarazioni create dal gioco (`FindGuestDeclarationLocked` / `ReleaseGuestDeclarationLocked`, che invalida
+  anche le cache di fast-draw della base) e i raw di CreateVertexShader / CreatePixelShader / CreateVertexDeclaration;
+  `resource.cpp`: il raw di D3DResource_Destroy; `render/draw.cpp`: le due ricerche della dichiarazione trovano anche
+  quelle del gioco; `guest_records.cpp`: heap dei record 1 MiB invece di 64.
+- **Trappola trovata:** nella base `BANJO_RENUT_HOOK_SHARED` non definisce l'hook a `sub_X` (solo `renut_native_sub_X`
+  per un altro renderer); il nostro albero lo ridefiniva. I binding GTA IV usano la forma semplice; `hook_census.py`
+  conta le forme `_SHARED` come "nessun hook".
+- **Verifiche:** confronto corpo per corpo (KickOff, KickOffSegment, BeginRingBig, RingBufferDeviceAllocate,
+  AllocateInlineData, CBlocker_Check, DrawVertices, DrawIndexedVertices, BeginVertices, CreateVertexShader_hook /
+  PixelShader / VertexDeclaration della base: identici ai nostri); `hook_census.py --strict` **0 problemi** (23 hook vivi,
+  ognuno su un inizio di funzione, nessun altro; ogni indirizzo 82xxxxxx rimasto nel codice compilato rivisto, con il
+  motivo, in `gta4_hook_bindings.csv`: 22 indirizzi, 7 file); rigenerazione completa con il manifest
+  `ultimate-manifests/gen-u4b-hooks.json` (hash combinato `08e5df6f…`, `direct` rispetta 600 indirizzi): **0 chiamate
+  dirette** del codice generato verso i 23 indirizzi (KickOff: 80 chiamate tutte attraverso l'hook); test del layout 0
+  differenze; la build stessa ha rigenerato e trovato "334 di 334 file invariati".
+- **Build PC** (`tools/ultimate/build_pc.bat`, `tools/ultimate/build_glslang.bat`): mancavano nella base i binari DXC
+  (`dxc-bin/bin`, `lib`: esclusi dal suo `.gitignore`; ora copiati dal sottomodulo `tools/XenosRecomp/thirdparty/dxc-bin`
+  da `fetch_sdk_thirdparty.ps1`) e `glslangValidator`; la cartella degli shader è fissa in `ultimate/out/renut_shader_dump`
+  (una junction ai contenitori). **`renut.exe` collegato** (70,7 MB, 905 warning), ma con la tabella degli shader **vuota**:
+  una prima configurazione fallita aveva lasciato la cartella vuota (ora `build_pc.bat` si ferma in quel caso).
+- **Primo avvio PC** (D3D12, 7 s, quella build): device GTA IV creato dall'hook (`Guest D3D device (type 1)` e `(type
+  2)`), render thread avviato, gli hook di creazione degli shader registrano (e catturano) gli shader del gioco; poi
+  `PhysicalHeap::Alloc` fallisce e c'è una chiamata a guest 0. Causa: l'heap dei record da 64 MiB, la stessa del 2026-11-11
+  sul renderer funzionante; corretta (1 MiB), **non ancora compilata né provata**.
+- La prima ricompilazione con i 1.370 contenitori veri è stata interrotta da Claude Code per memoria del sistema scarsa;
+  rilanciata col via dell'utente il 2026-11-13 (10,8 GB liberi, 4 job).
+- **Scratch dei vertici** (`hooks/draw.cpp`): 1 MiB per device invece di 4, come nel renderer funzionante (stessa memoria
+  fisica guest scarsa; BeginVertices oltre quella misura restituisce 0, come prima).
+- **Build PC completa** (2026-11-13): 16 passi, la traduzione degli shader dai contenitori compresa, `renut.exe` 76,6 MB.
+  Attenzione: il passo degli shader della base **aggiunge alla cartella dei contenitori** gli shader catturati da un
+  avvio (`renut_shader_capture_dir`, predefinito `shader_capture`): ne ha aggiunti 1.250 (nomi `ps_/vs_<hash>.bin`), i
+  1.370 originali intatti (date invariate). Siccome la cartella è una junction ai dati privati, negli avvii di prova la
+  cattura va mandata altrove (`--renut_shader_capture_dir=<cartella di lavoro>`); i 1.250 file aggiunti sono lasciati dove
+  sono (stessi shader sotto un altro nome) finché non si decide la cartella della cache offline (U8).
+- **Avvio completo sul PC** (D3D12, AMD RX 560X, 120 s, `--banjo_renderer=renut --game_data_root=<eu>
+  --nfsmw_captura_cada_s=10`): device GTA IV creato dall'hook, render thread, target 7e3 e D24FS8 1280x720, ripristino
+  della depth EDRAM (`depth 400007C0 ... from colour 40226810 (drawn)`), resolve multisample disegnati, shadow map
+  1280x1280. **Nessun `PhysicalHeap::Alloc` fallito, nessuna chiamata a guest 0, nessun errore del renderer.** Catture a
+  10-120 s: logo Rockstar, filmato d'apertura (corridoio della nave, ponte coi titoli, mani di Roman) **giusto come le
+  catture R3** (`out/pc-renut/cap39`): personaggi interi, illuminazione ed esposizione corrette. 59-60 fps, render thread
+  3-6 ms, GPU 9-13 ms a frame; audio SDL senza frame mancanti; latenza input -> present 27,8 ms.
+- **Problema aperto trovato dall'avvio:** l'autoverifica del codice generato (`REX_STACK_FWD_VERIFY`, accesa nelle build
+  PC) segnala **60.434 inoltri sbagliati su 7.742.986** di `tools/stack_forward.py` (81 caricamenti inoltrati in 44 file),
+  tutti allo stesso slot di stack (`7037F910`). Sul PC non cambia nulla (in verifica vince il caricamento reale); nella
+  build Switch vincerebbe l'inoltro. Il rapporto dà solo l'indirizzo, non il punto: va trovato quale degli 81 inoltri
+  sbaglia (o la passata spenta per GTA IV, `REX_STACK_FWD_OFF`) **prima di ogni build Switch** (U5/U6). Nella base,
+  su Katamari: 0 differenze.
+- **Verifiche dopo la build:** `hook_census.py --strict` 0 problemi (rapporto uguale al precedente a parte i numeri di
+  riga di `draw.cpp`, aggiornato); `test_ultimate_gta4_layout.py` 0 differenze; i 342 file di `app/generated` contro
+  `gen-u4b-hooks.json`: sorgenti identici, cambiano solo i 4 file di timbro e tempi del generatore (le build della notte
+  hanno rieseguito il codegen, che aveva trovato tutti i file invariati).
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si
@@ -200,3 +261,5 @@ U4 parte da qui: le zone della coda (+8 / +16 rispetto a Katamari) si riprendono
 | U3 | 2026-11-12 | (sotto) | Game layer di Katamari tolto dalla generazione: `renut_config.toml` di GTA IV (chiavi "senza audit" della base; `non_volatile_as_local` come nei nostri run, v64-v127 in ctx; `elide_lr_stores` e `non_argument_as_local` spenti fino agli audit), i nostri 25 confini/frammenti in `config/renut_funcs.toml`, i 653 gap in `config/gta4_eu_base_gaps_bulk.toml`, liste delle copie / `hand.txt` / promozioni / scelte lr-r1 vuote. **Generazione:** 321 file in 72 s, 37.304 funzioni; 23 gap del nostro elenco bulk "not in any code region" diventano stub vuoti, **come col generatore 0.9** (es. `sub_8298EC34`, 12 byte di riempimento dopo un `blr`: corpo vuoto anche in `generated/eu-base`). **`post_codegen.py` completo:** ogni passata senza errori (`direct` 124.262 chiamate; `store_cards`, `flush_mode_flow` 11.986 controlli provati, `single_floats`, `fma_single` 13.758, `reg_liveness` 121.770 chiamate con registri da non passare...). Attenzione: `direct` rispetta "575 hooked addresses", che sono ancora quelli di Katamari nel renderer (U4 li rilega, poi si rigenera). **Census della calling convention:** ingresso, 1 voce (`v0` in `sub_82968AB8`, raggiunta per puntatore): è il mirror `REX_LOOP_LOCAL` di loop_locals, il primo accesso guest è una scrittura (`vmrghw v0,v12,v8`) senza etichette raggiungibili prima: indipendente dal valore. Uscita: 572 chiamate indirette leggono dopo la chiamata un vettore che la ABI d'uscita dà per morto (v8 493, v9 462, v7 360...): non verificate una per una, quindi **`SASRT_REG_LIVENESS_EXIT_ABI=0`** per GTA IV (ripiego di `building.md`), messo in `tools/ultimate/env.bat`. La rigenerazione con quel valore è stata **fermata per memoria scarsa** a metà di `post_codegen` (dopo `reg_liveness`): `app/generated` va rigenerato per intero prima di una build |
 | U3, rigenerazione | 2026-11-12 | (sotto) | `tools/ultimate/regenerate.ps1`: cancella `app/generated`, generatore, `post_codegen.py` completo, poi `tools/ultimate/generation_manifest.py`; si ferma al primo passo che non arriva in fondo. Eseguito con 9,2 GB liberi: codegen 79 s (321 file scritti, 0 invariati), passate 1.093 s fino a "optimised codegen steps done". **Manifest** `docs/switch-port/ultimate-manifests/gen-u3-exitabi0.json` (commit del repository `30eafa9`, base `8de5d51a`, generatore SHA-256 `c9a59685…`, `default.xex` SHA-256 `74d480d2…` 545407F2 / 4A53F9F6 / 0.0.0.6, `SASRT_REG_LIVENESS_EXIT_ABI=0`, hash di ogni input, 82 righe delle passate): 342 file, **hash combinato `e10657be810ea2f4…`**, 37.067 funzioni definite (le passate ne contano 37.304 con i frammenti; la tabella di `renut_init.cpp` ha 37.541 voci), 23 stub (i gap di cui sopra). Confronto con la prima generazione completa (senza la variabile): **cambiano solo le righe di `reg_liveness`** ("exit bound off": 112.903 chiamate dirette con registri da non passare invece di 121.770; 1.302 indirette invece di 8.709) e il riepilogo di `leaf_dead_stores`; ogni altra passata dà gli stessi numeri |
 | U4, stato iniziale | 2026-11-12 | (sotto) | `tools/ultimate/hook_census.py` (ogni indirizzo 82xxxxxx nel codice dell'app e dell'SDK, commenti e stringhe esclusi; compilato o no secondo i CMake dell'app e gli include; contro `tools/ultimate/gta4_hook_bindings.csv`, i 23 hook del renderer funzionante, ognuno ritrovato nel doc 18 e nella tabella X() di `gta4_d3d.h`): **335 hook vivi in file compilati, tutti agli indirizzi di Katamari**; 9 cadono su un inizio di funzione GTA IV e la sostituirebbero (`824D09C8` FindTextureSize, sei render-state, `824E11A0` InitializeApiState di Katamari...), gli altri 326 nominano indirizzi che in GTA IV non sono funzioni (il link fallirebbe); 0 dei 23 binding GTA IV legati. `tests/renut/test_ultimate_gta4_layout.py` (ogni costante di `d3d.h` e `d3d_native.h` della base contro il valore GTA IV del renderer funzionante, con le istruzioni rilette dal codice 0.10 rigenerato): **10 valori diversi, non 5**: i cinque di `d3d.h` (§2.4, ognuno ritrovato nelle istruzioni) e in `d3d_native.h` `CommandBuffer` 13.500 e `SideBuffer` 16.712 (ritrovati nelle istruzioni), `AutoDepthStencil` / `AutoFrontBuffer` / `AutoBackBuffer` 14.808 / 14.812 / 14.816 (spostati di +8 come i campi vicini; nessun codice GTA IV li legge, nota del renderer funzionante) |
+| U4a | 2026-11-12 | `d3bf040`, `9e3e75a`, `e012b96`, `7fd9864` | i 10 valori del layout GTA IV nella base (test 0 differenze); censimento degli offset in linea (144, 56 diversi); script per sganciare i binding di Katamari (§2.4-§2.6) |
+| U4b | 2026-11-13 | (questo commit) | 23 hook GTA IV legati ai corpi della base, percorso del device di sa2-nx, Swap / SetFence / gamma / clear / resolve / tiling adattati, 323 binding di Katamari sganciati; `hook_census.py --strict` 0 problemi; rigenerazione `gen-u4b-hooks.json` (`08e5df6f…`), 0 chiamate dirette ai binding; build PC completa con gli shader; **primo avvio completo sul PC** (D3D12, 120 s): scena d'apertura giusta come R3, 60 fps, nessun errore di memoria fisica o chiamata a guest 0. Aperto: 60.434 inoltri di `stack_forward.py` sbagliati su 7,7 M (da risolvere prima di ogni build Switch). §2.7 |

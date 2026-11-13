@@ -48,5 +48,14 @@ $FF = Join-Path $PSScriptRoot "ffmpeg"
 Copy-Item (Join-Path $FF "config.h") (Join-Path $Dest "FFmpeg\config.h") -Force
 Copy-Item (Join-Path $FF "libavutil\avconfig.h") (Join-Path $Dest "FFmpeg\libavutil\avconfig.h") -Force
 Copy-Item (Join-Path $FF "libavutil\ffversion.h") (Join-Path $Dest "FFmpeg\libavutil\ffversion.h") -Force
+# The DXC binaries Renut's shader translator links and runs: the base's app/thirdparty/reblue-XenosRecomp/thirdparty/
+# dxc-bin holds only the headers (its .gitignore keeps bin/ and lib/ out, as sa2-nx's did). The working renderer's
+# build took them from this repository's tools/XenosRecomp/thirdparty/dxc-bin submodule (the same dxcapi.h).
+$DxcFrom = Join-Path $Repo "tools\XenosRecomp\thirdparty\dxc-bin"
+$DxcTo = Join-Path $Repo "ultimate\app\thirdparty\reblue-XenosRecomp\thirdparty\dxc-bin"
+foreach ($sub in "bin", "lib") {
+    if (-not (Test-Path (Join-Path $DxcFrom $sub))) { throw "missing $DxcFrom\$sub (git submodule update --init tools/XenosRecomp)" }
+    Copy-Item -Recurse -Force (Join-Path $DxcFrom $sub) $DxcTo
+}
 $n = (Get-ChildItem -Recurse -File $Dest).Count
 Write-Host "fetch_sdk_thirdparty: $n files from $Commit in $Dest"

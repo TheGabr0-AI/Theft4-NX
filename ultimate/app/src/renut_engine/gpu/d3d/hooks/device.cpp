@@ -77,7 +77,9 @@ using namespace renut::gpu;
 // Kernel exports the device code uses.
 // katamari-nx: Beautiful Katamari's GetCurrentThreadId is sub_824C1C10 (`lwz r11,256(r13); lwz r3,332(r11); blr`,
 // N&B's rex_GetCurrentThreadId 0x8220F1E0 byte for byte).
-REX_IMPORT(__imp__sub_824C1C10, GuestGetCurrentThreadId, u32());
+// theft4 (2026-11-12): GTA IV's is sub_829A27C0, the one function of its image with the same three instructions
+// (`lwz r11,256(r13); lwz r3,332(r11); blr`, found in the 0.10 listing).
+REX_IMPORT(__imp__sub_829A27C0, GuestGetCurrentThreadId, u32());
 REX_IMPORT(__imp__RtlInitializeCriticalSection, RtlInitializeCriticalSection, void(u32));
 REX_IMPORT(__imp__KeQueryPerformanceFrequency, KeQueryPerformanceFrequency, u32());
 REX_IMPORT(__imp__KeGetCurrentProcessType, KeGetCurrentProcessType, u32());
@@ -91,7 +93,8 @@ bool g_gamma_piecewise = false;  // halo3-nx (2026-11-03): which form the device
 // header helpers), which reserve against m_pRingGuarantee. Large enough for
 // the biggest single reservation; the guarantee margin is what inline writers
 // assume is free without calling KickOff.
-constexpr u32 kRingSinkSize = 4u << 20;
+// theft4: 1 MiB, as GTA IV ran on the console (runs 66-72): its guest physical memory is short (guest_records.cpp).
+constexpr u32 kRingSinkSize = 1u << 20;
 constexpr u32 kRingSinkGuaranteeMargin = 256u << 10;
 // Scratch handed out for inline data (RingBufferDeviceAllocate), reused in a
 // circle: nothing reads it either.
@@ -113,22 +116,22 @@ constexpr u32 kDeviceOffsetFenceCompletion = 10896;
 // Nonzero while a KickOff is in progress (BlockOnFence does not kick then).
 constexpr u32 kDeviceOffsetInKickOff = 13216;  // katamari-nx: 13232->13216
 // Side buffer (0x12C0 bytes) every device gets.
-constexpr u32 kDeviceOffsetSideBuffer = 16704;  // katamari-nx: 16728->16704
+constexpr u32 kDeviceOffsetSideBuffer = 16712;  // theft4: GTA IV, sub_829DF380 `stw r3,16712(r31)` (katamari-nx: 16728->16704)
 constexpr u32 kSideBufferSize = 0x12C0;
 // Set to -1 by the device-type-2 path.
-constexpr u32 kDeviceOffsetsMinusOne[] = {21532, 21536, 14912};  // katamari-nx: 21560->21532, 21564->21536, 14936->14912
+constexpr u32 kDeviceOffsetsMinusOne[] = {21540, 21544, 14920};  // theft4: GTA IV, sub_829DF600 (katamari-nx: 21560->21532, 21564->21536, 14936->14912)
 constexpr u32 kDeviceTypeNoHardware = 2;
 // Copied from the global qword at 0x82DA3478 into every device.
 constexpr u32 kDeviceOffsetGlobalQword = 10880;
-constexpr u32 kGlobalQwordVa = 0x82AD93F8;  // katamari-nx: 0x82DA3478->0x82AD93F8
+constexpr u32 kGlobalQwordVa = 0x82A9E568;  // theft4: GTA IV, sub_829DF380 (katamari-nx: 0x82DA3478->0x82AD93F8)
 // Hardware-path fields: two critical sections, QueryPerformanceFrequency and
 // its reciprocal as floats, and 41 words set to -1.
-constexpr u32 kDeviceOffsetCriticalSection0 = 14920;  // katamari-nx: 14944->14920
-constexpr u32 kDeviceOffsetCriticalSection1 = 14948;  // katamari-nx: 14972->14948
-constexpr u32 kDeviceOffsetPerfFrequency = 21560;  // katamari-nx: 21588->21560
-constexpr u32 kDeviceOffsetTitleMinusOne = 21672;  // katamari-nx: 23380->21672
+constexpr u32 kDeviceOffsetCriticalSection0 = 14928;  // theft4: GTA IV, sub_829DF3F0 `addi r3,r31,14928` (katamari-nx: 14944->14920)
+constexpr u32 kDeviceOffsetCriticalSection1 = 14956;  // theft4: GTA IV, sub_829DF3F0 `addi r3,r31,14956` (katamari-nx: 14972->14948)
+constexpr u32 kDeviceOffsetPerfFrequency = 21568;  // theft4: GTA IV, sub_829DF3F0 `stfs f0,21568(r31)` (katamari-nx: 21588->21560)
+constexpr u32 kDeviceOffsetTitleMinusOne = 21680;  // theft4: GTA IV, 41 words, sub_829E1BB8 `addi r11,r3,21680` (katamari-nx: 23380->21672)
 // Import slot holding the address of the kernel's VdGlobalDevice variable.
-constexpr u32 kVdGlobalDeviceImportSlot = 0x82000750;  // katamari-nx: 0x820007F8->0x82000750
+constexpr u32 kVdGlobalDeviceImportSlot = 0x82000768;  // theft4: GTA IV, sub_829DF3F0 `lwz r11,1896(r11)` (katamari-nx: 0x820007F8->0x82000750)
 
 constexpr u32 kE_OUTOFMEMORY = 0x8007000Eu;
 
@@ -913,6 +916,9 @@ void D3DDevice_Swap_hook(u32 device_va, u32 front_buffer, u32 /*parameters*/) {
       return *reinterpret_cast<be_u32 *>(device + offset);
     };
     word(d3d::kDeviceOffsetSwapCount) = u32(word(d3d::kDeviceOffsetSwapCount)) + 1;
+    // theft4: GTA IV's flip count (+16552; the vertical blank work sub_829D4BF8 counts a queued flip there, and the
+    // original Swap waits while the swaps are 15 ahead of it): every swap has flipped (the working renderer, R2).
+    word(16552) = u32(word(d3d::kDeviceOffsetSwapCount));
     const u32 fence_tag = word(d3d::kDeviceOffsetFenceTag);
     word(d3d::kDeviceOffsetSwapFenceTag) = fence_tag;
     word(d3d::kDeviceOffsetPresentFenceTag) = fence_tag;
@@ -924,7 +930,8 @@ void D3DDevice_Swap_hook(u32 device_va, u32 front_buffer, u32 /*parameters*/) {
     banjo::renut_gpu::checks::QueueKickFlush();
     KickFence(device);
     // banjo-nx (2026-10-20, banjo_renut_game_gamma): the device's gamma ramp (StoreGamma's +0x3A9C) for the present.
-    Video::NoteGameGamma(device + 0x3A84, g_gamma_piecewise);  // katamari-nx: 0x3A9C->0x3A84; halo3-nx: the form
+    // theft4: GTA IV's ramp is at +14988 (Swap sub_829D5338 passes `addi r27,r31,14988` to the display).
+    Video::NoteGameGamma(device + 14988, g_gamma_piecewise);  // katamari-nx: 0x3A9C->0x3A84; halo3-nx: the form
   }
 
   render_thread::QueueFrame([front_buffer, swap_ordinal] {
@@ -1133,7 +1140,7 @@ std::array<u16, 1024> GammaTable(bool inverse) {
 
 // The device's gamma (+0x3A9C, red, green, blue: 256 words each) for the
 // display to pick up; the renderer presents without it.
-constexpr u32 kDeviceOffsetGammaRamp = 0x3A84;  // katamari-nx: 0x3A9C->0x3A84
+constexpr u32 kDeviceOffsetGammaRamp = 14988;  // theft4: GTA IV, Swap sub_829D5338 (katamari-nx: 0x3A9C->0x3A84)
 
 void StoreGamma(native::Device d, const be_u16 (&corrected)[768]) {
   if (std::memcmp(corrected, d.bytes + kDeviceOffsetGammaRamp, sizeof(corrected)) == 0)
@@ -1263,10 +1270,10 @@ void SetFence(u32 device_va) {
   if (bytes[kDeviceOffsetFlags2] & kDeviceFlagImmediateFences) {
     Device d = DeviceAt(device_va);
     const u32 fence = d.W(off::FenceTag);
-    if (!d.W(0x5404)) {  // katamari-nx: 0x541C->0x5404
+    if (!d.W(21512)) {  // theft4: GTA IV's +21512 (N&B 0x541C - 20), as the working renderer (katamari-nx: 0x541C->0x5404)
       if (auto *completion = GuestPtr<be_u32>(d.W(off::FenceCompletion))) {
         completion[0] = fence;
-        completion[1] = (d.W(0x3A30) & 3) | d.W(off::Ring);  // katamari-nx: 0x3A48->0x3A30
+        completion[1] = (d.W(14904) & 3) | d.W(off::Ring);  // theft4: GTA IV's +14904 (N&B 0x3A48 - 16) (katamari-nx: 0x3A48->0x3A30)
       }
     }
     d.SetW(off::FenceTag, fence + 2);
@@ -1278,35 +1285,216 @@ void SetFence(u32 device_va) {
 
 } // namespace renut::gpu::native
 
-BANJO_RENUT_HOOK(sub_824E0590, D3DDevice_InsertCallback_hook);  // D3DDevice_InsertCallback  // katamari-nx: N&B sub_821CAF18, signature 0.88 (next 0.59)
-BANJO_RENUT_HOOK(sub_824D01C8, D3DDevice_AddRef_hook);  // D3DDevice_AddRef  // katamari-nx: N&B sub_82634AD0, signature 1.00 (next 0.43)
-BANJO_RENUT_HOOK(sub_824D0430, D3DDevice_AcquireThreadOwnership_hook);  // D3DDevice_AcquireThreadOwnership  // katamari-nx: N&B sub_82634B40, signature 1.00 (next 0.78)
-BANJO_RENUT_HOOK(sub_824D0470, D3DDevice_ReleaseThreadOwnership_hook);  // D3DDevice_ReleaseThreadOwnership  // katamari-nx: N&B sub_82634B80, signature 1.00 (next 0.46)
-BANJO_RENUT_HOOK(sub_824E6410, D3DDevice_GetDeviceCaps_hook);  // D3DDevice_GetDeviceCaps  // katamari-nx: N&B sub_82641480, D3DDevice_GetDeviceCaps: memcpy(out, 0x820FC1F8, 304), N&B's memcpy(out, 0x82161B30, 304)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824E0590, D3DDevice_InsertCallback_hook);  // D3DDevice_InsertCallback  // katamari-nx: N&B sub_821CAF18, signature 0.88 (next 0.59)  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824D01C8, D3DDevice_AddRef_hook);  // D3DDevice_AddRef  // katamari-nx: N&B sub_82634AD0, signature 1.00 (next 0.43)  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824D0430, D3DDevice_AcquireThreadOwnership_hook);  // D3DDevice_AcquireThreadOwnership  // katamari-nx: N&B sub_82634B40, signature 1.00 (next 0.78)  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824D0470, D3DDevice_ReleaseThreadOwnership_hook);  // D3DDevice_ReleaseThreadOwnership  // katamari-nx: N&B sub_82634B80, signature 1.00 (next 0.46)  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824E6410, D3DDevice_GetDeviceCaps_hook);  // D3DDevice_GetDeviceCaps  // katamari-nx: N&B sub_82641480, D3DDevice_GetDeviceCaps: memcpy(out, 0x820FC1F8, 304), N&B's memcpy(out, 0x82161B30, 304)  // theft4: not hooked on GTA IV (Katamari's address)
 BANJO_RENUT_UNHOOKED_HOOK(sub_82641498, D3DDevice_GetDisplayMode_hook);  // D3DDevice_GetDisplayMode  // katamari-nx: not hooked (signature too weak or ambiguous (sub_824E67A0 0.38, next 0.35))
 BANJO_RENUT_UNHOOKED_HOOK(sub_8225D1D0, D3DDevice_BlockOnFence_hook);  // D3DDevice_BlockOnFence  // katamari-nx: not hooked (signature too weak or ambiguous (sub_824E8610 0.51, next 0.51))
-BANJO_RENUT_HOOK(sub_824E89E8, D3D_SynchronizeToPresentationInterval_hook);  // D3D_SynchronizeToPresentationInterval  // katamari-nx: N&B sub_82258778, D3D_SynchronizeToPresentationInterval: called by Present before the resolve; sig 0.72/0.39
+BANJO_RENUT_UNHOOKED_HOOK(sub_824E89E8, D3D_SynchronizeToPresentationInterval_hook);  // D3D_SynchronizeToPresentationInterval  // katamari-nx: N&B sub_82258778, D3D_SynchronizeToPresentationInterval: called by Present before the resolve; sig 0.72/0.39  // theft4: not hooked on GTA IV (Katamari's address)
 BANJO_RENUT_UNHOOKED_HOOK(sub_8263D4B8, D3DResource_GetDevice_hook);  // D3DResource_GetDevice  // katamari-nx: not hooked (signature too weak or ambiguous (sub_824E8610 0.43, next 0.43))
 BANJO_RENUT_UNHOOKED_HOOK(sub_82BC8078, D3D_IsFusion_hook);  // D3D_IsFusion  // katamari-nx: not hooked (signature too weak or ambiguous (sub_824903A8 0.56, next 0.43))
-BANJO_RENUT_HOOK(sub_824DE218, D3DDevice_SetGammaRamp_hook);  // D3DDevice_SetGammaRamp  // katamari-nx: N&B sub_82636F48, D3DDevice_SetGammaRamp: InitializePresentationParameters calls it, then SetPWLGamma, in N&B's order; sig 0.63 for both
-BANJO_RENUT_HOOK(sub_824DE2F8, D3DDevice_SetPWLGamma_hook);  // D3DDevice_SetPWLGamma  // katamari-nx: N&B sub_82637018, D3DDevice_SetPWLGamma: as above
-BANJO_RENUT_HOOK(sub_824D0598, Direct3D_CreateDevice_hook);  // Direct3D_CreateDevice  // katamari-nx: N&B sub_82634990, Direct3D_CreateDevice: allocates the 0x5700 device (li r3,22272 / 128 alignment, sub_824D0240), calls the device init sub_824E18D0 (XenonGpu_Initialize, InitializePresentationParameters, InitializeApiState); sig 0.39 because N&B inlines that init
-BANJO_RENUT_HOOK(sub_824D0368, D3DDevice_Release_hook);  // D3DDevice_Release  // katamari-nx: N&B sub_82634AE8, signature 1.00 (next 0.59)
-BANJO_RENUT_HOOK(sub_824ED278, D3D_XenonGpu_Initialize_hook);  // D3D_XenonGpu_Initialize  // katamari-nx: N&B sub_8264B748, D3D_XenonGpu_Initialize: called by the device init sub_824E18D0 after the -1 words; sig 0.66/0.23
-BANJO_RENUT_HOOK(sub_824E11A0, D3D_InitializeApiState_hook);  // D3D_InitializeApiState  // katamari-nx: N&B sub_82641BC8, D3D_InitializeApiState: called by the device init; reads PresentInterval +13572 and BehaviorFlags +22264; sig 0.58/0.25
-BANJO_RENUT_HOOK(sub_824E1408, D3D_InitializePresentationParameters_hook);  // D3D_InitializePresentationParameters  // katamari-nx: N&B sub_82641EA8, D3D_InitializePresentationParameters: makes the auto surfaces (+14800..14808) with CreateTexture / CreateSurface; sig 0.65/0.27
-BANJO_RENUT_HOOK(sub_824E1B50, D3D_CDevice_Uninitialize_hook);  // D3D_CDevice_Uninitialize  // katamari-nx: N&B sub_82642568, D3D_CDevice_Uninitialize: VdShutdownEngines, VdSetGraphicsInterruptCallback; sig 0.40/0.26
-BANJO_RENUT_HOOK(sub_824E0298, KickOff_hook);  // D3D_CDevice_KickOff  // katamari-nx: N&B sub_821DFFF0, signature 0.80 (next 0.41)
-BANJO_RENUT_HOOK(sub_824E0110, KickOffSegment_hook);  // D3D_CDevice_KickOffSegment  // katamari-nx: N&B sub_821DFC08, D3D_CDevice_KickOffSegment: sig 0.71/0.31; CommandBuffer +13492, InKickOff +13216 as the zones say
-BANJO_RENUT_HOOK(sub_824E04B0, BeginRingBig_hook);  // D3D_CDevice_BeginRingBig  // katamari-nx: N&B sub_821C7360, D3D_CDevice_BeginRingBig: sig 0.67/0.32
-BANJO_RENUT_HOOK(sub_8255A200, BeginRingManual_hook);  // D3D_CDevice_BeginRingManual  // katamari-nx: N&B sub_82A6DD88, signature 1.00 (next 0.46)
-BANJO_RENUT_HOOK(sub_824DF3F0, RingBufferDeviceAllocate_hook);  // D3D_RingBufferDeviceAllocate  // katamari-nx: N&B sub_821FC4B8, D3D_RingBufferDeviceAllocate: sig 0.61/0.31
+BANJO_RENUT_UNHOOKED_HOOK(sub_824DE218, D3DDevice_SetGammaRamp_hook);  // D3DDevice_SetGammaRamp  // katamari-nx: N&B sub_82636F48, D3DDevice_SetGammaRamp: InitializePresentationParameters calls it, then SetPWLGamma, in N&B's order; sig 0.63 for both  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824DE2F8, D3DDevice_SetPWLGamma_hook);  // D3DDevice_SetPWLGamma  // katamari-nx: N&B sub_82637018, D3DDevice_SetPWLGamma: as above  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824D0598, Direct3D_CreateDevice_hook);  // Direct3D_CreateDevice  // katamari-nx: N&B sub_82634990, Direct3D_CreateDevice: allocates the 0x5700 device (li r3,22272 / 128 alignment, sub_824D0240), calls the device init sub_824E18D0 (XenonGpu_Initialize, InitializePresentationParameters, InitializeApiState); sig 0.39 because N&B inlines that init  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824D0368, D3DDevice_Release_hook);  // D3DDevice_Release  // katamari-nx: N&B sub_82634AE8, signature 1.00 (next 0.59)  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824ED278, D3D_XenonGpu_Initialize_hook);  // D3D_XenonGpu_Initialize  // katamari-nx: N&B sub_8264B748, D3D_XenonGpu_Initialize: called by the device init sub_824E18D0 after the -1 words; sig 0.66/0.23  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824E11A0, D3D_InitializeApiState_hook);  // D3D_InitializeApiState  // katamari-nx: N&B sub_82641BC8, D3D_InitializeApiState: called by the device init; reads PresentInterval +13572 and BehaviorFlags +22264; sig 0.58/0.25  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824E1408, D3D_InitializePresentationParameters_hook);  // D3D_InitializePresentationParameters  // katamari-nx: N&B sub_82641EA8, D3D_InitializePresentationParameters: makes the auto surfaces (+14800..14808) with CreateTexture / CreateSurface; sig 0.65/0.27  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824E1B50, D3D_CDevice_Uninitialize_hook);  // D3D_CDevice_Uninitialize  // katamari-nx: N&B sub_82642568, D3D_CDevice_Uninitialize: VdShutdownEngines, VdSetGraphicsInterruptCallback; sig 0.40/0.26  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824E0298, KickOff_hook);  // D3D_CDevice_KickOff  // katamari-nx: N&B sub_821DFFF0, signature 0.80 (next 0.41)  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824E0110, KickOffSegment_hook);  // D3D_CDevice_KickOffSegment  // katamari-nx: N&B sub_821DFC08, D3D_CDevice_KickOffSegment: sig 0.71/0.31; CommandBuffer +13492, InKickOff +13216 as the zones say  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824E04B0, BeginRingBig_hook);  // D3D_CDevice_BeginRingBig  // katamari-nx: N&B sub_821C7360, D3D_CDevice_BeginRingBig: sig 0.67/0.32  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_8255A200, BeginRingManual_hook);  // D3D_CDevice_BeginRingManual  // katamari-nx: N&B sub_82A6DD88, signature 1.00 (next 0.46)  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824DF3F0, RingBufferDeviceAllocate_hook);  // D3D_RingBufferDeviceAllocate  // katamari-nx: N&B sub_821FC4B8, D3D_RingBufferDeviceAllocate: sig 0.61/0.31  // theft4: not hooked on GTA IV (Katamari's address)
 BANJO_RENUT_UNHOOKED_HOOK(sub_821FC318, AllocateInlineData_hook);  // D3D_CDevice_AllocateInlineData  // katamari-nx: not hooked (signature too weak or ambiguous (sub_824DFF98 0.38, next 0.31))
-BANJO_RENUT_HOOK(sub_824E05E8, D3DDevice_SetRingBufferParameters_hook);  // D3DDevice_SetRingBufferParameters  // katamari-nx: N&B sub_82640090, D3DDevice_SetRingBufferParameters: the VdInitializeRingBuffer caller; sig 0.70/0.21
-BANJO_RENUT_HOOK(sub_824E8E90, D3DDevice_Swap_hook);  // D3DDevice_Swap  // katamari-nx: N&B sub_822554F8, D3DDevice_Swap: the only VdSwap caller; sig 0.53/0.26
+BANJO_RENUT_UNHOOKED_HOOK(sub_824E05E8, D3DDevice_SetRingBufferParameters_hook);  // D3DDevice_SetRingBufferParameters  // katamari-nx: N&B sub_82640090, D3DDevice_SetRingBufferParameters: the VdInitializeRingBuffer caller; sig 0.70/0.21  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824E8E90, D3DDevice_Swap_hook);  // D3DDevice_Swap  // katamari-nx: N&B sub_822554F8, D3DDevice_Swap: the only VdSwap caller; sig 0.53/0.26  // theft4: not hooked on GTA IV (Katamari's address)
 BANJO_RENUT_UNHOOKED_HOOK_SHARED(sub_82640818, D3DDevice_BeginCommandBuffer_hook);  // D3DDevice_BeginCommandBuffer  // katamari-nx: not hooked (D3DDevice_BeginCommandBuffer: no clear counterpart (sig 0.27); census first)
 BANJO_RENUT_UNHOOKED_HOOK(sub_82640DE8, D3DDevice_EndCommandBuffer_hook);  // D3DDevice_EndCommandBuffer  // katamari-nx: not hooked (D3DDevice_EndCommandBuffer: no clear counterpart (sig 0.49/0.48))
 BANJO_RENUT_UNHOOKED_HOOK_SHARED(sub_821F1A78, D3DDevice_RunCommandBuffer_hook);  // D3DDevice_RunCommandBuffer  // katamari-nx: not hooked (D3DDevice_RunCommandBuffer: no clear counterpart (sig 0.50/0.48))
-BANJO_RENUT_HOOK(sub_824DFC48, BlockOnFence_hook);  // D3D_CDevice_BlockOnFence  // katamari-nx: N&B sub_8225D370, D3D_CDevice_BlockOnFence: sig 0.55/0.32
-BANJO_RENUT_HOOK(sub_824D0290, CBlocker_Check_hook);  // D3D_CBlocker_Check  // katamari-nx: N&B sub_82634740, D3D_CBlocker_Check: sig 0.66/0.26
-BANJO_RENUT_HOOK(sub_824E03D0, IsFencePending_hook);  // D3DDevice_IsFencePending  // katamari-nx: N&B sub_8225D468, D3DDevice_IsFencePending: sig 0.71/0.47
+BANJO_RENUT_UNHOOKED_HOOK(sub_824DFC48, BlockOnFence_hook);  // D3D_CDevice_BlockOnFence  // katamari-nx: N&B sub_8225D370, D3D_CDevice_BlockOnFence: sig 0.55/0.32  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824D0290, CBlocker_Check_hook);  // D3D_CBlocker_Check  // katamari-nx: N&B sub_82634740, D3D_CBlocker_Check: sig 0.66/0.26  // theft4: not hooked on GTA IV (Katamari's address)
+BANJO_RENUT_UNHOOKED_HOOK(sub_824E03D0, IsFencePending_hook);  // D3DDevice_IsFencePending  // katamari-nx: N&B sub_8225D468, D3DDevice_IsFencePending: sig 0.71/0.47  // theft4: not hooked on GTA IV (Katamari's address)
+
+// ---------------------------------------------------------------------------------------------------------------------
+// theft4 (2026-11-12, docs/switch-port/20 U4b): GTA IV's device path and bindings (European base, Direct3D 2.0.6274;
+// tools/ultimate/gta4_hook_bindings.csv, each address in docs/switch-port/18 section 2). The device is created as
+// sa2-nx's renderer created it and GTA IV ran on the console (runs 66-72; thirdparty/renut's device.cpp): the
+// original Direct3D_CreateDevice without hardware, then what GTA IV's hardware path (sub_829DF3F0) gives the title
+// device apart from the GPU. The base's native creation (Direct3D_CreateDevice_hook and its callees above) is not
+// hooked on GTA IV. Not hooked, on purpose (the working renderer's notes):
+//   - D3DDevice_InsertCallback (sub_829D8810): its only caller is EndTiling, with Direct3D's own worker callback
+//     (sub_829DDD30), which wakes a worker thread this path does not create; the tile block is never submitted.
+//   - SynchronizeToPresentationInterval (sub_829D5158 / sub_829D50D8): only the original Swap calls them, and the Swap
+//     is hooked.
+//   - D3DDevice_IsFencePending and D3DDevice_SetRingBufferParameters: not located in GTA IV's image (no caller found).
+REX_EXTERN(__imp__sub_829D0218);  // Direct3D_CreateDevice, the original
+REX_EXTERN(__imp__sub_829DEF28);  // D3D::InitializePresentationParameters (CDevice*, D3DPRESENT_PARAMETERS*)
+REX_EXTERN(__imp__sub_829DECC0);  // D3D::InitializeApiState (CDevice*)
+REX_EXTERN(__imp__sub_829DF308);  // registers the library's graphics interrupt handler (CDevice*)
+REX_EXTERN(__imp__sub_829D0B80);  // the device's prebuilt commands (CDevice*), hardware path
+REX_EXTERN(__imp__sub_829CA608);  // ResetAllState (CDevice*, 0)
+
+namespace {
+
+// HRESULT Direct3D_CreateDevice(UINT Adapter, D3DDEVTYPE DeviceType, void*, DWORD BehaviorFlags,
+//     D3DPRESENT_PARAMETERS*, IDirect3DDevice9 **ppReturnedDeviceInterface) [sub_829D0218]
+void Gta4CreateDevice(PPCContext &ctx, uint8_t *base) {
+  const u32 device_type = ctx.r4.u32;
+  u32 behavior_flags = ctx.r6.u32;
+  const u32 present_parameters = ctx.r7.u32;
+  const u32 out_va = ctx.r8.u32;
+  const bool title_device = device_type != kDeviceTypeNoHardware;
+  if (!records::Init()) {
+    ctx.r3.u64 = kE_OUTOFMEMORY;
+    return;
+  }
+  if (!g_ring_sink)
+    g_ring_sink = records::AllocPhysicalBlock(kRingSinkSize);
+  if (!g_ring_data)
+    g_ring_data = records::AllocPhysicalBlock(kRingDataSize);
+  const u32 fence_va = records::AllocPhysicalBlock(0x80 + 0x20);
+  if (!g_ring_sink || !g_ring_data || !fence_va) {
+    RGPU_ERROR("Direct3D_CreateDevice: guest allocation failed");
+    ctx.r3.u64 = kE_OUTOFMEMORY;
+    return;
+  }
+  std::memset(GuestPtr<u8>(g_ring_sink), 0, kRingSinkSize);
+  std::memset(GuestPtr<u8>(fence_va), 0, 0x80 + 0x20);
+
+  // GTA IV's own no-hardware device.
+  ctx.r4.u64 = kDeviceTypeNoHardware;
+  __imp__sub_829D0218(ctx, base);
+  if (ctx.r3.u32 != 0)
+    return;
+  const u32 device_va = LoadGuestU32(out_va);
+  native::Device d = native::DeviceAt(device_va);
+  if (!d) {
+    ctx.r3.u64 = kE_OUTOFMEMORY;
+    return;
+  }
+  u8 *bytes = d.bytes;
+  // Its ring was the side buffer, marked out of command memory (sub_829D74C0): from here the sink. Fences complete as
+  // they are written until the title device is set up.
+  bytes[kDeviceOffsetFlags2] &= u8(~0x20);
+  bytes[kDeviceOffsetFlags2] |= kDeviceFlagImmediateFences;
+  WriteU32(bytes, kDeviceOffsetFenceCompletion, fence_va);
+  WriteU32(bytes, 10900, fence_va + 0x80);  // GTA IV: +10900 (the interrupt handler sub_829D7318 reads it)
+  native::RewindRing(d);
+
+  if (title_device) {
+    RtlInitializeCriticalSection(device_va + kDeviceOffsetCriticalSection0);
+    RtlInitializeCriticalSection(device_va + kDeviceOffsetCriticalSection1);
+    // What GTA IV's hardware path (sub_829DF3F0) also gives the title device apart from the GPU, as step R1 ran it:
+    // the flag it sets, the graphics interrupt handler (the vertical blank's count and the title's blank callback are
+    // the library's, sub_829D4BF8), the prebuilt commands.
+    bytes[10942] |= 0x04;
+    ctx.r3.u64 = device_va;
+    __imp__sub_829DF308(ctx, base);
+    if (!ctx.r3.u32)
+      RGPU_ERROR("Direct3D_CreateDevice: the graphics interrupt set-up (sub_829DF308) failed");
+    if (const u32 global = LoadGuestU32(kVdGlobalDeviceImportSlot))
+      *GuestPtr<be_u32>(global) = device_va;
+    if (!(behavior_flags & 0x100) && !(behavior_flags & 0x3F000000))
+      behavior_flags |= 0xC000000;
+    WriteU32(bytes, d3d::kDeviceOffsetBehaviorFlags, behavior_flags);
+    ctx.r3.u64 = device_va;
+    __imp__sub_829D0B80(ctx, base);
+    if (!ctx.r3.u32)
+      RGPU_ERROR("Direct3D_CreateDevice: the device's prebuilt commands (sub_829D0B80) failed");
+    WriteU32(bytes, kDeviceOffsetsMinusOne[0], 0xFFFFFFFFu);
+    WriteU32(bytes, kDeviceOffsetsMinusOne[1], 0xFFFFFFFFu);
+    const float frequency = float(KeQueryPerformanceFrequency());
+    d.SetF(kDeviceOffsetPerfFrequency, frequency);
+    d.SetF(kDeviceOffsetPerfFrequency + 4, frequency > 0.0f ? 1.0f / frequency : 0.0f);
+    if (present_parameters) {
+      ctx.r3.u64 = device_va;
+      ctx.r4.u64 = present_parameters;
+      __imp__sub_829DEF28(ctx, base);
+      if (!ctx.r3.u32) {
+        RGPU_ERROR("Direct3D_CreateDevice: InitializePresentationParameters failed");
+        ctx.r3.u64 = kE_OUTOFMEMORY;
+        return;
+      }
+    }
+    ctx.r3.u64 = device_va;
+    __imp__sub_829DECC0(ctx, base);
+    // As GTA IV's hardware path ends: every state dirty, and the 41 words of -1 (sub_829E1BB8).
+    ctx.r3.u64 = device_va;
+    ctx.r4.u64 = 0;
+    __imp__sub_829CA608(ctx, base);
+    for (u32 i = 0; i < 41; ++i)
+      WriteU32(bytes, kDeviceOffsetTitleMinusOne + 4 * i, 0xFFFFFFFFu);
+    native::RewindRing(d);
+    // From here the title device's fences complete on the render thread (KickFence).
+    bytes[kDeviceOffsetFlags2] &= u8(~kDeviceFlagImmediateFences);
+    Video::SetGuestDevice(device_va);
+  }
+  RGPU_INFO("Guest D3D device (type {}) created at {:#010x}", device_type, device_va);
+  ctx.r3.u64 = 0;  // S_OK
+}
+
+// GTA IV's ring segment allocator (sub_829D8138 (CDevice*, DWORD Dwords): KickOffSegment, BeginRingBig and Swap call
+// it for a new segment): the sink again. Non-zero: the callers retry the ring, which has the room.
+u32 Gta4NewSegment_hook(u32 device_va, u32 /*dwords*/) {
+  native::Device d = native::DeviceAt(device_va);
+  if (!d)
+    return 0;
+  d.SetB(kDeviceOffsetFlags2, d.B(kDeviceOffsetFlags2) & u8(~0x20));
+  native::RewindRing(d);
+  return d.W(native::off::Ring) + 4;
+}
+
+}  // namespace
+
+BANJO_RENUT_HOOK_RAW(sub_829D0218) {  // Direct3D_CreateDevice [Katamari sub_824D0598; SA2 sub_8254FC10]
+  Gta4CreateDevice(ctx, base);
+}
+BANJO_RENUT_HOOK(sub_829D8518, KickOff_hook);  // D3D_CDevice_KickOff [Katamari sub_824E0298]
+BANJO_RENUT_HOOK(sub_829D8390, KickOffSegment_hook);  // KickOff's tail, the next segment [Katamari sub_824E0110]
+BANJO_RENUT_HOOK(sub_829D8730, BeginRingBig_hook);  // D3D_CDevice_BeginRingBig [Katamari sub_824E04B0]
+BANJO_RENUT_HOOK(sub_829D74E8, RingBufferDeviceAllocate_hook);  // D3D_RingBufferDeviceAllocate [Katamari sub_824DF3F0]
+BANJO_RENUT_HOOK(sub_829D76F0, AllocateInlineData_hook);  // D3D_CDevice_AllocateInlineData [Katamari not hooked] (theft4: the plain form: in the base _SHARED defines no hook)
+BANJO_RENUT_HOOK(sub_829D8138, Gta4NewSegment_hook);  // the ring segment allocator [SA2 sub_8254DA90]
+BANJO_RENUT_HOOK(sub_829D5338, D3DDevice_Swap_hook);  // D3DDevice_Swap [Katamari sub_824E8E90]
+BANJO_RENUT_HOOK(sub_829D7D40, BlockOnFence_hook);  // D3D_CDevice_BlockOnFence [Katamari sub_824DFC48]
+BANJO_RENUT_HOOK(sub_829CFE80, CBlocker_Check_hook);  // D3D_CBlocker_Check [Katamari sub_824D0290]
+
+// The hardware submission of a command block (it writes the GPU's ring registers). sub_829D8290 reaches it for the
+// title device, whose ring set-up (sub_829D8868) is left out: the block is the GPU's, nothing here reads it.
+BANJO_RENUT_HOOK_RAW(sub_829D77D8) {
+  (void)ctx;
+  (void)base;
+}
+
+// BOOL EndTiling's tail (CDevice*, DWORD TileCount, DWORD Processors) [N&B sub_82210138]: the end of
+// D3DDevice_EndTiling (sub_829CD908). The original closes the segment the tiles' commands were recorded in, hands it to
+// the GPU as a command block (sub_829D7C68: one more pending block at +11000) behind a ring callback (sub_829DDD30)
+// that wakes Direct3D's worker thread, which replays the block once per tile. This renderer draws the tiled frame once
+// at full size (hooks/draw.cpp), so the tail keeps its device work and leaves the block out: the tiling words
+// cleared, the seven segment lists ended, the batch's fence. Step R1 found it: without this the wait for an idle GPU
+// (sub_829D8798) never ended at the first frame of the 3D scene.
+BANJO_RENUT_HOOK_RAW(sub_829DDF28) {
+  const u32 device_va = ctx.r3.u32;
+  native::Device d = native::DeviceAt(device_va);
+  if (!d) {
+    ctx.r3.u64 = 0;
+    return;
+  }
+  const u8 flags1 = d.B(kDeviceOffsetFlags2);
+  d.SetW(kDeviceOffsetInKickOff, 0);
+  d.SetW(kDeviceOffsetInKickOff + 4, 0);
+  if (flags1 & 0x20) {  // the command memory ran out while the tiles were recorded
+    d.SetB(kDeviceOffsetFlags2, flags1 & u8(~0x20));
+    native::RewindRing(d);
+    ctx.r3.u64 = 1;
+    return;
+  }
+  for (u32 i = 0; i < 7; ++i)
+    d.SetW(13232 + i * 20 + 12, 0);  // sub_829D73D0 without the jump words a GPU would follow
+  native::SetFence(device_va);
+  native::RewindRing(d);
+  ctx.r3.u64 = 0;
+}
