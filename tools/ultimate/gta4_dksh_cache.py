@@ -370,7 +370,8 @@ def write_manifest(path, a, lists, cache):
         'runtime_logs': [os.path.basename(p) for p in a.runtime_log],
         'merged_cache': os.path.basename(a.merge) if a.merge else None,
         'console_merge': os.path.basename(a.console_merge) if a.console_merge else None,
-        'options': ['--generic', '--plain-guess shader_cache_switch.cpp'],
+        'variants_logs': [os.path.basename(p) for p in a.variants],
+        'options': ['--generic', '--plain-guess shader_cache_switch.cpp'] + [f'--generic-with {g}' for g in a.generic_with],
         'cache': cache,
     }
     with open(path, 'w', encoding='utf-8', newline='\n') as f:
@@ -392,6 +393,12 @@ def main():
     ap.add_argument('--console-merge', default=None,
                     help="U8: a deko3d_shaders.bin the console wrote, merged too (with --merge's records), less the "
                          "variants a draw waited for in --runtime-log (one-pass compiles there), compiled again here")
+    ap.add_argument('--variants', action='append', default=[],
+                    help="U8: a deko3d_variants.txt the console wrote (banjo_deko3d_variant_log): every pipeline's exact "
+                         "constants")
+    ap.add_argument('--generic-with', action='append', default=[],
+                    help="U8: ID=VALUE, each shader's generic variant also with that constant (GTA IV: 925=63, the "
+                         "exponent bias of its HDR targets, which plume's generic variant keeps)")
     a = ap.parse_args()
     table_path = os.path.join(PKG, 'shader_cache_switch.cpp')
     for p in (GLSL, os.path.join(PKG, 'deko3d_glsl.bin'), table_path):
@@ -402,8 +409,8 @@ def main():
     variants = a.out + '.variants.txt'
     if not a.check_only:
         print('== 3. tools/deko3d_variant_cache.py')
-        if not a.list and not a.runtime_log:
-            sys.exit('gta4_dksh_cache: no --list or --runtime-log')
+        if not a.list and not a.runtime_log and not a.variants:
+            sys.exit('gta4_dksh_cache: no --list, --runtime-log or --variants')
         cmd = [sys.executable, '-I', os.path.join(ULT, 'tools', 'deko3d_variant_cache.py'), '--generic',
                '--plain-guess', table_path, '--glsl', GLSL, '--out', a.out, '--jobs', str(a.jobs),
                '--export-variants', variants]
@@ -411,6 +418,10 @@ def main():
             cmd += ['--list', p]
         for p in a.runtime_log:
             cmd += ['--runtime-log', p]
+        for p in a.variants:  # U8: the console's deko3d_variants.txt (banjo_deko3d_variant_log): exact pipelines
+            cmd += ['--variants', p]
+        for g in a.generic_with:  # U8: generic variants with a constant set too (GTA IV: 925=63)
+            cmd += ['--generic-with', g]
         tmp_merge = None
         if a.console_merge:
             tmp_merge = tempfile.TemporaryDirectory()

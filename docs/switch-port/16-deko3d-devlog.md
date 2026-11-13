@@ -4616,3 +4616,15 @@ katamari-nx, bejeweled3-nx, sa2-nx, nfsmw-nx, torchlight-nx, kabba536's GTA IV) 
 Run 70's freezes of several seconds were mostly the resolve trace left on in its `game.toml` (one traced frame every
 30 s cost 10-15 s); outside them gameplay ran at 13-14.5 fps, GPU 67-75 ms a frame, audio 62-70 % of real time. Run 71
 is the baseline with the trace off and both profilers on (same NRO).
+
+## 2026-11-13: the Ultimate Base on the console, U8 (AR)
+
+The runs on the base are recorded in `20-ultimate-base-migration.md` §2.12-§2.13 and `run-index.md`; this entry links
+them to this log. The deko3d side of U8: (1) the offline DKSH cache works on the console (compiles 495 -> 21 / 18,
+draw waits 88 -> 4 / 2); every draw wait of the three runs was a pixel shader's generic variant with constant 925 = 63
+(GTA IV's HDR targets' exponent bias), which the cache tool now makes for every shader that declares it. (2) **The
+lighting is wrong on deko3d and right on D3D12 from the same save and room** (the PC build started on a copy of the
+card's `renut/`): Niko and the ground black on the console, lit on the PC (67.9 % against 28.1 % near-black pixels at
+60 s). Not the run 68-69 case (no multisampled pipeline exists with `msaa_level` 1). The deko3d-only paths active in
+the scene (the depth hand-over of the shadow map, depth compression and its decompressions, Zcull, the GPU rounds'
+barrier skips) are bisected on the console with one switch per run (`out/console-runs/u8-light`, L0-L5).

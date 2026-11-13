@@ -1,0 +1,89 @@
+{
+ "tool": "tools/ultimate/gta4_dksh_cache.py",
+ "repository_commit": "6eb8e527a35b0ddf975e0a04fe6f1da5785191cf",
+ "base_commit": "8de5d51a66d14c9bceb90811a818c6ee3906057f",
+ "tools": {
+  "spirv_cross_commit": "22b22f5685d868828be01c9ac00c31902e60afd9",
+  "uam": "uam 1.1.0 - Built on Nov 13 2026 13:55:46",
+  "uam_sha256": "4acc1351a129ef8dacb6b2f46b6477b3e6885a15daaf9aa2b5f557e079b86ce2",
+  "cache_tag": "uam110-sw8-bnx4",
+  "xenos_recomp_sha256": "283d06ad245d639ffd3f384eca5b3106993b621c68e3bd6579153a8edf5ac3cb"
+ },
+ "containers": {
+  "combined_sha256": "a7dae5722ea05220472564cbb7c6e4c57ab173ef65c6cdcc0469b425a4e04484",
+  "count": 1370
+ },
+ "package": {
+  "glsl_opt": {
+   "combined_sha256": "01f9b934a47133ee15f34f37a3861b4fd8254958d4a736b2b80b67d9203cef2b",
+   "count": 1370
+  },
+  "deko3d_glsl_bin_sha256": "7963cb14a980f3a0bb068a8255dde45d798f8ea14844d21555b3034bdd64e596",
+  "shader_cache_switch_cpp_sha256": "061feff7c2a071f761b122e29b3aa4342cec78935d29eaa12d815265105c7d2d"
+ },
+ "lists": [
+  {
+   "file": "pc-u5.pipeline_list.bin",
+   "sha256": "44532e27ece870eeab7f4c0cc59104340a0e22945c5535890175d54337f8bc4e",
+   "version": 7,
+   "pipelines": 616,
+   "shaders": 238,
+   "shaders_not_in_package": 0
+  },
+  {
+   "file": "console-run72.pipeline_list.bin",
+   "sha256": "cfe402f0f5bbd2b1a2cb2e0bb817ac3ad6f6b8db6b5b5cb8fc8ab12a43de0a72",
+   "version": 4,
+   "pipelines": 651,
+   "shaders": 356,
+   "shaders_not_in_package": 0
+  },
+  {
+   "file": "console-u8a.pipeline_list.bin",
+   "sha256": "0fca9879747b23b5b6d8f769665842adddc22519359f32dc64e8d28a116d6933",
+   "version": 7,
+   "pipelines": 1037,
+   "shaders": 350,
+   "shaders_not_in_package": 0
+  },
+  {
+   "file": "console-u8runA.pipeline_list.bin",
+   "sha256": "4ecb6a01dc73517f250364ce7091980fb6addaf25eb54004b2f90d72c179ee8e",
+   "version": 7,
+   "pipelines": 1080,
+   "shaders": 355,
+   "shaders_not_in_package": 0
+  },
+  {
+   "file": "console-u8runB.pipeline_list.bin",
+   "sha256": "e09e895f3b682552e83cba77dab219e50e69012992d19ac97423bf22479e58ee",
+   "version": 7,
+   "pipelines": 1110,
+   "shaders": 357,
+   "shaders_not_in_package": 0
+  }
+ ],
+ "runtime_logs": [
+  "console-u8a.deko3d.log",
+  "console-u8runA.deko3d.log",
+  "console-u8runB.deko3d.log"
+ ],
+ "merged_cache": "deko3d_shaders-u8.bin",
+ "console_merge": "console-u8runB.deko3d_shaders.bin",
+ "variants_logs": [
+  "console-u8runB.deko3d_variants.txt"
+ ],
+ "options": [
+  "--generic",
+  "--plain-guess shader_cache_switch.cpp",
+  "--generic-with 925=63"
+ ],
+ "cache": {
+  "file": "deko3d_shaders-u8c.bin",
+  "sha256": "3a7b7376cf29719c447b2e9832f8696ea4885c7c88a1ea27f91779857d5d2c2e",
+  "bytes": 44202200,
+  "records": 8016,
+  "exported_variants": 7997,
+  "variants_sha256": "e2cd6ae8f8c4735c1235284fea37b0a79a193cdbf1c69f34ef54315c74f228f6"
+ }
+}

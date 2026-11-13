@@ -120,6 +120,22 @@ cambia di quasi la metà, quindi un confronto vale solo sullo stesso tratto. Qua
 anche `deko3d_shaders.bin` e `pipeline_list.bin` della scheda (restano anche sulla scheda): servono a costruire e
 verificare la cache degli shader offline.
 
+**Dalla Ultimate Base (U8, 2026-11-13; `20-ultimate-base-migration.md` §2.12-§2.13).** Cartella sulla scheda
+`sdmc:/switch/theft4-ultimate/` (la NRO `theft4-ultimate.nro`, `gta4.toml`, `deko3d_shaders.bin`, `pipeline_list.bin`;
+il gioco resta in `sdmc:/switch/theft4/game/`). Si tengono `deko3d_shaders.bin` e `pipeline_list.bin`; le catture vanno in
+`capturas/` (non `captures/`), i log in `logs/` (`renut_001.log`, `logs/rex/rex_profile.log`). Prima di ogni avvio:
+`logs/` e `capturas/` spostate, nessuno strumento di clock (il run U8-1 ha letto 2193 MHz nel boost), e nei run di misura
+`banjo_deko3d_compile_wait_boost = false` (il pacchetto lo mette). **Salvataggio:** il gioco carica da solo l'ultimo
+salvataggio, `renut/B13EBABEBABEBABE/545407F2/00000001/SGTA412/` con `renut/B13EBABEBABEBABE/545407F2/Headers/00000001/
+SGTA412.header`. Un run che deve partire dall'inizio (filmato iniziale, velocità della cutscene) si fa dopo aver copiato
+`renut/` sul PC e rinominato `renut/B13EBABEBABEBABE` in `B13EBABEBABEBABE.bak`; un run che deve partire tutte le volte
+dallo stesso punto (bisezioni) non salva mai. I numeri si leggono con `tools/ultimate/u8_run_report.py <cartella>
+[--baseline <cartella>]` (dai 60 s in poi) e le catture con `tools/ultimate/u8_capture_compare.py <capturas> --reference
+<capturas>`: si confrontano fps solo sullo stesso percorso, la quota audio e le compilazioni sempre. Il campionatore
+degli stack (`switch_profile_stacks`) costa CPU (U8-B: 333 % contro 300 %): i suoi fps non sono un risultato. Per una
+domanda di grafica il riferimento è la build PC (D3D12) fatta partire con `--user_data_root` su una **copia** di `renut/`
+della scheda: stesso salvataggio, stessa stanza, catture ogni 15 s.
+
 **Smoke:** `switch-smoke.nro` della stessa cartella del run fa anche il
 passo 8 (deko3d contro NVK, `13-deko3d-spike.md`, ~1–2 minuti, schermo fermo
 sull'ultima immagine della sonda Vulkan); il risultato sono le righe `gpu

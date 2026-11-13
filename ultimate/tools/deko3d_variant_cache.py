@@ -466,6 +466,9 @@ def main():
                     help="write every variant as '<vs|ps>_<HASH> <id>=<value>,...' (the constants that differ from the "
                          "shader's defaults, ids ascending): the banjo-nx installer's list. Metadata only (shader hashes "
                          "and numbers); each line is checked to give its key again from the GLSL")
+    ap.add_argument('--generic-with', action='append', default=[],
+                    help="theft4-nx (U8): ID=VALUE; with --generic, each shader declaring constant ID also gets its "
+                         "generic variant with that value (GTA IV: 925=63, its HDR targets' exponent bias)")
     ap.add_argument('--runtime-log', action='append', default=[],
                     help="a console's renut log: the run-time variants it names (base size and hash) are added")
     a = ap.parse_args()
@@ -577,6 +580,14 @@ def main():
     # 2026-10-21 (banjo_deko3d_async_variants): every shader's generic variant, so no draw waits for a compile: plume
     # draws with it (the key's state constants left out: the bools, 900, 901, 903-906, 909) while the draw's own variant
     # compiles in the background.
+    # theft4-nx (2026-11-13, U8): --generic-with ID=VALUE: each shader's generic variant also with that constant, for the
+    # shaders that declare it. GTA IV's HDR targets give every pipeline drawing to them 925 = 63, which plume's generic
+    # keeps: a draw with a shader no list had yet (a new area) waited for that compile (94 of the 94 draw waits of the
+    # first three U8 runs, each with 925 = 63 alone).
+    generic_with = {}
+    for item in a.generic_with:
+        k, _, v = item.partition('=')
+        generic_with[int(k)] = int(v, 0) & 0xFFFFFFFF
     if a.generic:
         gen_added = 0
         for name in sorted(os.listdir(a.glsl)):
@@ -587,7 +598,10 @@ def main():
             shader = glsl_of(prefix, h)
             if shader is None:
                 continue
-            for sspec in config_specs(prefix, shader[1], {}):
+            declared = {cid for cid, _ in shader[1]}
+            extra = {k: v for k, v in generic_with.items() if k in declared}
+            bases = [{}] + ([extra] if extra else [])
+            for sspec in [s for b in bases for s in config_specs(prefix, shader[1], b)]:
                 defines = variant_defines(shader[1], sspec)
                 if (prefix, h, defines) in seen:
                     continue

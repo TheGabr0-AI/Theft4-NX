@@ -594,6 +594,144 @@ frame, la GPU per passata, le catture per la luce, le varianti esatte per la cac
 3. Dalla SD, per ognuno: `logs/` intera, `deko3d.log`, `deko3d_shaders.bin`, `pipeline_list.bin`; dal run B anche
    `capturas/` e `deko3d_variants.txt`; le note su audio, stutter, luce e percorso.
 
+### 2.13 U8: i run A e B (2026-11-13; Switch Erista, run dell'utente; pacchetto `u8-build`)
+
+**File letti** (`out/console-runs/u8-build/A` e `/B`, fuori da git): `logs/renut_001.log`, `logs/rex/rex_profile.log`
+(B: campioni degli stack ogni 1 ms, 6.924 per thread), `logs/rex/rex_stderr.log`, `logs/rex/banjo_profiler.log`,
+`deko3d.log`, `deko3d_shaders.bin`, `pipeline_list.bin`, `renut/` (salvataggio e profilo); in B anche `capturas/` (10
+PNG ogni 30 s; il nome della cartella è quello del codice, `GetExecutableFolder()/capturas`) e `deko3d_variants.txt`
+(910 pipeline con le costanti esatte).
+
+**Limiti delle misure.** Entrambi i run partono dal salvataggio della SD ("The Cousins Bellic", caricato da solo
+all'avvio, nella stanza dell'appartamento), non dall'inizio: niente filmato iniziale, quindi **la velocità della
+cutscene non è misurata**. Dopo il caricamento il percorso è diverso (A: 4.081 draw a frame di mediana; B: 3.287; il
+primo U8: 2.293): gli fps di A, B e U8-1 non si confrontano tra loro. B ha il campionatore degli stack acceso (costa
+CPU: totale 333 % contro 300 %), quindi i suoi fps non sono un risultato. **Confrontabili:** la quota audio (stessa
+causa in ogni scena, sotto), le compilazioni (stessa cache di partenza), i clock, e i primi 60 s nella stanza (stessa
+scena, 650 draw a frame sulla Switch, 639 sul PC). Clock letti: CPU 1020 / GPU 460,8 MHz in tutte le 31 + 28 finestre
+(boost spento dal toml; strumenti di clock non più visibili).
+
+| | U8-1 (cache U6) | A (cache U8) | B (cache U8 + profilo) |
+|---|---|---|---|
+| fps, mediana (10° pct) | 6,96 (4,75) | 6,38 (5,12) | 7,60 (5,84) |
+| draw a frame, mediana | 2.293 | 4.081 | 3.287 |
+| GPU ms a frame / render thread ms | 29,8 / 46,9 | 22,1 / 50,5 | 28,7 / 46,1 |
+| CPU totale (di 400) | 299 | 300 | 333 (campionatore) |
+| audio, quota del tempo reale | 69,8 % | 63,7 % | 63,9 % |
+| compilazioni uam / attese da un draw | 495 / 88 (77,0 s) | **21 / 4 (7,4 s)** | **18 / 2 (5,1 s)** |
+
+**Cache: la correzione di U8 funziona sulla console.** Compilazioni da 495 a 21 e 18, attese dei draw da 88 (77 s) a 4
+e 2 (7,4 e 5,1 s), boost mai usato. Le varianti ancora compilate sono di shader che nessuna lista aveva (zone nuove), e
+**le 94 attese di un draw dei tre run hanno tutte la sola costante `925 = 63`**: la generica dei pixel shader che
+scrivono sui target HDR. Correzione (sotto): ogni pixel shader che dichiara 925 riceve anche la generica con 925 = 63.
+
+**Audio: il mixer è il thread 26510 di B, e il suo limite è il calcolo, non lo scheduling (dimostrato).** Il profilo con
+gli stack (aggregato per thread su tutto il run, simboli dall'ELF di U7 = stessa NRO) lo riconosce dalle funzioni: il
+router XAudio `sub_8216D7E0` (il routing audio già visto nel run 64) e il suo mix `sub_8216DBB0`. Quota dei campioni del
+thread: `sub_8216DBB0` 26,5 %, `sub_828C2D28` 15,5 %, `sub_828C6740` 12,9 %, `sub_828C5A58` 10,4 %, `sub_8216D7E0` 7,3 %,
+`sub_82188C28` 6,5 %, `sub_828C7848` 6,1 % (le sette = 85 %). Per finestra di 10 s (B):
+
+| Fase | CPU del mixer | Campioni in attesa nel kernel | Quota audio |
+|---|---|---|---|
+| caricamento, 60 fps | 3,7-13,8 % | 89-97 % | 99-100 % |
+| gioco (24 finestre) | **74,8-88,6 %** | 11-23 % | **56,9-69,3 %** |
+| gioco a 20-26 fps | 82-88 % | 13-20 % | 63-66 % |
+
+Correlazione CPU del mixer / quota audio: -0,95 (più lavoro di mix, meno tempo reale), e la quota non segue gli fps.
+Il mixer è quasi sempre in esecuzione: dargli priorità o un core non gli darebbe il tempo che manca. Per produrre il
+100 % gli servirebbe circa il **130 % di un core** a 1020 MHz: va reso più veloce il suo codice. Cosa costa (letto con
+`ultimate/tools/switch_hot_pcs.py` sulle istruzioni campionate):
+
+- `sub_8216DBB0`: è `MixFrameBufferChannel` di XAudio, istruzione per istruzione lo stesso codice per cui la base ha già
+  il nativo `n_rex_XAudioMixFrameBufferChannel` (Banjo; GTA IV aggiunge solo un ciclo di `dcbt`). Il codice generato è
+  già NEON stretto: i campioni stanno sulle `ldr q`/`str q` (memoria) e sui `strb` dei store card a ogni vettore. Il
+  nativo toglie i 4 store card per blocco (uno per l'intervallo): guadagno limitato.
+- `sub_828C2D28`, `sub_828C7848` (filtri IIR): catene seriali di `fmadds` con il controllo d'esattezza della semantica
+  PPC (`fcvt`/`fmov`/`cmp` dopo ogni prodotto). È l'aritmetica esatta: una riscrittura lo toglie solo cambiando la
+  semantica (decisione dell'utente, non presa).
+- `sub_828C6740`: i registri guest letti e riscritti nel contesto (`ldr`/`str [x19,#…]`) a ogni passo: **è il costo che
+  una copia macchina toglie** (`localize_native.py --survey`: tutte e sette le funzioni accettate come copie).
+
+Il decoder XMA (host, FFmpeg) è al 20 % di un core e consegna in 0,2 ms: non è la causa (non toccato). La catena
+d'uscita è giusta (100 % quando il mixer ha tempo): non toccata.
+
+**Prestazioni: CPU piena, e mezzo core sprecato in attesa attiva (dimostrato).** Run A: CPU al 300 % per tutto il
+gioco (i core 0-2 del gioco pieni; il core 3 resta al sistema, `banjo_system_core = 0`). In B, CPU media per thread: mixer
+68,6 %, render thread di ReNut 28,0 % (73 % in attesa), tre worker del gioco 27 % ciascuno (69 % in attesa), thread
+principale 24,2 % (75 % in attesa), decoder XMA 20,5 %, thread `sub_8289F7A8` 19,9 %, render thread di GTA IV 19,2 %
+(`CaptureDelta` di ReNut, 79 % in attesa), streaming 8,4 %, uam 6,8 %. Nessun thread è da solo il collo di bottiglia: i
+thread del frame aspettano a turno, e la somma riempie tre core. **I tre worker passano più di metà del loro tempo attivo
+in `sub_82221358`** (spinlock con backoff: un CAS, `sub_827DF9C0`, poi un conteggio da 8 a 1024 su una variabile dello
+stack, senza mai cedere il core) chiamato da `sub_828E2350` per un contatore condiviso: circa **il 45 % di un core**
+bruciato a girare, sugli stessi core del mixer e del thread principale; con le fette di 10 ms di Horizon chi tiene il
+lock può restare fermo mentre un altro gira. Correzione possibile (non fatta qui): un nativo dello spinlock che cede il
+core dopo pochi giri; i chiamanti chiamano `__imp__sub_82221358` direttamente, quindi serve rigenerare il codice e
+ricompilare, e la copia macchina non è possibile (CAS e `lwsync`).
+
+**Illuminazione: il difetto è del percorso Switch, non del livello GTA IV (dimostrato).** Prova: la build PC (D3D12)
+fatta girare con `--user_data_root` su una **copia** del salvataggio di B (`renut/` della SD; nessun file della SD
+toccato) parte nella stessa stanza; 639 draw a frame (Switch 650). L'eseguibile PC è quello costruito il 2026-11-13 alle
+14:44, prima dei commit di U7: l'unica modifica di U7 al renderer (l'invalidazione dello Zcull) è solo deko3d, quindi
+il percorso D3D12 è lo stesso della NRO. Catture PC ogni 15 s in
+`out/console-runs/u8-light/pc-reference-capturas`. `tools/ultimate/u8_capture_compare.py` (nuovo) sulla cattura a 60 s:
+
+| | luma media | terzo centrale | pixel quasi neri |
+|---|---|---|---|
+| Switch, B 60 s | 10,7 | 14,2 | **67,9 %** |
+| PC, stessa stanza, 60 s | 15,3 | 17,6 | 28,1 % |
+
+A 30 s (schermata di caricamento) i due coincidono (0,98 / 1,04): il confronto è valido. Sul PC Niko è illuminato
+(giacca, pantaloni, luce ambiente sul pavimento); sulla Switch è una sagoma nera, come in strada (B 151 s) e all'esterno
+di giorno (B 242 s: cielo chiaro, edifici, strada e auto quasi neri). Le sorgenti emissive (insegne, fari) e la cutscene
+nell'ufficio (B 303 s) hanno luce: manca la luce del sole e quella ambientale. Il profilo GPU di B nella stanza: G-buffer
+600 draw (4,4 M pixel), shadow map 1280x1280 1.700 draw, passate a 1280x720 solo colore 1,4 draw a frame.
+
+Cosa è stato escluso, con le prove: il caso dei runs 68-69 (letture MS a zero) non c'è (`multisampled pipelines 0`);
+l'exponent bias dei target (925 = 63 → -1 in sei bit, solo sull'alfa) è applicato giusto nel GLSL; le righe dei formati,
+dei resolve e dei ripristini della depth sono le stesse sul PC e sulla Switch (confronto riga per riga dei log); il
+resolve della depth (`depth_resolve.hlsli`) scrive il float che legge. Restano le parti del renderer che girano **solo su
+deko3d** e sono attive in questa scena: hand-over della depth (la shadow map, 62 in 10 s: una a frame, campionata
+dall'immagine del target invece che dal resolve), compressione della depth e le sue decompressioni (5.197 al bind, 39.518
+rimandate, 5.819 fatte per una lettura), Zcull, i salti di barriera dei GPU round (207 e 4.449 in 10 s). Quale delle
+quattro sia la causa la dice solo la console: **bisezione** col pacchetto `out/console-runs/u8-light` (sotto). Nessuna
+correzione speculativa.
+
+**Salvataggi sulla SD** (dal codice: `rex_app.cpp` `SetupEnvironment`, `content_manager.cpp`; e dal log):
+`sdmc:/switch/theft4-ultimate/renut/` è la cartella dati utente della NRO. I progressi sono **solo** il contenitore
+`renut/B13EBABEBABEBABE/545407F2/00000001/SGTA412/` (file `SGTA412`, 707.822 byte, e `__thumbnail.png`) con la sua
+intestazione `renut/B13EBABEBABEBABE/545407F2/Headers/00000001/SGTA412.header` (`B13EBABEBABEBABE` è lo XUID del
+profilo, `545407F2` il titolo, `00000001` il tipo "salvataggio"). `renut/545407F2/profile/User/63E83FFF` sono le
+impostazioni del gioco, `renut/achievements/545407F2.toml` gli obiettivi: non sono progressi. Da non toccare: la NRO,
+`gta4.toml`, `deko3d_shaders.bin`, `pipeline_list.bin`, `logs/`, `capturas/` e i file del gioco in
+`sdmc:/switch/theft4/game/`. Il gioco carica da solo l'ultimo salvataggio: per ripartire dall'inizio, copiare prima
+`renut/` sul PC, poi rinominare `renut/B13EBABEBABEBABE` in `renut/B13EBABEBABEBABE.bak` (reversibile: tutti i
+salvataggi di quel profilo spariscono insieme, nient'altro cambia).
+
+**Correzioni fatte (strumenti del PC; la NRO non cambia):**
+
+- `ultimate/tools/deko3d_variant_cache.py`: `--generic-with ID=VALUE`, la generica di ogni shader che dichiara la costante
+  anche con quel valore (GTA IV: `925=63`).
+- `tools/ultimate/gta4_dksh_cache.py`: `--variants` (il `deko3d_variants.txt` della console: le pipeline esatte) e
+  `--generic-with`, registrati nel manifest.
+- `tools/ultimate/u8_capture_compare.py`: luma, terzo centrale e pixel quasi neri di ogni cattura, appaiati per secondo
+  con un riferimento.
+
+**Cache U8c (sul PC; manifest `dksh-u8c.json`):** liste U6, U8-1, A e B; i tre `deko3d.log`; `deko3d_variants.txt` di B (910
+pipeline esatte); `--generic-with 925=63`; `--merge` la cache U8, `--console-merge` la cache della SD dopo B (la cache U8
+identica come prefisso, +21 record in A, +18 in B). Risultato: **8.016 record, 44.202.200 byte, SHA-256 `3a7b7376…`**; 581
+varianti compilate sul PC, 0 fallite; passi 1, 2, 4 come prima; passo 5 contro la SD dopo B: 7.526 identici, 3 in un passo
+(compilazioni attese da un draw, qui complete), 0 diversi, 0 mancanti. Controllo diretto delle chiavi: **i 704 pixel
+shader che dichiarano 925 hanno tutti la generica `{925:63}`** (148 nella cache U8). Nel pacchetto `u8-light`, insieme ai
+toml della bisezione: non cambia i pixel, toglie le attese nelle zone nuove (da verificare sulla console).
+
+**Non fatto in questa fase, e perché:** le copie macchina delle sette funzioni del mixer, il nativo del mix XAudio legato a
+`sub_8216DBB0` e il nativo che cede il core nello spinlock dei worker richiedono `post_codegen.py` completo (le copie) o una
+rigenerazione (lo spinlock, chiamato come `__imp__`), poi una build PC con la guardia densa sul salvataggio e una build
+Switch completa (ore, un job): sono il prossimo blocco di lavoro (U10/U11 anticipati per l'audio), da fare dopo la
+bisezione della luce, che non richiede build. Per l'audio, anche fatte tutte, le stime della guida della base (copie
+-4 % sul thread, nativi -7/-26 % sulla propria funzione) non bastano da sole al 100 %: il filtro IIR esatto resta il
+costo maggiore e toccarlo vuol dire cambiare la semantica dei `fmadds` (decisione dell'utente).
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si
@@ -624,3 +762,4 @@ frame, la GPU per passata, le catture per la luce, le varianti esatte per la cac
 | U6 | 2026-11-13 | `ede3a9b` | solo PC. Strumenti Switch della base integrati: uam e SPIRV-Cross per PC (`build_deko3d_tools.bat`, uam sull'ABI MSVC), contenitori coi nomi della base (`gta4_shader_dump.py`; i vecchi nomi nascondevano i pixel shader all'early alpha e avevano fatto copiare 1.250 duplicati in eu-private, ora spostati), cache e controlli (`gta4_dksh_cache.py`). 1.370 shader tradotti e compilati, 0 falliti; tabella PC = tabella Switch; cache di 4.287 varianti da due liste, 0 fallite, ogni chiave controllata; i 409 DKSH che la console aveva compilato nel run 72 rifatti identici sul PC. Manifest `dksh-u6.json`. §2.10 |
 | U7 | 2026-11-13 | `12b20c2`, `aa88997` | build Switch, nessun run su console. Prima NRO di GTA IV sulla base (deko3d, nessun driver Vulkan), everyday: toml Switch di GTA IV (gamma accesa, niente di Katamari, nessuna modalità a 4 core), Zcull dopo il ripristino della depth, cartella SD propria; NRO `f42ae3e4…` riproducibile byte per byte; controlli del pacchetto e della cache superati; pacchetto `out/console-runs/u7-build`, manifest `switch-u7.json`. NRO guard non costruita (U10). §2.11 |
 | U8, primo run | 2026-11-13 | (questo commit) | **primo run su console (Erista, utente)**, NRO `aa88997`: avvio, filmato e gioco per 14 minuti senza crash. 6,96 fps (mediana), GPU 29,8 ms (78,6 nel vecchio albero), CPU 299 % su 400; audio al 69,8 % del tempo reale per i frame che il mixer guest non produce in tempo (frequenze giuste: 100 % a 60 fps); filmato = cutscene a orologio audio (ipotesi); stutter = 88 compilazioni attese da un draw (77 s), generiche con 925 che la cache non aveva. Strumento della cache corretto (924/925, generiche come plume, unione della cache della SD): 7.490 record, passo 5 senza errori. `u8_run_report.py`. Clock letti a 2193 MHz nel boost (strumento sulla console). **Nessuna correzione dichiarata riuscita:** pacchetto `u8-build` (stessa NRO, cache nuova) per i run A e B. §2.12 |
+| U8, run A e B | 2026-11-13 | (questo commit) | dal salvataggio, stessa NRO: la cache U8 **funziona sulla console** (compilazioni 495 -> 21 / 18, attese dei draw 88 -> 4 / 2; clock standard); le 94 attese dei tre run sono tutte generiche con 925 = 63 -> `--generic-with 925=63`, `--variants`. Audio: mixer identificato (thread 26510, DSP `sub_8216DBB0`/`828C…`), **limite di calcolo** (75-89 % di un core per il 57-69 % del tempo reale; non scheduling). Prestazioni: CPU piena, tre worker in attesa attiva su uno spinlock (~45 % di un core). Luce: **sbagliata solo su deko3d** (PC dallo stesso salvataggio giusto: 28 % contro 68 % di pixel quasi neri); bisezione sulla console col pacchetto `u8-light`. Salvataggi: `renut/B13EBABEBABEBABE/545407F2/…`. Strumenti `u8_capture_compare.py`. §2.13 |
