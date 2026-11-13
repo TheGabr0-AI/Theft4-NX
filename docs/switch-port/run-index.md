@@ -86,3 +86,8 @@ e cache DKSH offline (4.287 varianti, 0 fallite) fatti con gli strumenti della b
 §2.10. Usati come dati, senza analizzarli: `pipeline_list.bin` e `deko3d_shaders.bin` della SD in
 `out/console-runs/72-logs` (NRO `5d542d6`, la build del run 72). Con questi si è verificato che i 409 DKSH compilati
 dalla console coincidono con quelli del PC.
+
+**2026-11-13, U7 sulla base: build Switch, nessun run su console.** Prima NRO di GTA IV sulla base (deko3d, nessun
+driver Vulkan collegato): commit `aa88997`, build everyday, NRO SHA-256 `f42ae3e4…` (56.408.261 byte), riproducibile byte
+per byte. Pacchetto di test in `out/console-runs/u7-build` (NRO, cache DKSH `1d6f7737…`, `gta4.toml`; ELF e mappa a parte),
+cartella SD `sdmc:/switch/theft4-ultimate/`; `20-ultimate-base-migration.md` §2.11. Il run U8 aggiunge qui la sua riga.

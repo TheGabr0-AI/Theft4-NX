@@ -393,6 +393,72 @@ SD). Dopo U8 si rifà la cache con
 `--list <pipeline_list.bin della SD> --runtime-log <game.log> --merge <deko3d_shaders.bin della SD> --console-cache
 <lo stesso>` e la si controlla prima di ogni misura ("uam 0 compiles").
 
+### 2.11 U7: la NRO Switch di GTA IV (2026-11-13; build sul PC, nessun run su console)
+
+**Ingressi controllati prima della build** (nessun prodotto vecchio o incompleto riusato):
+
+- `hook_census.py --strict`: 0 problemi, 23 hook vivi, tutti binding GTA IV. Il censimento conta come compilato anche il
+  codice sotto `REX_PLATFORM_SWITCH`; negli hook l'unico ramo solo-Switch è `banjo_renut_core_layout` (spento, §2.9).
+- `test_ultimate_gta4_layout.py`: 0 differenze.
+- `app/generated` contro `gen-u5-stackfwd.json`: 338 file su 342 identici; i 4 diversi sono gli stamp della generazione
+  (`codegen.stamp`, `codegen.build.stamp`, `codegen.d`, `codegen.times.json`) riscritti dalla build PC, nessun sorgente.
+- `app/out/renut_switch` (pacchetto GLSL `7963cb14…`, tabella `061feff7…`) e la cache `1d6f7737…` = `dksh-u6.json`.
+- sys-clk: `switch_sysclk.cpp` dell'SDK ha un override dei clock di sys-clk / Horizon OC, spento (`g_enabled` 0) e mai
+  acceso da nessuna parte del codice; spento, non apre nemmeno il servizio. I clock restano quelli standard; il profilo
+  APM ufficiale GPU 460,8 + memoria 1331,2 (`banjo_gpu_boost`) è quello dei runs 70-72.
+
+**Lavoro:**
+
+| Punto | Fatto |
+|---|---|
+| Build | `tools/ultimate/build_switch.bat [everyday\|guard]`: `ultimate/tools/build_switch.bat` con l'ambiente del progetto (CMake, Ninja e Python di `env.bat`, GCC 16.1 di devkitA64, `THEFT4_SWITCH_JOBS`, default 2). Controlla ogni ingresso prima di configurare. **Solo deko3d**: `REXGLUE_SWITCH_NVK` spento, gli stub "non disponibile" dell'SDK al posto del driver; plume vuole comunque una cartella portlibs con gli header Vulkan e un `libvulkan.a` esistente (`THEFT4_NVK_SDK`, default `<devkitPro>/portlibs/switch`), che non viene collegato (verificato sulla mappa di link) |
+| Identità | il commit nel log (`THEFT4_BUILD_COMMIT`, solo su `main.cpp`: "theft4-nx: GTA IV on the Ultimate Base, build <commit> (<flavour>)", "-dirty" con modifiche in `ultimate/` o `tools/ultimate/`). **Riproducibilità:** l'SDK scrive in `version.h` l'ora della configurazione e lo script configura a ogni build, quindi due build dello stesso commit davano due NRO (`aa88997`: `SOURCE_DATE_EPOCH` = ora del commit). Verificato: ricompilati `main.cpp`, `rex_app.cpp`, `debug_overlay.cpp` e ricollegato, stessa NRO e stesso ELF byte per byte |
+| Toml | `app/gta4_switch_defaults.toml` (compilato nella NRO) e `app/gta4_switch.toml` (il `gta4.toml` del giocatore, scritto accanto alla NRO se manca). Confronto delle 229 chiavi di `katamari_switch_defaults.toml` coi default del codice: 156 uguali, 24 senza cvar (nativi di Katamari ai suoi indirizzi), 49 diverse: renderer nativo / GPU emulata / chiavi "non costruite" (non usate da Renut), chiavi di Katamari (pelliccia, `katamari_hand_*`), log e diagnostica spenti, scelte di resa per Katamari (1080 in dock, mip host, ombre, precisione) e **`banjo_renut_game_gamma = false`**. Nel file di GTA IV: `banjo_renderer = "renut"`, `renut_gpu_backend = "deko3d"`, **`banjo_renut_game_gamma = true`** (esplicito), nessuna modalità a 4 core (`banjo_forwarder_program_id = ""`, `banjo_system_core = 0`: nessun NPDM, nessuno spostamento di thread), guard spento, `banjo_display_sync` (scelta Switch della base, indipendente dal gioco). Tutto il resto resta al default del codice provato sul PC in U4b-U6 (log acceso, risoluzione 720, mip host, `frame_cap` "Off": scelte di U8-U9) |
+| NRO | "Theft4 Ultimate" / "Theft4-NX" / 0.7.0, icona di libnx (nessuna copertina nel repository; `THEFT4_SWITCH_ICON` per una locale), cartella SD `sdmc:/switch/theft4-ultimate/` (quella del vecchio albero resta com'è, con la sua cache e i suoi log). Il percorso dei dati di gioco si decide prima di leggere qualsiasi toml (`rex_app.cpp`), quindi in `renut_app.h`: `game_root` accanto alla NRO, altrimenti i file del vecchio albero `/switch/theft4/game` (forma con la radice, come `GetExecutablePath`), in sola lettura |
+| Zcull (`1846a14`) | `plume::Deko3DInvalidateZcull` (la patch di `out/u5-wip`, applicata senza modifiche) e la chiamata in `RestoreDepthFromColorLocked` subito dopo il draw, solo deko3d. Verificato che sul deko3d la command list è sempre quella vera (il registratore proxy di `banjo_renut_record` lavora solo su Vulkan), quindi il cast di plume è corretto; senza `banjo_deko3d_zcull` non fa nulla |
+| Pacchetto | `tools/ultimate/package_switch.py`: controlla e poi scrive `out/console-runs/<nome>` (sotto). Rifiuta una build con commit diverso da HEAD o con modifiche locali, e una cartella esistente |
+
+**Build** (everyday: copie in place, nessuna forma di guardia): 1.102 passi. La prima corsa (2 job) è stata fermata da
+Claude Code per memoria scarsa a 1.001/1.102 (i due "FAILED" erano i compilatori uccisi, senza messaggi); ripresa con 1
+job sugli oggetti già fatti (105 passi), poi ricostruita dopo il commit (5 passi). Nessun errore di compilazione.
+`renut` (ELF) 72.600.144 byte, `renut.nro` 56.408.261 byte.
+
+**Controlli del pacchetto** (`package_switch.py`, manifest `docs/switch-port/ultimate-manifests/switch-u7.json`):
+opzioni della cartella (`REXGLUE_SWITCH_NVK` e `PLUME_SWITCH_NVK_LINK` spenti, `PLUME_DEKO3D` acceso, config incorporata,
+shader nella NRO, `SASRT_HOT_GUARD_FORMS` OFF, `SASRT_HOT_IN_PLACE` ON); intestazione NRO0 e NACP; nell'ELF: la stringa
+del commit, `gta4_switch_defaults.toml` come impostazioni incorporate e nessuna di Katamari, `g_deko3dGlslPackage` di
+2.017.600 byte = `deko3d_glsl.bin` (anche i byte), `g_shaderCacheEntries`, **33 shader host deko3d** (tra cui
+`depth_restore_ps`), `Deko3DInvalidateZcull`, nessun `libvulkan.a` nella mappa (le due entrate ICD vengono da
+`switch_vulkan_stubs.c`); la cache: intestazione `BDKC`, tag `uam110-sw8-bnx4` = `kCacheTag` della NRO, SHA-256 = U6.
+`gta4_dksh_cache.py --check-only`: pacchetto contro tabella 1.370/1.370, uam libreria contro strumento 147/147 identici
+(percorso d'errore ok), cache 4.287 record, ognuno con la sua variante.
+
+**Pacchetto di test** `out/console-runs/u7-build` (commit `aa88997`, everyday; fuori da git):
+
+| File | Byte | SHA-256 |
+|---|---|---|
+| `COPY_TO_SD/switch/theft4-ultimate/theft4-ultimate.nro` | 56.408.261 | `f42ae3e47bce64b48649be8943a594a1a29bd73d4e599b9ea65d2427f99ec508` |
+| `COPY_TO_SD/switch/theft4-ultimate/deko3d_shaders.bin` | 23.680.524 | `1d6f7737741daedb1be3ac82e9138ebb35d29d45f7e6b7cb49824f7992aedc4e` |
+| `COPY_TO_SD/switch/theft4-ultimate/gta4.toml` | 931 | `458ea1350934bd3976cef9bd2b0d90220fc1b235ba732d134f914255b6ef6e0f` |
+| `theft4-ultimate.elf` (non per la SD) | 72.600.144 | `b7a07f8cf7a909ae29df618e3371555c0833424724f6ce2db1dc9e75ff6c679e` |
+| `renut.map` | 39.672.863 | `18a20cad989b86de58d3ee2278f484048ad671de3267cf55511213f35052e9f1` |
+
+Avvio (README del pacchetto): clock standard, modalità applicazione (title takeover); il forwarder del vecchio albero
+avvia la vecchia NRO. Il primo pacchetto, dal commit `12b20c2` prima della correzione della riproducibilità, è stato
+rinominato `u7-build-12b20c2-superseded`, non cancellato.
+
+**Non fatto in U7, e perché:**
+
+- **NRO guard** (`build_switch.bat guard`): non costruita. Ricompila tutto il codice generato nell'altra forma (un'altra
+  ora e mezza, col rischio di memoria visto sopra) e serve a un run di guardia: Ryujinx non c'è su questa macchina, e il
+  run di guardia sulla console appartiene a U10.
+- **Nessun avvio**: niente Ryujinx; la prova vera è la console (U8).
+
+**Da guardare per primo in U8:** la riga "theft4-nx: … build aa88997d7ce8 (everyday)" e il percorso del gioco nel log;
+"[deko3d] DKSH cache" (letta, non ricominciata); "uam: run-time variant" (varianti che la cache non ha); il ripristino
+della depth ("EDRAM depth restore … (drawn)") e l'illuminazione dopo (lo Zcull); il pacing (`frame_cap` "Off" con
+`banjo_display_sync`, §2.9).
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si
@@ -421,3 +487,4 @@ SD). Dopo U8 si rifà la cache con
 | U5a | 2026-11-13 | `5000be5` | `stack_forward.py` corretto alla radice (chiamate e salti nel corpo delle istruzioni); 4 punti sbagliati trovati col reporter + PDB; rigenerazione `gen-u5-stackfwd.json` (`3e76d58a…`, 67 inoltri in 39 funzioni); PC: 8,5 M inoltri controllati, **0 differenze**. §2.8 |
 | U5b | 2026-11-13 | `db37f00` | correzioni del vecchio renderer confrontate con la base: 7e3, ripristino della depth e resolve MS coperti; scambio dei mezzi tile in pixel guest riportato; attesa delle fence D3D12 per valore e vsync PC spento (avvii 12/12 invece di 7/12); rampa gamma del gioco accesa; Zcull pronto per U7; percorso SA2 identico, GuestPtr della base corretto su Switch, chiamate in uscita senza problemi reali con `EXIT_ABI=0`. §2.9 |
 | U6 | 2026-11-13 | `ede3a9b` | solo PC. Strumenti Switch della base integrati: uam e SPIRV-Cross per PC (`build_deko3d_tools.bat`, uam sull'ABI MSVC), contenitori coi nomi della base (`gta4_shader_dump.py`; i vecchi nomi nascondevano i pixel shader all'early alpha e avevano fatto copiare 1.250 duplicati in eu-private, ora spostati), cache e controlli (`gta4_dksh_cache.py`). 1.370 shader tradotti e compilati, 0 falliti; tabella PC = tabella Switch; cache di 4.287 varianti da due liste, 0 fallite, ogni chiave controllata; i 409 DKSH che la console aveva compilato nel run 72 rifatti identici sul PC. Manifest `dksh-u6.json`. §2.10 |
+| U7 | 2026-11-13 | `12b20c2`, `aa88997` | build Switch, nessun run su console. Prima NRO di GTA IV sulla base (deko3d, nessun driver Vulkan), everyday: toml Switch di GTA IV (gamma accesa, niente di Katamari, nessuna modalità a 4 core), Zcull dopo il ripristino della depth, cartella SD propria; NRO `f42ae3e4…` riproducibile byte per byte; controlli del pacchetto e della cache superati; pacchetto `out/console-runs/u7-build`, manifest `switch-u7.json`. NRO guard non costruita (U10). §2.11 |
