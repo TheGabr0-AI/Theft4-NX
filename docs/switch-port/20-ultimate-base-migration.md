@@ -238,6 +238,31 @@ U4 parte da qui: le zone della coda (+8 / +16 rispetto a Katamari) si riprendono
   `gen-u4b-hooks.json`: sorgenti identici, cambiano solo i 4 file di timbro e tempi del generatore (le build della notte
   hanno rieseguito il codegen, che aveva trovato tutti i file invariati).
 
+### 2.8 U5a: lo stack forwarding corretto alla radice (2026-11-13)
+
+- **Dove:** il reporter della differenza (`app/src/cpu/banjo_codegen_checks.cpp`, `RexStackFwdMismatch`) ora scrive
+  anche ogni nuovo punto chiamante (indirizzo di ritorno, fino a 32 punti); con il PDB (`renut.pdb`, dbghelp) i 60.434
+  errori di U4b vengono da **4 punti**: `sub_82896650` e `sub_828962F8` (inoltro attraverso due chiamate a
+  `sub_822AF898`), `sub_82776AB0` (attraverso `sub_82772760`), `sub_82777B20` (attraverso un `bctrl`).
+- **Causa (difetto della passata della base, non di GTA IV):** `tools/stack_forward.py` azzera il suo stato su chiamate,
+  salti ed etichette controllando solo la riga del commento di ogni istruzione, poi salta il corpo C++ (`i = j`): le
+  righe `__imp__sub_X(ctx, base);`, `REX_CALL_INDIRECT_FUNC(...)` e i `goto` dei rami condizionali stanno nel corpo e non
+  venivano mai viste. Quattro `stfs` in `r1+A`, una chiamata che riceve `r1+A` e lo riscrive, poi l'`lvx` dello slot:
+  l'inoltro dava i valori di prima della chiamata. La docstring della passata dichiara già "no call, label, jump ... in
+  between": la correzione fa valere quella regola anche per il corpo (una chiamata: `ctx.lr = `, `(ctx, base)`,
+  `REX_CALL`; un salto: `goto`, `return;`, `switch (`) e azzera tutto. Nessun controllo spento, la passata resta attiva.
+  Su Katamari la base aveva 0 differenze: i suoi 24 inoltri non attraversavano chiamate che riscrivessero lo slot.
+- **Rigenerazione completa** (`regenerate.ps1`, manifest `ultimate-manifests/gen-u5-stackfwd.json`, hash combinato
+  `3e76d58a…`): `stack_forward` **67 caricamenti in 39 funzioni** (prima 81 in 47); nessuno dei 67 ha più una chiamata
+  o un salto tra le scritture e il caricamento (controllo riga per riga del codice generato). Contro `gen-u4b-hooks.json`
+  cambiano solo i 16 file `.cpp` con inoltri e i tempi; ogni altra passata dà gli stessi numeri (la riga di `direct`
+  cambia solo l'ordine di due voci a pari conteggio). L'hash di `rexglue.exe` è diverso perché ogni build PC ricollega
+  il generatore (stessi sorgenti, stessa versione 0.10.0): i file generati senza inoltri sono identici byte per byte.
+- **Verifica PC** (D3D12, 120 s, scena d'apertura): **8.526.419 inoltri confrontati con il caricamento reale, 0
+  differenze**; ogni altra autoverifica a 0 (costanti di sola lettura, mirror di r1, write-back del link register,
+  copie); `hook_census.py --strict` 0 problemi; `test_ultimate_gta4_layout.py` 0 differenze. Handoff alla base: la
+  stessa correzione vale per ogni gioco.
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si

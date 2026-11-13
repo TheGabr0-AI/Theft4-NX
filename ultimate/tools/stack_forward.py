@@ -96,7 +96,19 @@ def rewrite_function(lines, stats):
         while j < len(out) and not COMMENT.match(out[j]) and not LABEL.match(out[j]):
             j += 1
         body = range(i + 1, j)
-        writes_r1 = (ops and ops[0] == 'r1' and not mn.startswith('st')) or (
+        # theft4-nx (2026-11-13): the C++ of a call or a jump is in the instruction's body, not on its comment line, and
+        # the loop steps from comment to comment: the check at the top never saw 'bl' (__imp__sub_X(ctx, base)),
+        # 'bctrl' (REX_CALL_INDIRECT_FUNC) or a conditional branch's 'goto', so stores before a call were forwarded to
+        # a load after it. GTA IV passes such slots to the callee (r1+A as an argument), which rewrites them: 60,434 of
+        # 7.7 M forwards wrong in 120 s on the PC self-check, at 4 sites (sub_82896650, sub_828962F8, sub_82776AB0
+        # across direct calls, sub_82777B20 across a bctrl). A call (it sets ctx.lr, or names (ctx, base) / REX_CALL)
+        # or a jump in the body forgets everything, as the docstring says.
+        if any('(ctx, base)' in out[k] or 'ctx.lr = ' in out[k] or 'REX_CALL' in out[k] or 'goto ' in out[k]
+               or 'return;' in out[k] or 'switch (' in out[k] for k in body):
+            slots, base, foreign = {}, {'r1': 0}, False
+            i = j
+            continue
+        writes_r1 =(ops and ops[0] == 'r1' and not mn.startswith('st')) or (
             mn in ('stwu', 'stdu', 'stwux', 'stdux') and len(ops) >= 2 and ops[1].endswith('(r1)'))
         if writes_r1:
             slots, base, foreign = {}, {'r1': 0}, False

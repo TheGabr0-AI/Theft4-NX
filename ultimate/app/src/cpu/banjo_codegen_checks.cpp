@@ -134,6 +134,22 @@ extern "C" void RexLrWriteMismatch(unsigned long long held, unsigned long long w
 // something else for real (REX_STACK_FWD_VERIFY: the hooked builds compare each forward with the real load).
 extern "C" void RexStackFwdMismatch(unsigned address) noexcept {
   ::me::native::VerifyDifference();
+  // theft4 (2026-11-13): the stack address alone does not say which forwarded load was wrong (GTA IV: one slot, 60,434
+  // of 7.7 M in 120 s). Each new calling site (the return address, as an offset into the executable: the PDB names
+  // the generated function) is logged once, up to 32 sites, whatever the count.
+  {
+    static std::mutex sites_mutex;
+    static std::vector<const void*> sites;
+    const void* site = __builtin_return_address(0);
+    std::lock_guard lock(sites_mutex);
+    if (sites.size() < 32 && std::find(sites.begin(), sites.end(), site) == sites.end()) {
+      sites.push_back(site);
+      const auto here = reinterpret_cast<uintptr_t>(&RexStackFwdMismatch);
+      REXLOG_ERROR("[enhancements] DIFFERENCE: stack forwarding: a new site, return address {} (RexStackFwdMismatch at "
+                   "{:#x}; slot {:08X})",
+                   site, static_cast<unsigned long long>(here), address);
+    }
+  }
   if (g_stack_fwd_mismatches.fetch_add(1, std::memory_order_relaxed) < 16) {
     REXLOG_ERROR("[enhancements] DIFFERENCE: stack forwarding: the vector load of the stack slot at {:08X} does not read "
                  "the four words its stores wrote (tools/stack_forward.py)",
