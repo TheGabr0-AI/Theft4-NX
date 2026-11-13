@@ -73,7 +73,11 @@ if "%COMMIT%"=="" (
   exit /b 1
 )
 git -C "%ULT%\.." diff --quiet HEAD -- ultimate tools/ultimate || set "COMMIT=%COMMIT%-dirty"
-echo build_switch.bat: %FLAVOUR% build of %COMMIT% in %BUILD_DIR% (%THEFT4_SWITCH_JOBS% jobs)
+rem The SDK's version.h holds the configure's time (sdk/CMakeLists.txt, string(TIMESTAMP)), and this script configures
+rem at every build: with SOURCE_DATE_EPOCH, which CMake's TIMESTAMP honours, that time is the commit's, so two builds of
+rem one commit give the same NRO byte for byte (U7: the minute changed it before).
+for /f "delims=" %%T in ('git -C "%ULT%\.." log -1 --format^=%%ct HEAD') do set "SOURCE_DATE_EPOCH=%%T"
+echo build_switch.bat: %FLAVOUR% build of %COMMIT% (time %SOURCE_DATE_EPOCH%) in %BUILD_DIR% (%THEFT4_SWITCH_JOBS% jobs)
 cmake -S "%ULT%\app" -B "%BUILD_DIR%" -G Ninja -DCMAKE_BUILD_TYPE=Release ^
   "-DCMAKE_TOOLCHAIN_FILE=%ULT%\tools\switch\cmake\switch-devkitA64.cmake" "-DDEVKITPRO=%DEVKITPRO%" ^
   "-DREXSDK_DIR=%ULT%\sdk" -DREXGLUE_SWITCH_NVK=OFF "-DREXGLUE_SWITCH_NVK_SDK=%THEFT4_NVK_SDK%" ^
