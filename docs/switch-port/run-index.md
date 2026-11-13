@@ -91,3 +91,12 @@ dalla console coincidono con quelli del PC.
 driver Vulkan collegato): commit `aa88997`, build everyday, NRO SHA-256 `f42ae3e4…` (56.408.261 byte), riproducibile byte
 per byte. Pacchetto di test in `out/console-runs/u7-build` (NRO, cache DKSH `1d6f7737…`, `gta4.toml`; ELF e mappa a parte),
 cartella SD `sdmc:/switch/theft4-ultimate/`; `20-ultimate-base-migration.md` §2.11. Il run U8 aggiunge qui la sua riga.
+
+**Run sulla Ultimate Base** (numeri: `tools/ultimate/u8_run_report.py <cartella> [--baseline <cartella>]`, dai 60 s in
+poi; dettagli in `20-ultimate-base-migration.md` §2.12).
+
+| Run | Data | Base: ultimate / NRO | Configurazione | Esito | Log |
+|---|---|---|---|---|---|
+| U8-1 | 2026-11-13 | `aa88997` everyday, NRO `f42ae3e4…` (pacchetto `u7-build`) | `gta4.toml` del pacchetto, cache DKSH U6 (`1d6f7737…`, 4.287 varianti); clock: boost con CPU letta a **2193 MHz** (strumento di clock sulla console) | Erista, 14 min: filmato e gioco, nessun crash. 6,96 fps (mediana), GPU 29,8 ms, render thread 46,9 ms, CPU 299 %; audio 69,8 % del tempo reale (robotico e lento: frame del mixer guest mancanti); 495 compilazioni uam, 88 attese da un draw (77 s: gli stutter); SMAA 0 frame; nessuna cattura | `out/console-runs/u7-build/test` |
+| U8-A | (da fare) | la stessa NRO `f42ae3e4…` (pacchetto `u8-build`) | **la modifica**: cache DKSH rifatta coi file della SD dell'U8-1 (`e8c7cff0…`, 7.490 varianti, §2.12); **condizioni di misura**: `banjo_deko3d_compile_wait_boost = false`, strumenti di clock della console spenti | - | - |
+| U8-B | (da fare) | la stessa NRO | come U8-A + profilo: `switch_profile_stacks`, `renut_gpu_profile = 10` con i contatori, catture ogni 30 s, `banjo_deko3d_variant_log` | - | - |

@@ -24,7 +24,11 @@ committed): ultimate/out/deko3d_shaders/glsl_opt (the GLSL package's texts), ult
    GCC): its records whose key this cache has, byte for byte; the others whose text is among the exported variants,
    compiled by the PC tool and compared; the rest counted (variants the lists did not give: make the cache again with
    that run's list and --runtime-log). This is the check that the PC's uam (the MSVC ABI, not the base's MinGW) gives the
-   console's bytes; first done on run 72's card (docs/switch-port/20, U6).
+   console's bytes; first done on run 72's card (docs/switch-port/20, U6). With --runtime-log, a record that differs
+   where a draw waited for the variant ("BLOCKING (a draw waits)") is the console's one-pass compile
+   (banjo_deko3d_fast_first_compile), counted apart and not a failure (the first U8 run: 8 of 88, 80 the same bytes).
+--console-merge (U8): the card's records are merged too, less the variants a draw waited for, which the PC compiles in
+   full: the variants a run needed but no list or log rule gives (docs/switch-port/20, U8).
 Exit status 0 only if every check passes and no variant failed to compile.
 """
 import argparse
@@ -178,13 +182,86 @@ def fnv1a64(data):
     return h
 
 
-def check_console(path, ours_path, variants):
+RT_RE = re.compile(r'uam: (background|blocking \(prebuild waits\)|BLOCKING \(a draw waits\)) run-time variant '
+                   r'\(stage (\d+), \d+ bytes, base (\d+) bytes ([0-9a-f]{16})\): (.*)$')
+
+
+def waited_keys(logs):
+    """U8: the keys of the variants a draw waited for in these console logs ("BLOCKING (a draw waits)"). plume compiles
+    those in one back-end pass (banjo_deko3d_fast_first_compile, "about a quarter of a full compile") and appends that
+    to the card's cache as it is, so their bytes may differ from the PC tool's full compile."""
+    by_size, fnv = {}, {}
+    for n in os.listdir(GLSL):
+        if NAME_RE.fullmatch(n):
+            by_size.setdefault(os.path.getsize(os.path.join(GLSL, n)), []).append(n)
+    keys = set()
+    for path in logs:
+        for line in open(path, encoding='utf-8', errors='replace'):
+            m = RT_RE.search(line)
+            if not m or not m.group(1).startswith('BLOCKING'):
+                continue
+            size, want = int(m.group(3)), int(m.group(4), 16)
+            name = None
+            for n in by_size.get(size, []):
+                if n not in fnv:
+                    fnv[n] = fnv1a64(open(os.path.join(GLSL, n), 'rb').read())
+                if fnv[n] == want:
+                    name = n
+                    break
+            if name is None:
+                continue
+            defines, last = b'', -1  # as deko3d_variant_cache.py reads the line: the first ascending run
+            for item in [x.strip() for x in m.group(5).split(';') if x.strip()]:
+                parts = item.split()
+                if len(parts) != 2 or not parts[0].isdigit() or int(parts[0]) <= last:
+                    break
+                last = int(parts[0])
+                defines += f'#define SPIRV_CROSS_CONSTANT_ID_{parts[0]} {parts[1]}\n'.encode()
+            t = open(os.path.join(GLSL, name), 'rb').read()
+            nl = t.find(b'\n')
+            keys.add(fnv1a64(t[:nl + 1] + defines + t[nl + 1:] if defines else t))
+    return keys
+
+
+def write_console_merge(console_path, base_path, logs, out_path):
+    """U8 (--console-merge): the records of the card's cache, and of --merge's, as one merge input for
+    deko3d_variant_cache.py, less the variants a draw waited for (waited_keys: possibly one-pass compiles), which the PC
+    compiles again in full. Keys sorted, each once; a key in both takes the card's record (the NRO's own compiler)."""
+    records = {}
+    if base_path and read_cache(base_path, records)[0] is None:
+        return None
+    console = {}
+    if read_cache(console_path, console)[0] is None:
+        return None
+    records.update(console)
+    waited = waited_keys(logs)
+    dropped = [k for k in waited if k in records]
+    for k in dropped:
+        del records[k]
+    with open(out_path, 'wb') as f:
+        f.write(b'BDKC' + struct.pack('<I', 1) + TAG)
+        for k in sorted(records):
+            f.write(struct.pack('<QI', k, len(records[k])) + records[k])
+    print(f'  merge input: {len(records)} records ({len(console)} from the card), {len(dropped)} variants a draw waited '
+          f'for left to the PC tool')
+    return out_path
+
+
+def check_console(path, ours_path, variants, logs=()):
     print('== 5. a console cache against this one')
     console, ours = {}, {}
     if read_cache(path, console)[0] is None or read_cache(ours_path, ours)[0] is None:
         return
     common = [k for k in console if k in ours]
     differ = [k for k in common if console[k] != ours[k]]
+    # U8: a variant a draw waited for is a one-pass compile on the console (waited_keys): its bytes may differ
+    one_pass = waited_keys(logs) if differ and logs else set()
+    known = []
+    if one_pass:
+        known = [k for k in differ if k in one_pass]
+        differ = [k for k in differ if k not in one_pass]
+        print(f'  {len(known)} records differ where a draw waited for the variant (the console\'s one-pass compile, '
+              f'banjo_deko3d_fast_first_compile; this cache has the full compile)')
     for k in differ[:10]:
         fail(f'record {k:016X}: the console\'s DKSH ({len(console[k])} bytes) is not this cache\'s ({len(ours[k])})')
     rest = {k for k in console if k not in ours}
@@ -217,9 +294,9 @@ def check_console(path, ours_path, variants):
                 else:
                     other += 1
                     fail(f'record {k:016X} ({parts[0]}): the PC tool does not give the console\'s DKSH')
-    print(f'  {len(console)} console records: {len(common) - len(differ)} the same as this cache\'s, {len(differ)} '
-          f'different; of the others {same} compiled the same by the PC tool, {other} not, {len(rest)} not among this '
-          f"cache's variants")
+    print(f'  {len(console)} console records: {len(common) - len(differ) - len(known)} the same as this cache\'s, '
+          f'{len(known)} one-pass, {len(differ)} different; of the others {same} compiled the same by the PC tool, '
+          f"{other} not, {len(rest)} not among this cache's variants")
 
 
 def list_hashes(path):
@@ -292,6 +369,7 @@ def write_manifest(path, a, lists, cache):
         'lists': lists,
         'runtime_logs': [os.path.basename(p) for p in a.runtime_log],
         'merged_cache': os.path.basename(a.merge) if a.merge else None,
+        'console_merge': os.path.basename(a.console_merge) if a.console_merge else None,
         'options': ['--generic', '--plain-guess shader_cache_switch.cpp'],
         'cache': cache,
     }
@@ -311,6 +389,9 @@ def main():
     ap.add_argument('--jobs', type=int, default=max(1, (os.cpu_count() or 4) - 2))
     ap.add_argument('--check-only', action='store_true', help='steps 1, 2 and 4 (and 5) on an existing --out')
     ap.add_argument('--console-cache', default=None, help="step 5: a deko3d_shaders.bin the console wrote")
+    ap.add_argument('--console-merge', default=None,
+                    help="U8: a deko3d_shaders.bin the console wrote, merged too (with --merge's records), less the "
+                         "variants a draw waited for in --runtime-log (one-pass compiles there), compiled again here")
     a = ap.parse_args()
     table_path = os.path.join(PKG, 'shader_cache_switch.cpp')
     for p in (GLSL, os.path.join(PKG, 'deko3d_glsl.bin'), table_path):
@@ -330,9 +411,19 @@ def main():
             cmd += ['--list', p]
         for p in a.runtime_log:
             cmd += ['--runtime-log', p]
-        if a.merge:
+        tmp_merge = None
+        if a.console_merge:
+            tmp_merge = tempfile.TemporaryDirectory()
+            merged = write_console_merge(a.console_merge, a.merge, a.runtime_log,
+                                         os.path.join(tmp_merge.name, 'merge.bin'))
+            if merged is None:
+                sys.exit('gta4_dksh_cache: --console-merge: not a cache')
+            cmd += ['--merge', merged]
+        elif a.merge:
             cmd += ['--merge', a.merge]
         r = subprocess.run(cmd, capture_output=True, text=True)
+        if tmp_merge:
+            tmp_merge.cleanup()
         sys.stdout.write(''.join('  ' + l + '\n' for l in (r.stdout + r.stderr).strip().split('\n')))
         if r.returncode != 0:
             fail('deko3d_variant_cache.py')
@@ -371,7 +462,7 @@ def main():
         lists.append({'file': os.path.basename(p), 'sha256': sha256(p), 'version': version, 'pipelines': n,
                       'shaders': len(hashes), 'shaders_not_in_package': len(lacking)})
     if a.console_cache and os.path.isfile(a.out):
-        check_console(a.console_cache, a.out, variants)
+        check_console(a.console_cache, a.out, variants, a.runtime_log)
     if a.manifest:
         write_manifest(a.manifest, a, lists, cache)
     print('gta4_dksh_cache: ' + ('ok' if not failures else f'{len(failures)} checks failed'))

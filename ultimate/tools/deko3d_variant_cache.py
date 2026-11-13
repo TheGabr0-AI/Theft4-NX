@@ -327,6 +327,13 @@ def read_list(path, blend_skip_on, alpha_guess=ALPHA_GUESS):
                     spec[966 + r] = ec
         if no_clip:
             spec[929] = 0
+        # theft4-nx (2026-11-13, U8): the reserved word's bits 4-7 and 8 on, render/pipeline.cpp's constants 924 (the
+        # targets the GPU gamma-encodes) and 925 (their colour exponent biases; halo3-nx 2026-11-03), pixel shader only.
+        # GTA IV's HDR targets have them (925 = 63): without them every such pipeline's variants were missing.
+        if ps and (reserved >> 4) & 0xF:
+            spec[924] = (reserved >> 4) & 0xF
+        if ps and reserved >> 8:
+            spec[925] = reserved >> 8
         for w in range(8):
             for b in range(32):
                 if mask[w] >> b & 1:
@@ -384,6 +391,12 @@ def load_plain_guess(table):
         if mask:
             PLAIN_GUESS[int(m.group(1), 16)] = mask
     return len(PLAIN_GUESS)
+
+
+def plume_generic_drops(cid):
+    """theft4-nx (2026-11-13, U8): plume_deko3d.cpp genericDrops, the constants a generic variant leaves out (the
+    game's bools, 900, 901, 903-906, 909, 920-923, 929)."""
+    return 1000 <= cid <= 1255 or cid in (900, 901, 903, 904, 905, 906, 909, 929) or 920 <= cid <= 923
 
 
 def config_specs(prefix, defaults, sspec):
@@ -543,7 +556,12 @@ def main():
                 continue
             sspec = stage_spec(prefix, spec, vs_shader[0] if vs_shader else None,
                                ps_shader[0] if ps_shader else None, not no_ps)
-            for sspec in config_specs(prefix, shader[1], sspec):
+            # theft4-nx (2026-11-13, U8): also the variant plume draws with while this one is built, the key's own
+            # constants less those genericDrops drops (plume_deko3d.cpp): it keeps 924-926, 928, 932 on, 950 on, 990. A
+            # draw whose generic variant is missing waits for its compile (the console's "BLOCKING (a draw waits)",
+            # 88 in the first U8 run, every one with 925 = 63).
+            generic = {k: v for k, v in sspec.items() if not plume_generic_drops(k)}
+            for sspec in config_specs(prefix, shader[1], sspec) + config_specs(prefix, shader[1], generic):
                 defines = variant_defines(shader[1], sspec)
                 if (prefix, h, defines) in seen:
                     continue

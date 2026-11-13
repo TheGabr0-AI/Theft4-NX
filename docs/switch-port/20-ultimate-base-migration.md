@@ -459,6 +459,141 @@ rinominato `u7-build-12b20c2-superseded`, non cancellato.
 della depth ("EDRAM depth restore … (drawn)") e l'illuminazione dopo (lo Zcull); il pacing (`frame_cap` "Off" con
 `banjo_display_sync`, §2.9).
 
+### 2.12 U8: il primo run su console (2026-11-13; Switch Erista, run dell'utente)
+
+**Cosa si è visto (note dell'utente).** Il gioco parte e il filmato iniziale si vede; audio robotico, gracchiante e
+rallentato come nelle versioni precedenti; il filmato sembra più lento del normale; in gioco molti stutter, al massimo
+circa 8 fps; un sospetto sull'illuminazione.
+
+**Dati.** File della SD in `out/console-runs/u7-build/test` (fuori da git): `logs/renut_001.log` (3.514 righe, 14 minuti
+dalle 21:27:46), `logs/rex/rex_profile.log` (il profilo a 10 s dell'SDK, campionatore degli stack spento),
+`logs/rex/rex_stderr.log`, `deko3d.log`, `deko3d_shaders.bin` (26.257.728 byte), `pipeline_list.bin` (versione 7, 1.037
+pipeline), `gta4.toml` (= quello del pacchetto, SHA-256 `458ea135…`). **Nessuna cattura** (`nfsmw_captura_cada_s` spento):
+l'illuminazione non si può giudicare da questo run. Numeri da `tools/ultimate/u8_run_report.py` (nuovo: legge le stesse
+righe dai log della base e del vecchio albero; `--baseline` per il confronto), dai 60 s in poi:
+
+| | U8, primo run (base, NRO `aa88997`) | run 72 (vecchio albero, `5d542d6`) |
+|---|---|---|
+| fps, mediana (10° percentile) | **6,96** (4,75) | 10,00 (5,96) |
+| render thread, ms a frame (mediana) | 46,9 | 70,1 |
+| GPU, ms a frame (mediana) | **29,8** | 78,6 |
+| draw a frame (mediana) | 2.293 | 2.579 |
+| CPU totale (di 400 %), mediana | 299 | - |
+| audio, quota del tempo reale | **69,8 %** (peggiore 56 %) | 60,9 % (peggiore 51 %) |
+| compilazioni uam nel run | **495**, di cui 88 attese da un draw (77,0 s in tutto) | cache calda |
+| clock letti dal profilo | 1020/460,8 ×69; **2193/76,8 ×9**; 1785/460,8 ×4 (fine); 1020/76,8 ×1 | standard |
+
+Controlli di base: la build è quella giusta ("build aa88997d7ce8 (everyday)"), il gioco viene letto da
+`/switch/theft4/game` (202 voci, sola lettura), la cache DKSH è letta (4.287 varianti, non ricominciata), il ripristino
+della depth gira ("EDRAM depth restore … (drawn)", 8 volte nel filmato) e con lui la chiamata Zcull; nessun crash, uscita
+con `+`.
+
+**Audio: causa confermata dai dati, correzione non ancora fatta.** Il percorso (`switch_audio_system.cpp`,
+`audio_system.cpp`): l'uscita audout a 48 kHz stereo PCM16 (verificato all'apertura) chiede al gioco un frame di 256
+campioni ogni 5,333 ms (pompa a 187,5 Hz, 10 frame di coda); l'Audio Worker chiama la callback del client XAudio del
+gioco, il cui mixer (codice guest) produce il frame; se alla scadenza il frame non c'è, quel pezzo d'uscita è silenzio
+("requests without data"). Il tempo audio del gioco avanza di un frame per frame prodotto, quindi **la quota di frame
+prodotti è anche la velocità del suono**: 70 % = suono al 70 % della velocità, con buchi di silenzio in mezzo (robotico,
+gracchiante, rallentato). Le frequenze sono giuste: nei primi 30 s, col gioco a 60 fps e la CPU al 38-91 %, 1.880-1.892
+frame ogni 10 s su 1.875 attesi, **0 mancanti**; dal caricamento in poi, con la CPU al 300 % (i tre core del gioco
+pieni), 1.130-1.680 prodotti e 200-770 mancanti ogni 10 s (10°-90° percentile). Nessuna saturazione del mix (0
+campioni oltre 1,0, picco massimo 0,261): il gracchiare viene dai buchi, non dal clipping. Il decoder XMA (host) usa il
+20-30 % di un core e consegna i dati in 0,14-0,56 ms di media (mediana 0,33): non è lui a mancare le scadenze. Il produttore è il mixer guest del gioco, che nel run 71 (§5
+del doc 19) era il thread 16 (DSP in `sub_821737C0`, `sub_8216BFE8`, `sub_82185E38`) e che qui, senza campioni degli
+stack, non si può ancora nominare. Due misure già esistenti dicono che non basta spostare lavoro: nel run 72 (vecchio
+albero, lavori di sfondo di ReNut dal core 2 al core 0) l'audio restava al 51-67 %; qui i thread del gioco hanno tutti
+priorità 0x3B e maschera 0x7, e Horizon li alterna a fette di 10 ms (`threading_switch.cpp`). Le due strade (mixer come
+nativo, U10; priorità del mixer, U11) aspettano il profilo del run B.
+
+**Filmato: stessa causa dell'audio (ipotesi forte, da misurare).** Il filmato iniziale di GTA IV non è un video: è una
+cutscene del motore (animazioni da `anim/cuts.img`, audio in streaming da `audio/sfx/cutscenes.rpf`; nel log nessun file
+video aperto). Le cutscene di RAGE seguono l'orologio del loro audio: con l'audio al 70 % anche la cutscene va al 70 %.
+Da verificare nel run A: durata cronometrata della cutscene contro la quota audio nelle stesse finestre.
+
+**Stutter: causa confermata, correzione pronta (cache).** Le 88 compilazioni attese da un draw (in media 0,88 s l'una, 77 s
+in tutto) sono gli stutter; il resto delle 495 compilazioni gira sul thread uam fissato al core 2 (in media il **39 %** di
+un core per tutto il run, mediana 49 %, massimo 79 %: nel profilo è il thread 25500, priorità 0x3E prestata a 0x3B), che
+è uno dei tre core del gioco. Perché la cache di U6 non le aveva: (1) tutte le 88 attese hanno come unica costante
+`925 = 63`: sono le **varianti generiche** dei pixel shader che scrivono sui target HDR di GTA IV. plume disegna con la
+generica mentre compila la specializzata (`genericDrops` toglie solo bool, 900, 901, 903-906, 909, 920-923, 929); se manca
+anche la generica, il draw aspetta. `deko3d_variant_cache.py` della base non produceva queste generiche, e non leggeva dalla
+lista le costanti **924 / 925** (la parola `reserved` della chiave, bit 4-7 e 8 in su, `render/pipeline.cpp`). Prova sul
+PC: dei 329 record compilati dalla console che le regole della base non danno, la lettura di 924/925 ne spiega 13, le
+generiche come plume 204, **le due insieme 297**. (2) Gli 8 record in cui il byte della console differisce da quello del PC
+sono **tutti** varianti attese da un draw: la console le compila in un solo passo (`banjo_deko3d_fast_first_compile`) e
+le salva così; le altre 80 attese hanno gli stessi byte del PC.
+
+**Clock: misura contaminata, da chiarire con l'utente.** Il codice non cambia i clock (l'override sys-clk dell'SDK è
+spento, §2.11), ma plume mette la console in boost mode mentre un draw aspetta una compilazione
+(`banjo_deko3d_compile_wait_boost`, default della base: FastLoad, CPU 1785 MHz e GPU 76,8 MHz). Il profilo ha letto
+**CPU 2193 MHz** in 9 finestre di boost (non è un clock standard dell'Erista: il boost standard è 1785) e 1785 MHz con la
+GPU a 460,8 negli ultimi 40 s, dopo l'ultimo boost: segno di uno strumento di clock attivo sulla console (Horizon OC o
+sys-clk con un profilo di boost). Le finestre di boost sono anche quelle a 2-3 fps (GPU a 76,8 MHz). Per i run di misura:
+strumenti di clock spenti e `banjo_deko3d_compile_wait_boost = false`.
+
+**Prestazioni: CPU del gioco, non GPU.** Senza compilazioni in corso (es. 21:38:29-21:39:29) il render thread è a 11-19 ms
+a frame e la GPU a 37-51 ms (a 460,8 MHz; occupata dal 45 al 68 % del tempo), il gioco a 10-13 fps: il limite non è né la
+GPU né il render thread di ReNut. La CPU è al 299-309 % su 400 per quasi tutto il run: i core 0-2 del gioco sono pieni (il
+core 3 resta al sistema, `banjo_system_core = 0`, scelta di U7). Per thread, in media: un thread guest al 64 %
+(XThreadD80919A0, costante per tutto il run), il thread uam al 39 %, tre worker guest al 27 % ciascuno, il render thread
+di ReNut al 21 % (core 1, 0x2C), il decoder XMA al 21 %, altri due guest al 13-17 %. Rispetto al vecchio albero la GPU è
+molto più leggera (29,8 contro 78,6 ms) e il render thread pure (46,9 contro 70,1, compilazioni comprese); gli fps sono
+più bassi per il carico delle compilazioni e della CPU. Quale thread guest sia sul percorso critico del frame lo dice solo
+il profilo con gli stack (run B). I/O: letture lente dalla SD (10-20 ms per 32 KB-1 MB) sul thread di streaming, 1,3 s ogni
+15 s nei caricamenti; nessuna attesa del gioco su di esse nel log.
+
+**Renderer e illuminazione: niente di anomalo nel log, niente immagini.** Target 7e3 con la loro clamp (costante 990),
+rampa gamma del gioco applicata, resolve con exponent bias 1 e resolve dalla griglia dei campioni come sul PC, texture
+float a 32 bit campionate col punto (come la Xenos, che non le filtra), ripristino della depth disegnato e seguito
+dall'invalidazione Zcull, nessun errore del renderer. **SMAA: 0 frame in tutto il run** (`banjo_renut_smaa` acceso,
+qualità 1): il passo dopo cui si aggancia non arriva mai in GTA IV; è il punto U9 ("SMAA dopo la composizione finale di
+GTA IV"), non cambia la luce. Durante le compilazioni i draw usano la variante generica (729 stadi nei primi due minuti
+di gioco): stessi pixel per progetto, ma è anche ciò che si vede nei primi secondi in una zona nuova. Per giudicare la luce
+servono catture della console (run B) da confrontare con quelle del run 72 (`out/console-runs/72-logs/captures`,
+scena giusta confermata nel run 70) e con le catture PC della base (U4b-U5).
+
+**Correzione circoscritta (solo strumenti del PC, nessun cambiamento della NRO):**
+
+- `ultimate/tools/deko3d_variant_cache.py` (strumento della base): legge 924 / 925 dalla lista come `render/pipeline.cpp`,
+  e per ogni pipeline aggiunge la variante che plume disegna mentre costruisce la sua (`plume_generic_drops`, le stesse
+  costanti di `genericDrops`).
+- `tools/ultimate/gta4_dksh_cache.py`: `--console-merge` unisce i record della cache della SD (il compilatore della NRO),
+  tranne le varianti attese da un draw, che il PC ricompila per intero; al passo 5, con `--runtime-log`, i record diversi
+  dove un draw aspettava sono contati come compilazioni in un passo della console, non come errori.
+
+**La cache U8 (sul PC; manifest `docs/switch-port/ultimate-manifests/dksh-u8.json`, fatta sull'albero di questo commit):**
+ingressi le liste di U6 (`pc-u5`, `console-run72`) e quella della SD dell'U8-1 (`console-u8a.pipeline_list.bin`, `0fca9879…`,
+1.037 pipeline), il log `deko3d.log` della SD (`75f694eb…`, 152 righe di varianti), `--merge` la cache di U6 (`1d6f7737…`),
+`--console-merge` la cache della SD (`7291aedc…`: la cache di U6 identica come prefisso più 495 record integri). Copie
+degli ingressi in `ultimate/out/deko3d_shaders/lists/console-u8a.*` (fuori da git). Risultato: **7.490 record, 40.096.816
+byte, SHA-256 `e8c7cff0…`**; 2.796 varianti compilate sul PC, **0 fallite**; 7.457 varianti esportate, ognuna col suo
+record e la chiave controllata; i passi 1, 2 e 4 come in U6 (1.370/1.370, uam libreria = strumento 147/147). Passo 5
+contro la cache della SD: **4.774 record identici, 8 in un passo (le compilazioni attese da un draw, sostituite qui dalla
+compilazione completa), 0 diversi, 0 mancanti**. Prima della correzione dello strumento lo stesso passo dava 8 errori e 329
+record della console assenti (`gta4_dksh_cache: 8 checks failed`).
+
+**Pacchetto di test** `out/console-runs/u8-build` (fuori da git): **la NRO di U7 identica** (`f42ae3e4…`, controllata contro
+`SHA256SUMS.txt` di U7: un'altra build avrebbe un'altra stringa del commit, quindi un altro binario), ELF e mappa di U7, la
+cache U8, due toml: `gta4.toml` (run A: le opzioni di U7 + `banjo_deko3d_compile_wait_boost = false`, SHA-256
+`c3bea098…`) e `gta4-profile.toml` (run B: come A + `switch_profile_stacks`, `renut_gpu_profile = 10` con
+`renut_gpu_profile_counters`, `nfsmw_captura_cada_s = 30` (40 al massimo), `banjo_deko3d_variant_log`; `d302d8c6…`).
+Entrambi letti con `tomllib`: chiavi al livello principale, opzioni di U7 invariate. README con le istruzioni per la SD.
+
+**Atteso dal run A, e da verificare sulla console (nulla è dichiarato risolto):** 0 compilazioni attese da un draw sullo
+stesso percorso e poche compilazioni in tutto (righe `uam N compiles`, `blocking: N a draw waited for`); il thread uam
+quasi fermo, quindi il core 2 libero per il gioco; di conseguenza, forse, più fps e audio un po' meno affamato, ma la
+causa dell'audio resta (sopra). Il run B dà: il thread del mixer e le sue funzioni, il thread sul percorso critico del
+frame, la GPU per passata, le catture per la luce, le varianti esatte per la cache successiva.
+
+**Cosa serve dall'utente:**
+
+1. Strumenti di clock della console (Horizon OC / sys-clk): spenti per i run di misura, o il loro stato, perché il profilo
+   ha letto 2193 MHz.
+2. Run A e run B col pacchetto `u8-build` (README), sullo stesso percorso dell'U8-1: la cutscene iniziale fino in fondo
+   (inizio e fine cronometrati), poi a piedi e in auto per 10-15 minuti.
+3. Dalla SD, per ognuno: `logs/` intera, `deko3d.log`, `deko3d_shaders.bin`, `pipeline_list.bin`; dal run B anche
+   `capturas/` e `deko3d_variants.txt`; le note su audio, stutter, luce e percorso.
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si
@@ -488,3 +623,4 @@ della depth ("EDRAM depth restore … (drawn)") e l'illuminazione dopo (lo Zcull
 | U5b | 2026-11-13 | `db37f00` | correzioni del vecchio renderer confrontate con la base: 7e3, ripristino della depth e resolve MS coperti; scambio dei mezzi tile in pixel guest riportato; attesa delle fence D3D12 per valore e vsync PC spento (avvii 12/12 invece di 7/12); rampa gamma del gioco accesa; Zcull pronto per U7; percorso SA2 identico, GuestPtr della base corretto su Switch, chiamate in uscita senza problemi reali con `EXIT_ABI=0`. §2.9 |
 | U6 | 2026-11-13 | `ede3a9b` | solo PC. Strumenti Switch della base integrati: uam e SPIRV-Cross per PC (`build_deko3d_tools.bat`, uam sull'ABI MSVC), contenitori coi nomi della base (`gta4_shader_dump.py`; i vecchi nomi nascondevano i pixel shader all'early alpha e avevano fatto copiare 1.250 duplicati in eu-private, ora spostati), cache e controlli (`gta4_dksh_cache.py`). 1.370 shader tradotti e compilati, 0 falliti; tabella PC = tabella Switch; cache di 4.287 varianti da due liste, 0 fallite, ogni chiave controllata; i 409 DKSH che la console aveva compilato nel run 72 rifatti identici sul PC. Manifest `dksh-u6.json`. §2.10 |
 | U7 | 2026-11-13 | `12b20c2`, `aa88997` | build Switch, nessun run su console. Prima NRO di GTA IV sulla base (deko3d, nessun driver Vulkan), everyday: toml Switch di GTA IV (gamma accesa, niente di Katamari, nessuna modalità a 4 core), Zcull dopo il ripristino della depth, cartella SD propria; NRO `f42ae3e4…` riproducibile byte per byte; controlli del pacchetto e della cache superati; pacchetto `out/console-runs/u7-build`, manifest `switch-u7.json`. NRO guard non costruita (U10). §2.11 |
+| U8, primo run | 2026-11-13 | (questo commit) | **primo run su console (Erista, utente)**, NRO `aa88997`: avvio, filmato e gioco per 14 minuti senza crash. 6,96 fps (mediana), GPU 29,8 ms (78,6 nel vecchio albero), CPU 299 % su 400; audio al 69,8 % del tempo reale per i frame che il mixer guest non produce in tempo (frequenze giuste: 100 % a 60 fps); filmato = cutscene a orologio audio (ipotesi); stutter = 88 compilazioni attese da un draw (77 s), generiche con 925 che la cache non aveva. Strumento della cache corretto (924/925, generiche come plume, unione della cache della SD): 7.490 record, passo 5 senza errori. `u8_run_report.py`. Clock letti a 2193 MHz nel boost (strumento sulla console). **Nessuna correzione dichiarata riuscita:** pacchetto `u8-build` (stessa NRO, cache nuova) per i run A e B. §2.12 |
