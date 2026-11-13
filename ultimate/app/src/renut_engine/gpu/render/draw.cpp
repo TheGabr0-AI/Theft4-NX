@@ -14762,7 +14762,8 @@ bool RestoreDepthFromColorLocked(HostSurface *depth, HostSurface *color) {
   cmd->setGraphicsDescriptorSet(s.texture_set.get(), 0);
   cmd->setGraphicsDescriptorSet(s.sampler_set.get(), 1);
   UtilityPush push{};
-  push.scale[0] = push.scale[1] = 1.0f;
+  // theft4-nx (2026-11-13, from Theft4-NX's 00683a5): depth_restore_ps swaps the EDRAM half tiles in guest pixels.
+  push.scale[0] = push.scale[1] = depth->scale.Factor();
   push.texture_index = slot;
   push.sampler_index = kPointClampSamplerSlot;
   push.param0 = GpuTextureFormat(depth->format_word & 0x3F) == GpuTextureFormat::Fmt24_8_Float ? 1.0f : 0.0f;

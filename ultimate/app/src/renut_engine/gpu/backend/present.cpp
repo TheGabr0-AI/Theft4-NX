@@ -17,6 +17,7 @@
 #include <plume_render_interface.h>
 
 #include <rex/cvar.h>
+#include <rex/platform.h>  // theft4-nx (2026-11-13): REX_PLATFORM_SWITCH for renut_vsync's default
 
 #include "renut_engine/gpu/backend/backend.h"
 #include "renut_engine/gpu/backend/gpu_profile.h"
@@ -52,11 +53,24 @@ REXCVAR_DEFINE_DOUBLE(banjo_renut_diag_show_gamma, 1.0, "Banjo/Renut",
                       "Diagnostic: banjo_renut_diag_show_texture's exponent (depth near 1 shows with 64 or so)");
 
 // banjo-nx (2026-10-20): see GameGamma below.
-REXCVAR_DEFINE_BOOL(banjo_renut_game_gamma, false, "Banjo/Renut",
+// theft4-nx (2026-11-13): on for GTA IV, as its display shows it on the Xbox 360 and as Theft4-NX's ReNut renderer did
+// (sa2_renut_gamma_ramp on, R3's brightness check). GTA IV's ramp is not the identity: the same build's opening cutscene
+// with it, PC, D3D12, the same shot at 60 s (the deck and the skyline): mean RGB 84/126/138 instead of 98/137/149
+// (deeper mid-tones, the sky less washed out). Off for Katamari in the base (its own choice, not in docs/off-by-default.md).
+REXCVAR_DEFINE_BOOL(banjo_renut_game_gamma, true, "Banjo/Renut",
                     "Apply the gamma ramp the game loads to the output, as the Xbox 360's display and banjo-nx's own "
                     "renderer do (N&B's darkens the midtones, about x^1.17). Off: Renut's output as before");
 
+// theft4-nx (2026-11-13, as Theft4-NX's 4c0eb6c measured on its own tree): off by default on the PC. GTA IV on this
+// base, D3D12: with the swapchain's SyncInterval 1, 5 of 12 boots stopped before the device existed (the UI thread's
+// overlay-only present waited for a frame the queue never finished, holding the video mutex the game's
+// Direct3D_CreateDevice then waited for); 12 of 12 with it off (and plume's fence wait by value). The Switch keeps the
+// base's default (deko3d presents there).
+#if REX_PLATFORM_SWITCH
 REXCVAR_DEFINE_BOOL(renut_vsync, true, "Nuts&Bolts/Graphics",
+#else
+REXCVAR_DEFINE_BOOL(renut_vsync, false, "Nuts&Bolts/Graphics",
+#endif
                     "Show each frame at the display's refresh: no tearing, and the game runs at "
                     "the refresh rate (frame_cap then only limits below it). Off shows frames at "
                     "once, with tearing.");

@@ -2726,7 +2726,30 @@ namespace plume {
         assert(fence != nullptr);
 
         D3D12CommandFence *interfaceFence = static_cast<D3D12CommandFence *>(fence);
-        WaitForSingleObjectEx(interfaceFence->fenceEvent, INFINITE, FALSE);
+        // theft4-nx (2026-11-13, from Theft4-NX's 4c0eb6c): wait for the fence's last signal by its value. The event is
+        // auto-reset and set once per signal (executeCommandLists' SetEventOnCompletion): a fence signalled twice before
+        // its wait leaves one set state for two values, and the next wait never returns with the GPU idle. GTA IV on
+        // this base, PC: 3 of 6 boots stopped with the UI thread here (Video::PresentOverlayOnly -> WaitSlotLocked,
+        // holding the video mutex) and the game's thread waiting for that mutex in Video::SetGuestDevice.
+        const UINT64 target = interfaceFence->fenceValue - 1;  // fenceValue is the next value to signal
+        while (interfaceFence->d3d->GetCompletedValue() < target) {
+            interfaceFence->d3d->SetEventOnCompletion(target, interfaceFence->fenceEvent);
+            if (interfaceFence->d3d->GetCompletedValue() >= target) {
+                break;
+            }
+            if (WaitForSingleObjectEx(interfaceFence->fenceEvent, 3000, FALSE) == WAIT_TIMEOUT) {
+                // A wait of more than 3 s is a GPU that stopped: said once per fence, with the device's state.
+                static thread_local const void *reported = nullptr;
+                if (reported != interfaceFence) {
+                    reported = interfaceFence;
+                    fprintf(stderr, "waitForCommandFence: fence %p at %llu, waiting for %llu for 3 s; device removed "
+                                    "reason 0x%lX\n", (void *)interfaceFence,
+                            (unsigned long long)interfaceFence->d3d->GetCompletedValue(), (unsigned long long)target,
+                            (long)device->d3d->GetDeviceRemovedReason());
+                    fflush(stderr);
+                }
+            }
+        }
     }
 
     // D3D12Buffer

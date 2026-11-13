@@ -76,3 +76,7 @@ come controllo del vecchio albero; i run sulla base avranno la colonna "Base: ul
 Base (`renut.exe` della base, i 23 hook GTA IV): 120 s fino alla scena d'apertura, giusta come nelle catture R3, 60 fps
 sul PC; nessun errore di memoria fisica, nessuna chiamata a guest 0. Dettagli e problemi aperti (autoverifica dello
 stack forwarding: da risolvere prima di ogni build Switch): `20-ultimate-base-migration.md` §2.7.
+
+**2026-11-13, U5 sulla base: solo PC, nessun run su console.** Stack forwarding corretto (`5000be5`: 0 differenze su
+8,5 M controlli); correzioni del renderer confrontate con la base, avvio PC affidabile (8 su 8), rampa gamma del gioco
+accesa (§2.8-§2.9). Il primo run su console resta U8, dopo la build Switch (U7).

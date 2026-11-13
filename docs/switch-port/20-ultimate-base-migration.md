@@ -263,6 +263,55 @@ U4 parte da qui: le zone della coda (+8 / +16 rispetto a Katamari) si riprendono
   copie); `hook_census.py --strict` 0 problemi; `test_ultimate_gta4_layout.py` 0 differenze. Handoff alla base: la
   stessa correzione vale per ogni gioco.
 
+### 2.9 U5b: le correzioni del vecchio renderer contro la base, l'avvio PC affidabile (2026-11-13)
+
+Ogni correzione verificata del renderer di Theft4-NX (R3, runs 66-70) confrontata con l'equivalente della base:
+
+| Correzione (commit) | Nella base | Esito |
+|---|---|---|
+| Formati colore 0xA / 0xC come 2 / 3, HDR 7e3 (`efe507d`) | port 75, `renut_format_edram_as_variants` (acceso): 0xA come 2, 0xC come 3; 3 e 0xC in FP16 con l'alfa (`renut_format_7e3_rg11b10` spento) | **coperta**, niente da riportare (log: target 7e3 = host format 10, RGBA16F) |
+| Ripristino della depth dal colore (`6921903`) | port 29, `sasrt_renut_depth_restore` (gira: "EDRAM depth restore ... (drawn)") | **coperta** |
+| Metà dei tile EDRAM scambiate (`00683a5`) | port 29 le scambia in **pixel host** (`texel.x % 80`) | **riportata**: lo scambio in pixel guest (`depth_restore_ps.hlsl`, `SwapHalfTile`, scala da `depth->scale.Factor()`), come il nostro. A scala 1 è la stessa colonna (scena PC invariata); a un'altra scala (render scale, risoluzione dinamica di U9) la base scambiava le colonne sbagliate |
+| Resolve multisample disegnati, MS non compressi e descrittori "decayed" su deko3d (`1846a14`, `e6d8b94`) | `msaa_level` 1 di default: ogni target MSAA del gioco diventa a un campione (`surfaces.cpp`), i resolve 4x leggono la griglia dei campioni (`blur_renut_sample_grid_resolve`); il plume deko3d della base comprime i target MS e li descrive come MS | **non riportata ora**: con `msaa_level` 1 non esistono immagini MS (il caso dei runs 68-69 non si presenta). Il nostro fix è legato ai nostri shader che leggono la griglia; quelli della base (`edram_inherit.hlsli`, `depth_resolve_ms_ps`) leggono MS veri. Da decidere in U9 (prove con MSAA) e solo con la console |
+| Zcull invalidato dopo il ripristino della depth (`1846a14`) | no (solo dopo copie e upload: `invalidateZcullAfterCopy`); `banjo_deko3d_zcull` acceso | **pronta, non committata**: `Deko3DInvalidateZcull` + la chiamata dopo il ripristino (`ultimate/out/u5-wip/`, la parte plume compilata con `aarch64-none-elf-g++ -fsyntax-only`); entra con la prima build Switch (U7), che la compila |
+| GuestPtr con la tabella guest dello Switch (`ebc999f`) | l'SDK 0.10 riserva una finestra contigua di 4,5 GB e mappa ogni vista al primo accesso (`guest_memory_switch.h`); su Switch `host_address_offset` è 0 (granularità 4 KB) | **non serve**: la somma `base + VA` di `GuestPtr` è `TranslateVirtual` su quel layout (verificato sul codice; la console lo proverà in U8) |
+| Vsync D3D12 spento e attesa delle fence (`4c0eb6c`) | `renut_vsync` acceso; `waitForCommandFence` su un evento auto-reset | **riportata** (sotto) |
+
+- **Avvio PC bloccato (trovato in U5):** 5 avvii su 12 si fermavano prima del device. Stack dei thread (dbghelp, PDB):
+  il thread UI in `Video::PresentOverlayOnly` -> `SubmitAndAdvance` -> `WaitSlotLocked` aspettava un frame che la coda
+  D3D12 non finiva (fence a 5, attesa 6, device non rimosso) tenendo il mutex video; il thread del gioco, in
+  `Gta4CreateDevice`, aspettava quel mutex in `Video::SetGuestDevice`. Con la swapchain flip e `SyncInterval 1` la coda
+  aspetta il back buffer. Misure: vsync acceso 3 bloccati su 6, poi 5 su 12 anche con l'attesa delle fence corretta;
+  vsync spento + attesa corretta **12 su 12**; con i default nuovi **8 su 8**. Correzioni: `plume_d3d12.cpp`
+  `waitForCommandFence` aspetta il valore dell'ultimo segnale (l'evento auto-reset perdeva un segnale se la fence ne
+  riceveva due prima dell'attesa); `renut_vsync` spento di default **solo sul PC** (`present.cpp`; Switch invariato).
+- **Rampa gamma del gioco:** nella base `banjo_renut_game_gamma` è spento (scelta di Katamari, non nella lista
+  `off-by-default.md`); il nostro renderer la applicava (`sa2_renut_gamma_ramp`), come il display della 360. La rampa di
+  GTA IV non è l'identità: stessa build, stessa inquadratura a 60 s, media RGB 84/126/138 con la rampa, 98/137/149
+  senza (mezzitoni più profondi, cielo meno slavato). **Accesa di default** per GTA IV. Da fare in U7:
+  `katamari_switch_defaults.toml` la spegne per Katamari: il toml Switch di GTA IV non deve copiarlo.
+- **Percorso SA2:** `Gta4CreateDevice` e `Gta4NewSegment_hook` **identici** riga per riga (commenti esclusi) a
+  `Sa2CreateDevice` / `Sa2NewSegment_hook` del renderer funzionante. Lo Swap differisce in quattro punti:
+  - il pacing: la base usa `renutFrameLimit` (`frame_cap` "Off" + display sync), non il `PaceSwap` di sa2-nx che seguiva
+    l'intervallo di presentazione del gioco. Sul PC GTA IV gira a 60-67 fps invece del ritmo della console.
+    **Differenza reale, da decidere sulla console (U8)**: `frame_cap` 30 o l'intervallo del gioco;
+  - la gamma (sopra);
+  - il layout dei core: `banjo_renut_core_layout` spento nella base, acceso nel vecchio albero. Resta quello della base
+    (nessuno spostamento di thread senza misure, U11);
+  - `ResetAllState` a ogni frame (meccanismo della base, innocuo sul PC).
+- **Chiamate in uscita** (`cc_exit_census.py` sul codice nuovo; prima istruzione che legge un registro "morto
+  all'uscita", con uno script di classificazione): 14.541 chiamate indirette, 572 segnalate, e nessuna è un problema
+  reale con la configurazione di GTA IV (`SASRT_REG_LIVENESS_EXIT_ABI=0`, che tiene vivi quei registri: il codice si
+  comporta come l'originale). Divisione:
+  - 280 sono un limite dello strumento: `frsqrte` non è decodificato da `reg_liveness` e conta come lettura di tutto;
+  - 368 sono `vmrghw` / `vmrglw` e 3 `vupkhsh` su v5-v13, che l'analisi (insensibile ai percorsi) raggiunge da rami o
+    cicli dove il registro è caricato poco prima (es. `sub_82831278`: `lvx128 v8`, `v9`, poi `vmrghw v12,v8,v9`).
+
+  Accendere l'ABI d'uscita (un'ottimizzazione) richiederebbe di provarle una per una e di decodificare `frsqrte`: non
+  si fa ora.
+- **Verifica PC della build finale** (D3D12, default nuovi, 120 s): scena d'apertura giusta (stessa inquadratura di R3 a
+  90 s, personaggi interi), 67 fps senza limite, autoverifiche a 0 differenze, nessun errore del renderer; 8 avvii su 8.
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si
@@ -288,3 +337,5 @@ U4 parte da qui: le zone della coda (+8 / +16 rispetto a Katamari) si riprendono
 | U4, stato iniziale | 2026-11-12 | (sotto) | `tools/ultimate/hook_census.py` (ogni indirizzo 82xxxxxx nel codice dell'app e dell'SDK, commenti e stringhe esclusi; compilato o no secondo i CMake dell'app e gli include; contro `tools/ultimate/gta4_hook_bindings.csv`, i 23 hook del renderer funzionante, ognuno ritrovato nel doc 18 e nella tabella X() di `gta4_d3d.h`): **335 hook vivi in file compilati, tutti agli indirizzi di Katamari**; 9 cadono su un inizio di funzione GTA IV e la sostituirebbero (`824D09C8` FindTextureSize, sei render-state, `824E11A0` InitializeApiState di Katamari...), gli altri 326 nominano indirizzi che in GTA IV non sono funzioni (il link fallirebbe); 0 dei 23 binding GTA IV legati. `tests/renut/test_ultimate_gta4_layout.py` (ogni costante di `d3d.h` e `d3d_native.h` della base contro il valore GTA IV del renderer funzionante, con le istruzioni rilette dal codice 0.10 rigenerato): **10 valori diversi, non 5**: i cinque di `d3d.h` (§2.4, ognuno ritrovato nelle istruzioni) e in `d3d_native.h` `CommandBuffer` 13.500 e `SideBuffer` 16.712 (ritrovati nelle istruzioni), `AutoDepthStencil` / `AutoFrontBuffer` / `AutoBackBuffer` 14.808 / 14.812 / 14.816 (spostati di +8 come i campi vicini; nessun codice GTA IV li legge, nota del renderer funzionante) |
 | U4a | 2026-11-12 | `d3bf040`, `9e3e75a`, `e012b96`, `7fd9864` | i 10 valori del layout GTA IV nella base (test 0 differenze); censimento degli offset in linea (144, 56 diversi); script per sganciare i binding di Katamari (§2.4-§2.6) |
 | U4b | 2026-11-13 | (questo commit) | 23 hook GTA IV legati ai corpi della base, percorso del device di sa2-nx, Swap / SetFence / gamma / clear / resolve / tiling adattati, 323 binding di Katamari sganciati; `hook_census.py --strict` 0 problemi; rigenerazione `gen-u4b-hooks.json` (`08e5df6f…`), 0 chiamate dirette ai binding; build PC completa con gli shader; **primo avvio completo sul PC** (D3D12, 120 s): scena d'apertura giusta come R3, 60 fps, nessun errore di memoria fisica o chiamata a guest 0. Aperto: 60.434 inoltri di `stack_forward.py` sbagliati su 7,7 M (da risolvere prima di ogni build Switch). §2.7 |
+| U5a | 2026-11-13 | `5000be5` | `stack_forward.py` corretto alla radice (chiamate e salti nel corpo delle istruzioni); 4 punti sbagliati trovati col reporter + PDB; rigenerazione `gen-u5-stackfwd.json` (`3e76d58a…`, 67 inoltri in 39 funzioni); PC: 8,5 M inoltri controllati, **0 differenze**. §2.8 |
+| U5b | 2026-11-13 | (questo commit) | correzioni del vecchio renderer confrontate con la base: 7e3, ripristino della depth e resolve MS coperti; scambio dei mezzi tile in pixel guest riportato; attesa delle fence D3D12 per valore e vsync PC spento (avvii 12/12 invece di 7/12); rampa gamma del gioco accesa; Zcull pronto per U7; percorso SA2 identico, GuestPtr della base corretto su Switch, chiamate in uscita senza problemi reali con `EXIT_ABI=0`. §2.9 |
