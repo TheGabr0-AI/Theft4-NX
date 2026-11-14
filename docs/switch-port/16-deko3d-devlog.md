@@ -4628,3 +4628,8 @@ card's `renut/`): Niko and the ground black on the console, lit on the PC (67.9 
 60 s). Not the run 68-69 case (no multisampled pipeline exists with `msaa_level` 1). The deko3d-only paths active in
 the scene (the depth hand-over of the shadow map, depth compression and its decompressions, Zcull, the GPU rounds'
 barrier skips) are bisected on the console with one switch per run (`out/console-runs/u8-light`, L0-L5).
+The bisection (L0-L5, `20` section 2.14): every switch applied (read in the logs), the room the same in all six: none
+of those four. The cause is a rule the base took from the Halo 3 port, `halo3_renut_target_gamma_bias` (on by default):
+`banjoTrim()` multiplies each pixel shader's alpha by 2^(target exponent bias) in SPIR-V only. GTA IV's HDR targets have
+bias -1, so 249 of run B's 910 pipelines blended with half their alpha on deko3d; the old renderer never had the rule
+and the PC's DXIL does not run it. Test F1 (`out/console-runs/u8-light2`): the same run with the rule off, no build.

@@ -152,6 +152,8 @@ set(RENUT_SOURCES
     # katamari-nx: the native copies of hot game functions (banjo_hot_guest.cpp and its shards), from this game's PC
     # profile (docs/katamari-notes.md, "Hot functions"): src/cpu/hot/localized.txt and hand.txt.
     src/cpu/banjo_hot_guest.cpp
+    # Theft4-NX (docs/switch-port/20 section 2.14): GTA IV's job workers' poll loop, sub_828E2350, with a yield when idle.
+    src/cpu/gta4_job_poll.cpp
     src/cpu/banjo_hot_shard_0.cpp
     src/cpu/banjo_hot_shard_1.cpp
     src/cpu/banjo_hot_shard_2.cpp
@@ -249,6 +251,8 @@ endif()
 # the any-mode helper counts stay complete.
 # 2026-10-22: the bulk shards are the same kind of code (BANJO_HOT_SOURCES: every file that compiles copies).
 set(BANJO_HOT_SOURCES src/cpu/banjo_hot_guest.cpp
+    # Theft4-NX: the generated statements of sub_828E2350 (src/cpu/gta4_job_poll.cpp), built as game code too.
+    src/cpu/gta4_job_poll.cpp
     src/cpu/banjo_hot_shard_0.cpp
     src/cpu/banjo_hot_shard_1.cpp
     src/cpu/banjo_hot_shard_2.cpp

@@ -60,3 +60,5 @@ reviewed-file,ultimate/app/src/cpu/banjo_reverb_native.cpp,Katamari reverb nativ
 reviewed-file,ultimate/app/src/cpu/katamari_stage_diag.cpp,Katamari stage diagnostic,,"its own key, off by default (katamari-nx: 'diagnostic, off by default')"
 reviewed-file,ultimate/app/src/renut_engine/mnk_controls.cpp,N&B mouse and keyboard,,"writes 0x82E0B14C only from midasm hooks that config/renut_hooks.toml (empty for GTA IV) registers; mnk_controls key off"
 reviewed-file,ultimate/app/src/renut_engine/gpu/guest/photo_capture.cpp,N&B photo capture,,"reached only from N&B's photo hooks (not built / unhooked)"
+binding,828E2350,Gta4JobPollYield,,doc 20 s2.14: the job workers' poll loop (U8-B stack samples: sub_82221358 spinlock and its CAS >50 % of the workers); reached only through the function table
+reviewed-file,ultimate/app/src/cpu/gta4_job_poll.cpp,GTA IV job poll loop,,"the generated statements of sub_828E2350: its labels and link-register values, and its two callees called through __imp__ as the original calls them (not hooks)"

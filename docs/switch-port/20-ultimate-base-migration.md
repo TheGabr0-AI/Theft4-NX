@@ -732,6 +732,79 @@ bisezione della luce, che non richiede build. Per l'audio, anche fatte tutte, le
 -4 % sul thread, nativi -7/-26 % sulla propria funzione) non bastano da sole al 100 %: il filtro IIR esatto resta il
 costo maggiore e toccarlo vuol dire cambiare la semantica dei `fmadds` (decisione dell'utente).
 
+### 2.14 U8: la bisezione L0-L5, la causa della luce, lo spinlock dei worker (2026-11-13)
+
+**I sei run erano validi** (letto nei log, non dai toml): L1 nessuna riga di hand-over; L2 "depth targets not compressed" e
+0 decompressioni; L3 "zcull off"; L4 `sasrt_gpu_lean_barrier_skip (off)` e `sasrt_gpu_target_wait_tracked (off)`; L5
+"non-cpu master OFF" (85 miglioramenti attivi su 158 invece di 146; lo Zcull, la compressione e l'hand-over restano
+accesi: non sono nella sua tabella). **La stanza a 61 s è la stessa in tutti e sei** (`u8_capture_compare.py`: 67,6-67,8 %
+di pixel quasi neri, il PC 28,1 %; le differenze a 60-76 s di L1 e L3 sono il giocatore che si è mosso). Le quattro parti
+solo deko3d sono escluse.
+
+**La causa: una regola del port di Halo 3 entrata con la base (dimostrata sul codice e sui dati; da confermare sulla
+console col run F1).** `banjoTrim()` di `ultimate/app/thirdparty/reblue-XenosRecomp/XenosRecomp/shader_common.h`, chiamata a
+ogni uscita di ogni pixel shader, nella base fa due cose in più del vecchio albero, **solo nello SPIR-V** (`#ifdef
+__spirv__`: deko3d e Vulkan, non il DXIL del PC): la codifica gamma di un target `k_8_8_8_8_GAMMA` (costante 924) e
+**l'alfa moltiplicata per 2^bias** del target (costante 925, `saturate`). Le accende `halo3_renut_target_gamma_bias`
+(`renut_engine/gpu/ultimate.cpp`, **acceso di default per ogni gioco**; il commento dice "Halo 3's menu was nearly
+transparent without the bias"), che in `render/draw.cpp` (`key.reserved`, bit 8 e oltre) mette il bias di
+`RB_COLOR_INFO` nella chiave della pipeline. Entrata nel repository con l'import della base (U1, `ebd1da4`; base
+`8de5d51a`, halo3-nx 2026-11-03). Prove:
+
+- il vecchio albero (runs 70-72, luce giusta sulla console) non ha né le costanti 924/925 né quel codice
+  (`thirdparty/renut/.../shader_common.h`: `banjoTrim` fa solo l'output trim; 0 dei suoi 1.370 GLSL nomina la 925, tutti i
+  704 pixel shader della base sì);
+- GTA IV scrive i suoi target HDR con bias -1 (`925 = 63`, sei bit con segno): **249 delle 910 pipeline del run B**, 97
+  pixel shader; il loro blend usa l'alfa sorgente (186 `SRC_ALPHA / 1-SRC_ALPHA`, 9 `SRC_ALPHA + ONE`, luci additive
+  pesate dall'alfa; 42 `ONE + ONE`, 12 `ONE / ZERO`): sulla Switch ognuna mescola con metà opacità, sul PC con quella
+  piena. Le altre differenze SPIR-V dei due `shader_common.h` (fetch delle texture: le stesse conversioni `renutSigns`, i
+  flag nella parola del sampler invece che della texture) non cambiano i valori;
+- il rapporto di luminanza misurato (0,70 sull'immagine, 0,82 al centro) è quello di un fattore 2 sull'intensità lineare
+  dopo la gamma;
+- sul PC (D3D12) dallo stesso salvataggio `--halo3_renut_target_gamma_bias=false` lascia la stanza com'era (28,1 % di
+  pixel quasi neri a 90 s, il caricamento più lento): nessuna regressione dove la luce è giusta. La prova diretta sul PC
+  col backend Vulkan (che compila lo stesso SPIR-V) non è possibile qui: `renut.exe --renut_gpu_backend=vulkan` va in
+  crash nel driver (`amdvlk64.dll`, 0xC0000005) subito dopo la swapchain.
+
+Quanto vale per il 360 la regola di Halo 3 (bias sull'alfa, non sul colore) resta aperto; per GTA IV contano i fatti: senza
+la regola il vecchio renderer e il PC disegnano giusto. **Prova sulla console, senza build:** `out/console-runs/u8-light2`
+(`gta4-F1.toml` = L0 + `halo3_renut_target_gamma_bias = false`, README). Se la stanza torna come quella del PC, la riga va
+in `app/gta4_switch_defaults.toml` (la regola di un altro gioco spenta per GTA IV) con la build successiva.
+
+**Lo spinlock dei worker: è un'attesa di lavoro, non una sezione critica lunga.** `sub_828E2350` (raggiunta solo dalla
+tabella delle funzioni: nessuna chiamata diretta nel codice generato) è il ciclo dei tre worker sulla coda di un job:
+prende lo spinlock a `0x8312F23C` (`sub_82221358`: CAS `sub_827DF9C0`, poi un ritardo contato da 8 a 1.024 passi su una
+variabile dello stack, mai una cessione del core), legge quanti elementi restano (totale `*(*(ctx+20)+8)` meno l'indice
+condiviso a `0x83130250`), ne prenota al massimo `*0x82A939D4`, rilascia il lock, esegue gli elementi (`sub_828E1F68`) e
+ricomincia finché il byte +12 del job non dice che è finito. **Quando non c'è niente da prenotare il worker riprende
+subito il lock**: tre worker lo fanno di continuo sulla stessa riga di cache, e il lock resta occupato poche istruzioni
+alla volta. Nel profilo di B il lavoro vero (`sub_828E1F68`) quasi non compare: i worker girano a vuoto in attesa che il
+thread principale dia lavoro, sui core del thread principale e del mixer. Correzione (non una priorità, non un core):
+`ultimate/app/src/cpu/gta4_job_poll.cpp`, `REX_HOOK_RAW(sub_828E2350)` con **le istruzioni generate della funzione copiate
+identiche** (un diff automatico contro `renut_recomp.140.cpp` dà solo le tre righe aggiunte) più una chiamata a
+`rex::thread::MaybeYield()` quando il passaggio non ha prenotato nulla e il job è aperto (la politica di attesa a polling
+dell'SDK, `switch_yield_backoff`: cede il core, poi sonni di 100 us per chi continua a interrogare). Nessun lock nuovo,
+nessuna scrittura in più nella memoria guest: il gioco vede solo passare il tempo, come quando il thread non è
+schedulato. `gta4_job_poll_yield = false` torna al ciclo originale (A/B). Compilato con le regole del codice generato
+(`BANJO_HOT_SOURCES`, le definizioni dei round CPU); `tools/ultimate/gta4_hook_bindings.csv` ha la riga `binding` e la
+riga `reviewed-file`; `hook_census.py --strict` 0 problemi.
+
+**Prova sul PC (D3D12, build incrementale: 16 passi):** quattro run di 240 s dallo stesso salvataggio (ognuno su una copia
+nuova di `renut/`), due coppie in ordine inverso, il tempo CPU del processo letto ogni 15 s; si confronta la pendenza tra 120
+e 240 s, quando tutti e quattro sono nella stanza (catture dalla 60-75 s in poi). Il log dice in ogni run quale ciclo gira
+(`[gta4] job workers' poll loop (sub_828E2350): ...`).
+
+| Coppia | ciclo originale | con la cessione | differenza | fps in gioco (originale / con) |
+|---|---|---|---|---|
+| 1 (on poi off) | 2,714 core | 2,548 core | -6,1 % | 67,0 / 67,3 |
+| 2 (off poi on) | 2,623 core | 2,513 core | -4,2 % | 66,8 / 67,3 |
+
+Le catture sono le stesse una per una (luma 14,3-15,4, 28-31 % di pixel quasi neri in entrambe le forme): il gioco disegna
+lo stesso. Nessun blocco, nessuno stallo nei quattro run con la cessione (caricamenti e gioco normali). Sul PC, che ha più
+core e non è limitato dalla CPU, il guadagno è solo CPU liberata (4-6 % del processo); sulla Switch, dove i tre core del
+gioco sono pieni, è la CPU che i worker toglievano al thread principale e al mixer: **da misurare sulla console** (righe
+`[renut] ... game frames`, CPU per thread col profilo, quota audio), con `gta4_job_poll_yield = false` come metà A/B.
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si
