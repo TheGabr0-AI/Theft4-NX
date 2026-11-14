@@ -805,6 +805,32 @@ core e non è limitato dalla CPU, il guadagno è solo CPU liberata (4-6 % del pr
 gioco sono pieni, è la CPU che i worker toglievano al thread principale e al mixer: **da misurare sulla console** (righe
 `[renut] ... game frames`, CPU per thread col profilo, quota audio), con `gta4_job_poll_yield = false` come metà A/B.
 
+**Build Switch U8-C** (incrementale: 6 passi; `16ccb7780250` everyday; manifest `switch-u8c.json`): NRO 56.416.453 byte,
+SHA-256 `bf8b73bf…`; nell'ELF `sub_828E2350` viene da `gta4_job_poll.cpp.obj` (simbolo forte) e il `__imp__sub_828E2350`
+generato è stato scartato dal linker (nessuno lo chiama più). Pacchetto `out/console-runs/u8-c` (fuori da git) con la cache
+U8c e due toml: C1 = regola di Halo 3 spenta + cessione dei worker accesa, C2 = regola spenta + ciclo originale (la metà A/B),
+`README-U8C.txt`.
+
+**Audio: cosa si può togliere restando bit-exact (letto con `switch_hot_pcs.py` sulle istruzioni campionate di B).** Le
+sette funzioni del mixer (thread 26510) e il loro costo:
+
+| Funzione | Quota del mixer | Dove cadono i campioni | Riscrittura bit-exact possibile |
+|---|---|---|---|
+| `sub_8216DBB0` (`MixFrameBufferChannel` di XAudio) | 26,5 % | `ldr q`/`str q` (memoria) e un `strb` di store card per vettore | il nativo della base (`n_rex_XAudioMixFrameBufferChannel`, stesse istruzioni): un store card per intervallo; il prefetch del `dcbt` del 360. Guadagno limitato (memoria) |
+| `sub_828C2D28` (filtro, catena di `fmadds`) | 15,5 % | sull'`fmadd` che aspetta il risultato precedente | no: è la latenza della catena seriale; riordinare cambia gli arrotondamenti |
+| `sub_828C6740` | 12,9 % | registri guest letti e riscritti nel contesto (`[x19,#…]`) a ogni passo | sì: la copia macchina (registri come locali) toglie quel traffico |
+| `sub_828C5A58` | 10,4 % | confronti sui bit dei double (`fmov`/`cmp`/`ccmp`/`fcsel`): l'esattezza dei casi limite | in parte, provando i valori a monte |
+| `sub_8216D7E0` (router XAudio) | 7,3 % | **29 % sulle `msr fpcr`** (cambio di modo flush tra scalare e VMX, ~40 ns l'uno) | sì: copia/nativo che sposta il cambio fuori dal ciclo |
+| `sub_82188C28` (ricampionatore: tabelle in virgola fissa) | 6,5 % | `ldr q` indicizzati (memoria) | poco |
+| `sub_828C7848` (filtro) | 6,1 % | come `sub_828C2D28` | no |
+
+Stima: copie macchina delle sette (tutte accettate da `localize_native.py --survey`), il nativo del mix e il cambio di FPCR
+fuori dal ciclo tolgono forse il 10-20 % del mixer; al mixer serve il 25-35 % per arrivare al 100 % del tempo reale. Il
+resto è aritmetica esatta: le sole leve più grandi non sono bit-exact (`BLUR_FPCR_ONE_MODE`: niente cambi di FPCR, ma i
+denormali scalari azzerati; i filtri senza il controllo d'esattezza dei `fmadds`) e **non si accendono senza
+l'autorizzazione dell'utente**. Il prossimo passo bit-exact (copie + nativo, `post_codegen.py` completo e ricompilazione
+di tutto il codice generato, guardia densa sul PC dal salvataggio) è pronto da fare dopo la prova U8-C.
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si

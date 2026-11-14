@@ -1,0 +1,76 @@
+{
+  "what": "Theft4-NX Switch test package, GTA IV on the Ultimate Base (docs/switch-port/20, U7)",
+  "when_utc": "2026-11-14T00:16:36Z",
+  "repository_commit": "16ccb77802500646eba4bc713eaea9708d99f3bd",
+  "build_commit_stamp": "16ccb7780250",
+  "uncommitted_changes": false,
+  "flavour": "everyday",
+  "compiler": "aarch64-none-elf-g++.exe (devkitA64) 16.1.0",
+  "cmake_options": {
+    "BANJO_GEN_SWITCH_THREAD": "ON",
+    "BANJO_PGO": "",
+    "BANJO_RENUT_RELEASE_SHADERS": "OFF",
+    "BANJO_RENUT_RENDERER": "ON",
+    "BANJO_SWITCH_LTO": "OFF",
+    "BANJO_SWITCH_OMIT_FRAME_POINTER": "ON",
+    "BLUR_FPCR_ONE_MODE": "OFF",
+    "CMAKE_BUILD_TYPE": "Release",
+    "KATAMARI_BUILTIN_CONFIG": "ON",
+    "KATAMARI_RENUT_HOOKS": "ON",
+    "PLUME_DEKO3D": "ON",
+    "PLUME_SWITCH_NVK_LINK": "OFF",
+    "REXGLUE_PLATFORM_SWITCH": "ON",
+    "REXGLUE_SWITCH_NVK": "OFF",
+    "SASRT_HOT_GUARD_FORMS": "OFF",
+    "SASRT_HOT_IN_PLACE": "ON"
+  },
+  "nro": {
+    "bytes": 56416453,
+    "nro_size": 56393728,
+    "name": "Theft4 Ultimate",
+    "author": "Theft4-NX",
+    "version": "0.7.0",
+    "icon_bytes": 6285
+  },
+  "elf_checks": {
+    "commit_string": true,
+    "glsl_package_bytes": 2017600,
+    "shader_table_symbol": true,
+    "deko3d_host_shaders": 33,
+    "vulkan_driver_symbols": 0,
+    "zcull_invalidate": true
+  },
+  "dksh_cache": {
+    "tag": "uam110-sw8-bnx4",
+    "sha256": "3a7b7376cf29719c447b2e9832f8696ea4885c7c88a1ea27f91779857d5d2c2e",
+    "bytes": 44202200,
+    "matches_dksh_manifest": true
+  },
+  "sd_folder": "sdmc:/switch/theft4-ultimate",
+  "files": {
+    "README.txt": {
+      "bytes": 2215,
+      "sha256": "e65d55448612f46b3006e6854bcaefac4ff678cfce5ff9cc47a9f5baaae3a39d"
+    },
+    "renut.map": {
+      "bytes": 39684918,
+      "sha256": "0a4002a27feb2d4231bbaff14fdf092d37ba65866beaa2985d41d40b967de6b0"
+    },
+    "theft4-ultimate.elf": {
+      "bytes": 72611104,
+      "sha256": "cc8cb352c8b941ef605d2bb3188ed691286ca721c245a2fba9004cc2891839d6"
+    },
+    "COPY_TO_SD/switch/theft4-ultimate/deko3d_shaders.bin": {
+      "bytes": 44202200,
+      "sha256": "3a7b7376cf29719c447b2e9832f8696ea4885c7c88a1ea27f91779857d5d2c2e"
+    },
+    "COPY_TO_SD/switch/theft4-ultimate/gta4.toml": {
+      "bytes": 931,
+      "sha256": "458ea1350934bd3976cef9bd2b0d90220fc1b235ba732d134f914255b6ef6e0f"
+    },
+    "COPY_TO_SD/switch/theft4-ultimate/theft4-ultimate.nro": {
+      "bytes": 56416453,
+      "sha256": "bf8b73bfdb61a3e8407b56a65aed7f2e528226e29ad65412a0a91ebeff420d51"
+    }
+  }
+}
