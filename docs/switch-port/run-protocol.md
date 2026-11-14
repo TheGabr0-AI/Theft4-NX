@@ -136,6 +136,8 @@ degli stack (`switch_profile_stacks`) costa CPU (U8-B: 333 % contro 300 %): i su
 domanda di grafica il riferimento è la build PC (D3D12) fatta partire con `--user_data_root` su una **copia** di `renut/`
 della scheda: stesso salvataggio, stessa stanza, catture ogni 15 s.
 
+**Dalla U10 (2026-11-14; `20-ultimate-base-migration.md` §2.16).** Sulla scheda nessun file si cancella: quelli del run precedente si **rinominano** (`gta4.toml` -> `gta4-own.toml` e ritorno alla fine, la NRO, `deko3d_shaders.bin`, `pipeline_list.bin`, `deko3d_variants.txt`, `deko3d.log`, `logs/`, `capturas/` con il suffisso del run). Il percorso del run si scrive e si rispetta; i numeri si confrontano per tratto (stanza / strada) riconosciuto dai draw per frame e dalle catture, non per tempo (U10-A: "la stanza scende a 8 fps" era la strada). `deko3d_glsl.bin` accanto alla NRO solo nelle prove che lo chiedono (sostituisce il pacchetto incluso), e via subito dopo. **Sul PC:** `input_script` (SDK) muove Niko con pressioni e levette temporizzate (percorsi ripetibili per gli A/B); per una sessione libera la tastiera con `--mnk_mode=true` (WASD, frecce per la telecamera, `;` = A, `'` = B, `L` = X, `P` = Y, `X` = Start), sempre su una **copia** del salvataggio, con catture ogni 5 s; il confronto di grafica col PC vale solo nello stesso punto e alla stessa ora del gioco.
+
 **Smoke:** `switch-smoke.nro` della stessa cartella del run fa anche il
 passo 8 (deko3d contro NVK, `13-deko3d-spike.md`, ~1–2 minuti, schermo fermo
 sull'ultima immagine della sonda Vulkan); il risultato sono le righe `gpu

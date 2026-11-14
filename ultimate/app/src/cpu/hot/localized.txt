@@ -1,3 +1,4 @@
 # Theft4-NX (GTA IV): the localized native copies (tools/localize_native.py --list; the base's method,
-# docs/hand-and-machine-optimising-guide.md section 2). A line is "<address> [options] <what>". Empty until GTA IV's
-# console profiles on this base (Katamari's list removed with its game layer, U3).
+# docs/hand-and-machine-optimising-guide.md section 2). A line is "<address> [options] <what>". From U10 (2026-11-14):
+# the console profiles U9-G0 and U8-B (docs/switch-port/20, section 2.16).
+8216DBB0 XAudio ramped channel mix (hand-written native, hand.txt); mixer thread, G0 26.3 %

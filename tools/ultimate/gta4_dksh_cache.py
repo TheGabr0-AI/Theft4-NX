@@ -27,6 +27,7 @@ committed): ultimate/out/deko3d_shaders/glsl_opt (the GLSL package's texts), ult
    console's bytes; first done on run 72's card (docs/switch-port/20, U6). With --runtime-log, a record that differs
    where a draw waited for the variant ("BLOCKING (a draw waits)") is the console's one-pass compile
    (banjo_deko3d_fast_first_compile), counted apart and not a failure (the first U8 run: 8 of 88, 80 the same bytes).
+--glsl DIR --package FILE (U10): another set of texts and the deko3d_glsl.bin made from them (the passes' A/B).
 --console-merge (U8): the card's records are merged too, less the variants a draw waited for, which the PC compiles in
    full: the variants a run needed but no list or log rule gives (docs/switch-port/20, U8).
 Exit status 0 only if every check passes and no variant failed to compile.
@@ -46,6 +47,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ULT = os.path.normpath(os.path.join(HERE, '..', '..', 'ultimate'))
 GLSL = os.path.join(ULT, 'out', 'deko3d_shaders', 'glsl_opt')
 PKG = os.path.join(ULT, 'app', 'out', 'renut_switch')
+PKG_BIN = os.path.join(PKG, 'deko3d_glsl.bin')  # U10: --package names another one
 TOOLS = os.path.join(ULT, 'out', 'deko3d_tools', 'uam-build')
 OUT = os.path.join(ULT, 'out', 'deko3d_shaders', 'deko3d_shaders.bin')
 sys.path.insert(0, os.path.join(ULT, 'tools'))
@@ -80,7 +82,7 @@ def check_package(table_path):
         fail(f'table shader {h:016X} has no GLSL text')
     for h in sorted(set(glsl) - set(table))[:10]:
         fail(f'GLSL text {glsl[h]} has no table entry')
-    data = open(os.path.join(PKG, 'deko3d_glsl.bin'), 'rb').read()
+    data = open(PKG_BIN, 'rb').read()
     magic, version, count, dict_size, table_off, data_off = struct.unpack_from('<4sIIIII', data, 0)
     if magic != b'BDKG' or version != 1:
         fail(f'deko3d_glsl.bin: {magic} version {version}')
@@ -363,7 +365,7 @@ def write_manifest(path, a, lists, cache):
         'containers': dict(zip(('combined_sha256', 'count'), folder_digest(dump, r'(vs|ps)_[0-9a-f]{16}\.bin'))),
         'package': {
             'glsl_opt': dict(zip(('combined_sha256', 'count'), folder_digest(GLSL, NAME_RE.pattern))),
-            'deko3d_glsl_bin_sha256': sha256(os.path.join(PKG, 'deko3d_glsl.bin')),
+            'deko3d_glsl_bin_sha256': sha256(PKG_BIN),
             'shader_cache_switch_cpp_sha256': sha256(os.path.join(PKG, 'shader_cache_switch.cpp')),
         },
         'lists': lists,
@@ -399,9 +401,18 @@ def main():
     ap.add_argument('--generic-with', action='append', default=[],
                     help="U8: ID=VALUE, each shader's generic variant also with that constant (GTA IV: 925=63, the "
                          "exponent bias of its HDR targets, which plume's generic variant keeps)")
+    # U10 (docs/switch-port/20, section 2.16): another set of GLSL texts and the package made from them, for a
+    # cache that goes with a deko3d_glsl.bin installed beside the NRO (the shader passes' A/B on the console).
+    ap.add_argument('--glsl', default=None, help='U10: the GLSL texts (default ultimate/out/deko3d_shaders/glsl_opt)')
+    ap.add_argument('--package', default=None, help="U10: the deko3d_glsl.bin made from --glsl's texts")
     a = ap.parse_args()
+    global GLSL, PKG_BIN
+    if a.glsl:
+        GLSL = os.path.abspath(a.glsl)
+    if a.package:
+        PKG_BIN = os.path.abspath(a.package)
     table_path = os.path.join(PKG, 'shader_cache_switch.cpp')
-    for p in (GLSL, os.path.join(PKG, 'deko3d_glsl.bin'), table_path):
+    for p in (GLSL, PKG_BIN, table_path):
         if not os.path.exists(p):
             sys.exit(f'gta4_dksh_cache: {p} missing: run ultimate/tools/switch_shaders.ps1 first')
     names = check_package(table_path)

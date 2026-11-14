@@ -949,6 +949,112 @@ tenuta quella della SD, che la contiene) e due toml:
 
 `README-U9.txt` dice cosa portare indietro, anche `deko3d_variants.txt` per la cache successiva.
 
+### 2.16 U10: G0 e G1 letti; copie macchina, nativo del mix XAudio, layout caldo, cache con le varianti di G0; prova A (2026-11-14)
+
+**Stato: baseline tecnica verificata, NON una build giocabile.** Sulla console la prova U10-A non ha portato un guadagno
+misurabile di fps e l'audio resta robotico; il lavoro resta come punto di partenza riproducibile (NRO `d24db83b…`,
+pacchetto `out/console-runs/u10`, fuori da git).
+
+**G0 e G1 (U9).** Dati in `out/console-runs/u9/COPY_TO_SD/switch/theft4-ultimate/G0` e `G1` (fuori da git). G1 (51
+ottimizzazioni solo deko3d spente): nessun cambiamento della luce (giudizio dell'utente), prestazioni peggiori.
+
+**I semafori su indirizzo (U9) sulla console, G0 contro B, L0 e C2 (stessa stanza dal salvataggio, poi la strada):**
+
+| Tratto | B (U8) | L0 (U8) | C2 (U8-C) | G0 (U9) |
+|---|---|---|---|---|
+| stanza, fps per 10 s | 13,9-14,8 | 13,0-13,3 | 11,4-13,3 | 14-18 durante le 145 compilazioni (60-160 s), **25,6-26,5** dopo (210-340 s) |
+| strada, fps per 10 s | 5,7-7,9 | 5,4-8,5 | 4,7-9,1 | 8,8-11,9 (mediana ~10,7; esclusi il caricamento a 394 s e 485-505 s) |
+
+Il thread principale aspetta nel kernel il 55 % dei campioni (B: 71 %); l'attesa sul mutex di
+`PosixSemaphore::Release` (44,6 % delle sue attese in B) **non compare più**. Durante le 145 compilazioni di G0 (varianti
+con 901 = 65520, 903 = 6/8, 926, 950, 977) il thread di prebuild/uam occupa fino all'89 % del core 2 e i draw usano le
+varianti generiche (GPU della stanza 55-72 ms a frame contro 37 dopo).
+
+**Correzioni U10 (CPU, dalla pipeline della base, `docs/hand-and-machine-optimising-guide.md`):**
+1. **Copie macchina in place** (`localize_native.py`): `localized.txt` = `8216DBB0` (il mix XAudio, col nativo);
+   `localized_bulk.txt` dai profili console G0 e U8-B (`switch_hot_bulk.py`, almeno 12 campioni, `--min-instructions 40
+   --small-keep-samples 50`): **296 copie bulk + 1 = 297**, le 7 funzioni DSP del mixer incluse. Lo strumento ne rifiuta
+   3 (`sub_82775180`, `sub_8277D778`, `sub_8277B0A0`: una riga di switch che non conosce).
+2. **Nativo del mix XAudio** (`hand.txt`: `8216DBB0 id=rex_XAudioMixFrameBufferChannel`). **Correzione al nativo della
+   base:** era di Banjo e faceva `vmaddfp` come moltiplicazione + somma; il codice generato di questa build lo fa fuso
+   (`REX_VMADDFP` con `SASRT_VMX_FUSED_MADD`, una sola arrotondatura come lo Xenon): ora usa `vfmaq_f32` sotto
+   `REX_VMX_FUSED_MADD` (il PC, senza fusione, resta moltiplicazione + somma come il suo codice generato). Il nativo non
+   riscrive registri: le due chiamate (entrambe in `sub_8216D7E0`, da `__imp__`) scrivono ogni registro volatile prima di
+   leggerlo.
+3. **Layout caldo** (`hot_layout.py`): `app/config/hot_functions.txt` = 1.600 funzioni campionate in G0 e B.
+4. **Cache DKSH U10** `deko3d_shaders-u10.bin` (manifest `dksh-u10.json`): U8c + lista, log e varianti di G0: **9.174
+   record** (1.158 compilati, 0 falliti).
+5. `tools/ultimate/gta4_dksh_cache.py --glsl --package`: la cache per un altro insieme di testi GLSL (prova della luce
+   senza passate, non ancora eseguita).
+
+**Verifica sul PC (guardia densa, `--banjo_hot_guard_calls=4000 --banjo_hot_guard_period=64`, 240 s nella stanza):**
+- run 1: **4 differenze**, tutte nel segno o nel payload di un NaN (lane di `0 x inf` o `rsqrte(0)`: copia `7fff0000` /
+  originale `ffff0000`, copia `ffc00000` / originale `7fc00001`, un byte `7f` / `ff`): il compilatore commuta gli operandi
+  float in modo diverso quando i registri sono locali, e quale NaN esce dipende dall'ordine. **Escluse** con le copie che
+  le portavano come membri inline;
+- esclusioni per copertura: 4 copie mai eseguite sul PC (`banjo_hot_count`) e `sub_828B06C8` (scritture prima della
+  fermata diverse, non dimostrate concorrenti), con `sub_82259B30` che portava una delle quattro. **11 funzioni in tutto
+  restano codice generato** (motivo per ciascuna nei commenti di `localized_bulk.txt`): `824A5688`, `8290EC90`,
+  `821AAFD8`, `82236FB0`, `823EC040`, `8249B618`, `82743880`, `828E1F68`, `82257D48`, `828B06C8`, `82259B30`;
+- run 3 (insieme finale): **0 differenze su 1.389.924 chiamate confrontate**, 274 agganci raggiunti; le 667 chiamate
+  fermate con scritture precedenti diverse sono tutte in `sub_82221530`, che incrementa senza atomicità un contatore
+  globale (`0x82BD1A10`) eseguito da tre worker: scrittura concorrente dimostrata, non una differenza della copia;
+- copertura (run di conteggio): **251** copie confrontate dal proprio aggancio, **45** solo come membri inline di copie
+  confrontate (il loro blocco d'ingresso eseguito), 1 (`8216DBB0`) servita sempre dal nativo; il ramo Switch del nativo
+  (fuso) non è eseguito da nessun test (corretto per costruzione: la stessa istruzione della macro). Codice usato solo in
+  strada: non raggiunto sul PC.
+
+**PCH e timestamp.** `keep_unchanged_times()` (`post_codegen.py`) dà a un file di contenuto invariato la sua data
+vecchia, alzata almeno alla data di `rexglue.exe` (`renut_pch.h` è un byproduct del passo del generatore, che ninja
+rilancerebbe con un output più vecchio di un input). Ogni build PC ricollega `rexglue.exe`: `renut_pch.h` identico
+riceveva una data nuova, clang rifiutava il PCH ("mtime changed") e ninja, vedendo l'header più vecchio del `.pch`, non
+lo rifaceva. Per U10: contenuto verificato (SHA-256 `34153BE1…`), data riportata a quella registrata nel PCH, coerenza
+degli oggetti controllata (ogni sorgente cambiata ricompilata, ogni oggetto più recente della sorgente e del PCH, hash
+dei 930 file generati invariati fino alla fine della guardia). Correzione alla radice preparata e provata (un caso
+minimo), non ancora applicata: `-fpch-validate-input-files-content` per clang (stesso contenuto con data nuova accettato,
+contenuto cambiato rifiutato). Su GCC (Switch) la data solo in avanti rifà il `.gch`: corretto, a costo di una
+ricompilazione completa (quella di U10).
+
+**Build e pacchetto U10.** NRO everyday `d24db83b373aaa6b2f06607d65d7b9400bb08b3e4323f00c9700f9e85c6b93f1` (59.132.101
+byte, stampo `075f2ecd4142-dirty`: costruita prima di questo commit, lo stesso codice), 297 copie in place (594 record
+`g_in_place`), nessuna delle 11 escluse; manifest `switch-u10.json`; pacchetto `out/console-runs/u10` con la cache U10 e
+`gta4-A.toml` (= G0).
+
+**Prova U10-A sulla console (Erista, clock standard).** Dati in `out/console-runs/u10/COPY_TO_SD/switch/theft4-ultimate/A`.
+- **"La stanza scende da 25 a 8-9 fps" è l'uscita in strada**: i draw per frame passano da 691 (60 s) a 5.705 (100 s) e le
+  catture mostrano Niko fuori a 76 s. Nella stanza ~25 fps come G0 a cache calda.
+- **Strada A contro G0:** mediana ~10,4 contro ~10,7 fps, render thread 35-70 contro 41-60 ms a frame, GPU 33-45 contro
+  31-40 ms: **nessuna regressione, nessun guadagno**. CPU 336 % su 400 (i tre core del gioco saturi): mixer 79 %, render
+  thread 43 %, thread principale 39 %, invio del render 34 %, un thread del gioco 25 %, decoder XMA 23 %. Il frame
+  (~95 ms) supera il render thread (45) e la GPU (36): conta il CPU totale.
+- **Shader:** 12 compilazioni uam in tutto il run (G0 145), nessun draw in attesa.
+- **Audio: 65,8 % del tempo reale (G0 66,6 %).** Costo del mixer per blocco (CPU del thread / blocchi mixati): 5,73 ms in A
+  contro 6,02 in G0 (-5 %, scene diverse); il blocco dura 5,33 ms. Il mixer lavora il 79 % e aspetta il suo evento di
+  lavoro il 18-28 % del tempo mentre manca il 34 % dei frame: si perde capacità nel modo in cui viene chiamato, non solo
+  nel calcolo (sotto).
+
+**Il percorso delle richieste audio (letto nel codice, U10).** Il thread d'uscita dell'SDK (`switch_audio_system.cpp`)
+rilascia un'unità del semaforo del client ogni 5,33 ms (più una quando la coda d'uscita scende sotto 2, cioè quando il
+gioco è in ritardo); il semaforo parte con 8 unità e ha massimo 8 (`audio_maxqframes`). L'"Audio Worker" chiama la
+callback del gioco (`82172BE8` -> `sub_82169B00`) una volta per unità; la callback segnala l'evento del mixer
+(`KeSetEvent`) e controlla la fine del lavoro con timeout 0, senza aspettare; il thread del mixer (`sub_82169400`) aspetta
+l'evento, fa una passata del grafo XAudio e consegna il frame alla fine (`sub_8216DEA0` ->
+`XAudioSubmitRenderDriverFrame`). Più richieste che arrivano durante una passata si fondono in un solo segnale
+(ipotesi coerente coi numeri, non ancora dimostrata sulla console). Prossimo passo: A/B col ritmo delle richieste legato
+alle consegne (U11).
+
+**Luce: ristretta alla luce del sole e ambientale.** Il PC dallo stesso salvataggio (B) è di giorno, e di giorno è anche
+la console (U8-B, strada col venditore di hot dog: cielo chiaro). Sulla Switch sono giusti le luci locali (lampade,
+lampioni), le superfici emissive (insegne) e il cielo; manca la luce direzionale del sole e ambientale su tutto il resto.
+In un renderer differito è il passaggio a schermo intero del sole, che legge la shadow map (il resolve di depth
+1280x1280 `DA1A78E0`). Esclusi finora: ogni chiave a run time (L0-L5, G1), la regola di Halo 3 (C2), la rampa gamma (la
+stessa), le liste di shader della base. Prossima prova (U11): la shadow map e il G-buffer a schermo con la diagnostica
+della base (`banjo_renut_diag_show_texture`), PC contro console.
+
+**Test sul PC con movimento.** `input_script` dell'SDK muove Niko (pressioni e levette temporizzate, verificato: porta,
+corridoio, pianerottolo); sessione manuale dell'utente con la tastiera (`--mnk_mode=true`) e catture ogni 5 s: dalla
+stanza alla strada sotto la sopraelevata, di giorno.
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si
@@ -981,3 +1087,4 @@ tenuta quella della SD, che la contiene) e due toml:
 | U8, primo run | 2026-11-13 | (questo commit) | **primo run su console (Erista, utente)**, NRO `aa88997`: avvio, filmato e gioco per 14 minuti senza crash. 6,96 fps (mediana), GPU 29,8 ms (78,6 nel vecchio albero), CPU 299 % su 400; audio al 69,8 % del tempo reale per i frame che il mixer guest non produce in tempo (frequenze giuste: 100 % a 60 fps); filmato = cutscene a orologio audio (ipotesi); stutter = 88 compilazioni attese da un draw (77 s), generiche con 925 che la cache non aveva. Strumento della cache corretto (924/925, generiche come plume, unione della cache della SD): 7.490 record, passo 5 senza errori. `u8_run_report.py`. Clock letti a 2193 MHz nel boost (strumento sulla console). **Nessuna correzione dichiarata riuscita:** pacchetto `u8-build` (stessa NRO, cache nuova) per i run A e B. §2.12 |
 | U8, run A e B | 2026-11-13 | (questo commit) | dal salvataggio, stessa NRO: la cache U8 **funziona sulla console** (compilazioni 495 -> 21 / 18, attese dei draw 88 -> 4 / 2; clock standard); le 94 attese dei tre run sono tutte generiche con 925 = 63 -> `--generic-with 925=63`, `--variants`. Audio: mixer identificato (thread 26510, DSP `sub_8216DBB0`/`828C…`), **limite di calcolo** (75-89 % di un core per il 57-69 % del tempo reale; non scheduling). Prestazioni: CPU piena, tre worker in attesa attiva su uno spinlock (~45 % di un core). Luce: **sbagliata solo su deko3d** (PC dallo stesso salvataggio giusto: 28 % contro 68 % di pixel quasi neri); bisezione sulla console col pacchetto `u8-light`. Salvataggi: `renut/B13EBABEBABEBABE/545407F2/…`. Strumenti `u8_capture_compare.py`. §2.13 |
 | U9 | 2026-11-14 | `c9c511e`, (questo commit) | C1/C2 letti: cessione dei worker efficace sulla console (43-46 % -> ~6 % di un core ciascuno), fps non confrontabili; **regola di Halo 3 smentita** come causa della luce; luminanza riletta e ripristino della depth uguali al PC: la causa è nel lavoro solo deko3d mai spento (GPU round SASRT, 22 passate GLSL nuove). **Thread principale:** 44,6 % delle sue attese nel rilascio dei semafori -> semafori su indirizzo (`thread_semaphore_address_wait`), test host OK. Mixer limitato dal calcolo (80 % CPU). NRO `0012aa01…`, pacchetto `u9` (G0, G1). Nessun run su console. §2.15 |
+| U10 | 2026-11-14 | (questo commit) | **baseline tecnica, non giocabile.** 297 copie macchina in place (mixer incluso) dai profili G0/B, nativo del mix XAudio corretto per `vmaddfp` fuso, layout caldo (1.600 funzioni), cache DKSH U10 (9.174 record). Guardia densa sul PC: 4 differenze NaN -> 11 funzioni lasciate generate; insieme finale **0 differenze su 1.389.924 chiamate**. NRO `d24db83b…`. Console U10-A: strada ~10,4 fps (G0 ~10,7), nessuna regressione, nessun guadagno; audio 65,8 %; 12 compilazioni; luce: manca il sole/ambiente. §2.16 |

@@ -750,13 +750,21 @@ template <class S>
   float32x4_t g2 = vaddq_f32(g0, s2);
   float32x4_t g3 = vaddq_f32(g0, vaddq_f32(s2, sv));
   const float32x4_t s4 = vaddq_f32(s2, s2);
+  // Theft4-NX (2026-11-14, U10): vmaddfp as the generated code's REX_VMADDFP makes it in this build: one fused
+  // multiply-add (rex_vmaddfp_fused_, the 360's one rounding) with REX_VMX_FUSED_MADD (CMake SASRT_VMX_FUSED_MADD, ON),
+  // a multiply then an add without it. Banjo's native predates the fused form and always did the second.
+#if defined(REX_VMX_FUSED_MADD)
+  auto madd = [](float32x4_t a, float32x4_t g, float32x4_t b) { return vfmaq_f32(b, a, g); };
+#else
+  auto madd = [](float32x4_t a, float32x4_t g, float32x4_t b) { return vaddq_f32(vmulq_f32(a, g), b); };
+#endif
   for (uint32_t block = 0; block < 16; ++block, d += 64, p += 64) {
     const float32x4_t a0 = load(p), a1 = load(p + 16), a2 = load(p + 32), a3 = load(p + 48);
     const float32x4_t b0 = load(d), b1 = load(d + 16), b2 = load(d + 32), b3 = load(d + 48);
-    store(d, vaddq_f32(vmulq_f32(a0, g0), b0));
-    store(d + 16, vaddq_f32(vmulq_f32(a1, g1), b1));
-    store(d + 32, vaddq_f32(vmulq_f32(a2, g2), b2));
-    store(d + 48, vaddq_f32(vmulq_f32(a3, g3), b3));
+    store(d, madd(a0, g0, b0));
+    store(d + 16, madd(a1, g1, b1));
+    store(d + 32, madd(a2, g2, b2));
+    store(d + 48, madd(a3, g3, b3));
     g0 = vaddq_f32(g0, s4);
     g1 = vaddq_f32(g1, s4);
     g2 = vaddq_f32(g2, s4);

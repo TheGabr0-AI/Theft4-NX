@@ -1,3 +1,4 @@
 # Theft4-NX (GTA IV): guest functions with a HAND-WRITTEN native (app/src/cpu/hot/banjo_hand_natives.h, namespace
 # banjo::hand::n_<id>). A line is "<address> [id=] [exact=...] [reads=...]  # evidence". Only past the gate of
-# docs/hand-and-machine-optimising-guide.md section 3.1 (a console profile of the thread that limits the frame). None yet.
+# docs/hand-and-machine-optimising-guide.md section 3.1 (a console profile of the thread that limits the frame). From U10 (2026-11-14).
+8216DBB0 id=rex_XAudioMixFrameBufferChannel   # XAudio's ramped channel mix (CRouterEffect::Process's loop), the same 54 guest instructions as the base's native for Banjo; the audio mixer thread's hottest function (console run U9-G0: 26.3 % of the mixer thread XThread4388E2E0, 2,649 of 10,057 samples; run U8-B: 26.5 %). Removable cost in its samples (switch_hot_pcs.py): a store-card byte per vector store (145 samples, 5.5 %) and the write-back of 23 registers at the return (115 samples, 4.3 %). Its two callers (sub_8216D7E0) write every volatile register they read after the call before reading it (docs/switch-port/20, section 2.16), so the native writes none back.
