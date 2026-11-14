@@ -13,8 +13,10 @@
 #include <chrono>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -50,6 +52,12 @@ REXCVAR_DEFINE_STRING(input_script, "", "Input",
                       "and RSUP RSDOWN RSLEFT RSRIGHT (e.g. '30:LSUP@2.5'), the triggers pulled all the way with LT RT "
                       "(e.g. '90:RT@300'). While set, user 0 always has a pad "
                       "connected (works minimized, with no controller)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Theft4-NX (U11, docs/switch-port/20 section 2.17): user 0's pad written as an input_script (RecordPad below).
+REXCVAR_DEFINE_STRING(input_record, "", "Input",
+                      "Test automation: write user 0's buttons, stick directions and triggers to this file as an "
+                      "input_script ('seconds:NAME@held,...', the same clock), so a session played by hand can be run "
+                      "again; an analog stick becomes a full push in its main direction")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(input_script_sticks, 0, "Input",
                      "Test automation with input_script (banjo-nx 2026-10-23): from this many seconds after the first "
@@ -353,6 +361,52 @@ uint16_t ScriptedButtons() {
   }
   return buttons;
 }
+// Theft4-NX (U11, input_record): user 0's pad written as an input_script, so a session played by hand can be run again
+// (the PC's A/B routes). Each button, each stick direction (pushed past half way) and each trigger (past half way) is
+// one entry "start:NAME@held", written when it is let go, on the script's clock (seconds from the first input poll).
+// An analog stick becomes a full push in its main direction: what input_script can replay.
+void RecordPad(const X_INPUT_GAMEPAD& pad) {
+  static const std::string path = REXCVAR_GET(input_record);
+  if (path.empty()) return;
+  static std::mutex mutex;
+  std::lock_guard<std::mutex> lock(mutex);
+  static FILE* file = nullptr;
+  static bool opened = false;
+  if (!opened) {
+    opened = true;
+    file = std::fopen(path.c_str(), "wb");
+    REXLOG_INFO("input_record: {} {}", file ? "writing" : "cannot write", path);
+  }
+  if (!file) return;
+  static const char* const kNames[] = {"UP", "DOWN", "LEFT", "RIGHT", "START", "BACK", "LB", "RB", "A", "B", "X",
+                                       "Y", "LSLEFT", "LSRIGHT", "LSDOWN", "LSUP", "RSLEFT", "RSRIGHT", "RSDOWN",
+                                       "RSUP", "LT", "RT"};
+  static const uint16_t kBits[] = {0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0020, 0x0100, 0x0200, 0x1000, 0x2000,
+                                   0x4000, 0x8000};
+  constexpr size_t kCount = sizeof(kNames) / sizeof(kNames[0]);
+  bool active[kCount] = {};
+  for (size_t i = 0; i < 12; ++i) active[i] = (pad.buttons & kBits[i]) != 0;
+  const int16_t axes[4] = {pad.thumb_lx, pad.thumb_ly, pad.thumb_rx, pad.thumb_ry};
+  for (int axis = 0; axis < 4; ++axis) {
+    active[12 + axis * 2] = axes[axis] <= -16384;
+    active[12 + axis * 2 + 1] = axes[axis] >= 16384;
+  }
+  active[20] = pad.left_trigger >= 128;
+  active[21] = pad.right_trigger >= 128;
+  static double since[kCount] = {};
+  static bool held[kCount] = {};
+  const double now = ScriptSeconds();
+  for (size_t i = 0; i < kCount; ++i) {
+    if (active[i] && !held[i]) {
+      held[i] = true;
+      since[i] = now;
+    } else if (!active[i] && held[i]) {
+      held[i] = false;
+      std::fprintf(file, "%.2f:%s@%.2f,", since[i], kNames[i], std::max(0.05, now - since[i]));
+      std::fflush(file);
+    }
+  }
+}
 // The scripted stick pushes held now (katamari-nx, 2026-11-01); true when one is.
 bool ScriptedStickPushes(X_INPUT_GAMEPAD& pad) {
   const double now = ScriptSeconds();
@@ -434,6 +488,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
       if (REXCVAR_GET(input_script_sticks) > 0 || pushed || was_pushed)
         out_state->packet_number = ++packet;  // the sticks change at every read (and once more on release)
       was_pushed = pushed;
+      RecordPad(out_state->gamepad);  // Theft4-NX (U11): input_record
     }
     return X_ERROR_SUCCESS;
   }
@@ -469,6 +524,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
   if (!any) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
+  if (user_index == 0) RecordPad(merged.gamepad);  // Theft4-NX (U11): input_record
   if (out_state) {
     *out_state = merged;
   }

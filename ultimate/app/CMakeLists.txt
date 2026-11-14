@@ -154,6 +154,8 @@ set(RENUT_SOURCES
     src/cpu/banjo_hot_guest.cpp
     # Theft4-NX (docs/switch-port/20 section 2.14): GTA IV's job workers' poll loop, sub_828E2350, with a yield when idle.
     src/cpu/gta4_job_poll.cpp
+    # Theft4-NX (docs/switch-port/20 section 2.17): GTA IV's XAudio threads at the priority the game asks for (a key).
+    src/cpu/gta4_xaudio_threads.cpp
     src/cpu/banjo_hot_shard_0.cpp
     src/cpu/banjo_hot_shard_1.cpp
     src/cpu/banjo_hot_shard_2.cpp

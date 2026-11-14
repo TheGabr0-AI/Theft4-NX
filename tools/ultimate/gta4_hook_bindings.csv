@@ -62,3 +62,6 @@ reviewed-file,ultimate/app/src/renut_engine/mnk_controls.cpp,N&B mouse and keybo
 reviewed-file,ultimate/app/src/renut_engine/gpu/guest/photo_capture.cpp,N&B photo capture,,"reached only from N&B's photo hooks (not built / unhooked)"
 binding,828E2350,Gta4JobPollYield,,doc 20 s2.14: the job workers' poll loop (U8-B stack samples: sub_82221358 spinlock and its CAS >50 % of the workers); reached only through the function table
 reviewed-file,ultimate/app/src/cpu/gta4_job_poll.cpp,GTA IV job poll loop,,"the generated statements of sub_828E2350: its labels and link-register values, and its two callees called through __imp__ as the original calls them (not hooks)"
+binding,82169400,Gta4XAudioSupervisor,,doc 20 s2.17: XAudio's supervisor thread entry (ExCreateThread in sub_82169578, then KeSetBasePriorityThread 15); reached only through the function table
+binding,821694C8,Gta4XAudioPeon,,doc 20 s2.17: XAudio's other processing threads' entry (the same creation loop); reached only through the function table
+reviewed-file,ultimate/app/src/cpu/gta4_xaudio_threads.cpp,GTA IV XAudio thread priority,,"hooks the two XAudio thread entries to set the host priority the game asks for (gta4_xaudio_thread_priority, -1 by default), then runs the generated entry unchanged"

@@ -1055,6 +1055,57 @@ della base (`banjo_renut_diag_show_texture`), PC contro console.
 corridoio, pianerottolo); sessione manuale dell'utente con la tastiera (`--mnk_mode=true`) e catture ogni 5 s: dalla
 stanza alla strada sotto la sopraelevata, di giorno.
 
+### 2.17 U11: la priorità dei thread XAudio (audio), il registratore degli ingressi, la luce ristretta al post-processing (2026-11-14)
+
+**Prove sulla console (Erista, clock standard; NRO `59bb662a…`, stampo `0aff3265ecae-dirty` = il codice di U10 più le due
+chiavi sotto, spente di default; pacchetto `out/console-runs/u11`).** Sei run in
+`out/console-runs/u11/COPY_TO_SD/switch/theft4-ultimate`: X0, X1 (audio), `hdr`, `shadow`, `gb0`, `gb1` (viste dei buffer).
+Ogni log conferma build e chiavi (X0 e viste: XAudio a -1; X1: "priority 0x2D ... set"); 0-1 compilazioni uam e nessun
+draw in attesa in tutte.
+
+**`pipeline_list.bin` mancante in tutte le run tranne X1 (errore di preparazione, annotato).** Il file
+(`renut_pipeline_list`, `render/pipeline.cpp`) è l'elenco delle pipeline che il renderer ha costruito: all'avvio i thread
+di prebuild (core 2, 0x3B) le costruiscono in anticipo (variante generica, poi la specializzata letta dalla cache DKSH e
+scambiata); senza, lo stesso lavoro si fa al primo uso durante il gioco, con la variante generica nel frattempo. Nessun
+dato d'immagine: la generica dà la stessa immagine, più lenta sulla GPU. Misurato: a fine run X0 768 stadi generici / 752
+letti dalla cache / 1 compilazione, X1 864 / 799 / 0; CPU dei thread del core 2 in strada mediana 0,5 % (X0) contro 0,2 %
+(X1). La sua assenza non spiega né l'audio né la luce; le viste (tutte senza lista) restano confrontabili tra loro e col
+PC per il contenuto dei buffer.
+
+**Audio: `gta4_xaudio_thread_priority` (X1 = 0x2D) contro X0 (-1), stesso percorso stanza -> strada.**
+
+| | X0 | X1 |
+|---|---|---|
+| quota audio dai 60 s | 69,1 % | **86,0 %** |
+| peggiori 10 s | 57,4 % | **81,1 %** |
+| strada (finestre >= 80 s, < 20 fps): quota / CPU del mixer / ms per blocco | 66,0 % / 81,8 % / 5,70 | **84,6 %** / 104,8 % / 5,40 |
+| fps dai 60 s (mediana) | 10,2 | 9,3 |
+
+Il costo del mixer per blocco non cambia (5,4-5,7 ms per un blocco da 5,33): cambia il tempo di core che ottiene. Il
+meccanismo, dal codice del gioco: la libreria XAudio crea i propri thread (`sub_82169578`, ingressi `82169400` e
+`821694C8`) e chiede `KeSetBasePriorityThread(thread, 15)` (time critical); la base porta ogni thread guest a 0x3B, che
+Horizon divide in fette da 10 ms; la callback del driver (`sub_82169B00`) segnala il mixer e **lo aspetta**
+(`KeWaitForMultipleObjects` senza timeout), poi consegna il frame. **Miglioramento misurato, non una soluzione**: il 14 %
+dei frame manca ancora (il calcolo supera il blocco) e la strada perde ~8 % di fps. Default ancora -1.
+
+**A/B scartato (PC):** chiamare la callback solo dopo la consegna del frame precedente (`audio_pace_by_submit`): l'audio
+del PC crolla (300 frame su 1.875 ogni 10 s, ogni attesa scaduta), perché il frame di una richiesta arriva solo con la
+callback successiva. Codice tolto.
+
+**Luce: il gioco rende il giorno col sole; il buio nasce dopo l'illuminazione.** Struttura del frame (trace dei resolve
+sul PC): G-buffer in 3 bande (`40226620`, `402266B0`, `40226780`, depth `DA1A6320`), luce in `40076EB0` -> `40079D00`,
+la texture 1280x1280 `DA1A78A0`, poi la catena di riduzione (640x360 `DA1A63E0`, 320x180, ... 1x1) e la composizione
+finale. Le viste della console (`banjo_renut_diag_show_texture`): **`hdr` è piena di luce** (tromba delle scale a 61 s;
+in strada a 123 s sole diretto con le ombre nette delle auto), come il riferimento PC; `gb0` (colore delle superfici) e
+`gb1` (normali) plausibili; `shadow` simile al PC. L'utente si è mosso in tutte le viste: inquadrature diverse dal PC,
+confronto qualitativo. Conclusione: lo stato del gioco è diurno e il passaggio della luce funziona; il buio è nella catena
+di post-processing (riduzione, esposizione, bloom, tone mapping, correzione colore) tra `40079D00` e l'immagine finale,
+coerente con la luminanza riletta dalla CPU uguale al PC (U9). I fari accesi di alcune auto non bastano a dire notte.
+
+**Strumenti U11.** `input_record` (SDK, `input_system.cpp`): il pad dell'utente 0 scritto come `input_script`
+(verificato sul PC: lo script registrato e quello originale coincidono entro 10 ms); sessione manuale PC con tastiera
+(`--mnk_mode=true`).
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si
@@ -1088,3 +1139,4 @@ stanza alla strada sotto la sopraelevata, di giorno.
 | U8, run A e B | 2026-11-13 | (questo commit) | dal salvataggio, stessa NRO: la cache U8 **funziona sulla console** (compilazioni 495 -> 21 / 18, attese dei draw 88 -> 4 / 2; clock standard); le 94 attese dei tre run sono tutte generiche con 925 = 63 -> `--generic-with 925=63`, `--variants`. Audio: mixer identificato (thread 26510, DSP `sub_8216DBB0`/`828C…`), **limite di calcolo** (75-89 % di un core per il 57-69 % del tempo reale; non scheduling). Prestazioni: CPU piena, tre worker in attesa attiva su uno spinlock (~45 % di un core). Luce: **sbagliata solo su deko3d** (PC dallo stesso salvataggio giusto: 28 % contro 68 % di pixel quasi neri); bisezione sulla console col pacchetto `u8-light`. Salvataggi: `renut/B13EBABEBABEBABE/545407F2/…`. Strumenti `u8_capture_compare.py`. §2.13 |
 | U9 | 2026-11-14 | `c9c511e`, (questo commit) | C1/C2 letti: cessione dei worker efficace sulla console (43-46 % -> ~6 % di un core ciascuno), fps non confrontabili; **regola di Halo 3 smentita** come causa della luce; luminanza riletta e ripristino della depth uguali al PC: la causa è nel lavoro solo deko3d mai spento (GPU round SASRT, 22 passate GLSL nuove). **Thread principale:** 44,6 % delle sue attese nel rilascio dei semafori -> semafori su indirizzo (`thread_semaphore_address_wait`), test host OK. Mixer limitato dal calcolo (80 % CPU). NRO `0012aa01…`, pacchetto `u9` (G0, G1). Nessun run su console. §2.15 |
 | U10 | 2026-11-14 | (questo commit) | **baseline tecnica, non giocabile.** 297 copie macchina in place (mixer incluso) dai profili G0/B, nativo del mix XAudio corretto per `vmaddfp` fuso, layout caldo (1.600 funzioni), cache DKSH U10 (9.174 record). Guardia densa sul PC: 4 differenze NaN -> 11 funzioni lasciate generate; insieme finale **0 differenze su 1.389.924 chiamate**. NRO `d24db83b…`. Console U10-A: strada ~10,4 fps (G0 ~10,7), nessuna regressione, nessun guadagno; audio 65,8 %; 12 compilazioni; luce: manca il sole/ambiente. §2.16 |
+| U11 | 2026-11-14 | (questo commit) | console: **priorità dei thread XAudio** (0x2D, la richiesta time-critical del gioco) audio 69,1 -> 86,0 % (strada 66 -> 85 %, mixer da 82 a 105 % di un core, -8 % fps), chiave ancora spenta di default; ritmo legato alle consegne scartato (PC); `input_record`; **luce: la scena HDR della console è illuminata dal sole, il buio è nel post-processing**; `pipeline_list.bin` mancante in 5 run su 6: effetto misurato trascurabile. §2.17 |
