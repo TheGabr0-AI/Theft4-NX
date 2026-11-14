@@ -19,6 +19,11 @@
  * cannot miss a change. Blocked threads re-check every safety_ns even unwoken (a net; a re-check that finds itself
  * released without a wake is counted).
  *
+ * Theft4-NX (2026-11-14, thread_semaphore_address_wait): semaphores (PosixCondition<Semaphore>) block here too. GTA IV
+ * wakes its job threads through semaphores: in the U8 profile run B its main thread was in pthread_mutex_lock at
+ * PosixSemaphore::Release for 44.6 % of its kernel-wait samples, behind waiters the condition variable's notify_all
+ * had woken and handed the mutex. A release gives its units to blocked threads as grants (ReleaseLocked).
+ *
  * Header only, templated on the arbiter (Horizon's svcWaitForAddress / svcSignalToAddress on the console; the host
  * test tools/test_address_event.cpp runs the same code with WaitOnAddress).
  */
@@ -61,6 +66,20 @@ class AddressEventCore {
     return -1;
   }
 
+  // Theft4-NX (2026-11-14, thread_semaphore_address_wait): under the owner's mutex, a semaphore's release of n units,
+  // already added to count: up to n of them go to the threads blocked and not yet released, one grant each, taken off
+  // the count (the 360's semantics: a released unit belongs to a blocked waiter, as a Set of an auto-reset event does
+  // above). Returns the threads to wake once the mutex is released.
+  int32_t ReleaseLocked(uint32_t& count, uint32_t n) {
+    const uint32_t waiting = blocked_ - grants_;
+    const uint32_t give = waiting < n ? waiting : n;
+    if (!give) return 0;
+    grants_ += give;
+    count -= give;
+    gen_.fetch_add(1, std::memory_order_relaxed);
+    return int32_t(give);
+  }
+
   void Wake(int32_t count) { Arbiter::Wake(&gen_, count); }
 
   // With the owner's mutex held (lock), the event found unsignalled, the interrupt not raised and the timeout not
@@ -69,6 +88,13 @@ class AddressEventCore {
   template <typename Lock, typename Clock = std::chrono::steady_clock>
   AddressWaitResult Block(Lock& lock, const bool& signal, const std::atomic<bool>* interrupt, bool infinite,
                           typename Clock::time_point deadline, int64_t safety_ns) {
+    return BlockUntil<Lock, Clock>(lock, [&signal] { return signal; }, interrupt, infinite, deadline, safety_ns);
+  }
+
+  // Block with the owner's state as a predicate under the lock (Theft4-NX: a semaphore's count above 0).
+  template <typename Lock, typename Clock = std::chrono::steady_clock, typename Signaled>
+  AddressWaitResult BlockUntil(Lock& lock, Signaled signaled, const std::atomic<bool>* interrupt, bool infinite,
+                               typename Clock::time_point deadline, int64_t safety_ns) {
     ++blocked_;
     for (;;) {
       const uint32_t seen = gen_.load(std::memory_order_relaxed);
@@ -88,7 +114,7 @@ class AddressEventCore {
         if (!woken && gen_.load(std::memory_order_relaxed) == seen) NoteSafety();
         return AddressWaitResult::kGranted;
       }
-      if (signal) {
+      if (signaled()) {
         --blocked_;
         if (!woken && gen_.load(std::memory_order_relaxed) == seen) NoteSafety();
         return AddressWaitResult::kSignaled;

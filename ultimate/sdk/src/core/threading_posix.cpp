@@ -105,6 +105,14 @@ REXCVAR_DEFINE_BOOL(thread_event_address_wait, true, "Threading",
                     "directly, a manual-reset Set every blocked thread (the 360's semantics). false = the condition "
                     "variable, as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Theft4-NX (2026-11-14; docs/switch-port/20-ultimate-base-migration.md, U9): semaphores as port 65's events.
+REXCVAR_DEFINE_BOOL(thread_semaphore_address_wait, true, "Threading",
+                    "Switch: a thread blocked on a semaphore sleeps on an address (svcWaitForAddress) instead of the "
+                    "semaphore mutex's condition variable, whose notify_all handed the mutex to every woken waiter "
+                    "before it ran: GTA IV's main thread waited in the release of its job semaphores for 44.6 % of "
+                    "its kernel-wait samples (U8 run B). A release gives its units to blocked threads directly. "
+                    "false = the condition variable, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(thread_signal_skip_idle, true, "Threading",
                     "Setting an event or releasing a semaphore that no thread is blocked on does not call the "
                     "condition variable's notify (on Horizon always a syscall, svcSignalProcessWideKey, even with "
@@ -862,6 +870,21 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
       *out_previous_count = count_;
     }
     count_ += release_count;
+#if defined(__SWITCH__)
+    // Theft4-NX (2026-11-14, thread_semaphore_address_wait): units for blocked threads are theirs at once (grants);
+    // they are woken on their address after the mutex is released, and take it only when they run.
+    if (AddressWaitOn()) {
+      const int32_t wake = address_.ReleaseLocked(count_, release_count);
+      lock.unlock();
+      if (wake) {
+        address_.Wake(wake);
+      } else {
+        REX_SYS_COUNT(rex::syscount::kSignalIdle, 1);
+      }
+      NotifyMulti();
+      return true;
+    }
+#endif
     const uint32_t waiters = cond_waiters_;
     lock.unlock();
     WakeWaiters(waiters);
@@ -869,7 +892,83 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
     return true;
   }
 
+#if defined(__SWITCH__)
+  // Theft4-NX (2026-11-14, thread_semaphore_address_wait): PosixCondition<Event>::Wait's address path, the count for
+  // the signal. kSignaled: a unit left in the count, taken here; kGranted: a release gave this thread its unit.
+  WaitResult Wait(std::chrono::milliseconds timeout, const std::atomic<bool>* interrupt = nullptr) override {
+    if (!AddressWaitOn()) {
+      return PosixConditionBase::Wait(timeout, interrupt);
+    }
+    const bool infinite = timeout == std::chrono::milliseconds::max();
+    const auto deadline = infinite ? std::chrono::steady_clock::time_point::max()
+                                   : std::chrono::steady_clock::now() + timeout;
+    std::unique_lock<std::mutex> lock(mutex_, std::defer_lock);
+    if (infinite) {
+      lock.lock();
+    } else {
+      while (!lock.try_lock()) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+          return WaitResult::kTimeout;
+        }
+        const auto remaining = std::chrono::ceil<std::chrono::microseconds>(deadline - now);
+        std::this_thread::sleep_for(std::min(remaining, std::chrono::microseconds(100)));
+      }
+    }
+    if (count_ > 0) {
+      --count_;
+      return WaitResult::kSuccess;
+    }
+    if (interrupt && interrupt->load(std::memory_order_acquire)) {
+      return WaitResult::kTimeout;  // interrupted by a queued user callback
+    }
+    if (!infinite && std::chrono::steady_clock::now() >= deadline) {
+      return WaitResult::kTimeout;
+    }
+    constexpr int64_t kSafetyNs = 100'000'000;  // a blocked thread re-checks every 100 ms unwoken (a net)
+    switch (address_.BlockUntil(lock, [this] { return count_ > 0; }, interrupt, infinite, deadline, kSafetyNs)) {
+      case detail::AddressWaitResult::kSignaled:
+        --count_;
+        return WaitResult::kSuccess;
+      case detail::AddressWaitResult::kGranted:
+        return WaitResult::kSuccess;
+      default:
+        return WaitResult::kTimeout;
+    }
+  }
+
+  void InterruptWaiters() override {
+    if (!AddressWaitOn()) {
+      PosixConditionBase::InterruptWaiters();
+      return;
+    }
+    int32_t wake;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      wake = address_.InterruptLocked();
+    }
+    if (wake) {
+      address_.Wake(wake);
+    }
+  }
+#endif
+
  private:
+#if defined(__SWITCH__)
+  static bool AddressWaitOn() {
+    static const bool on = REXCVAR_GET(thread_semaphore_address_wait);
+    return on;
+  }
+  struct HorizonArbiter {  // as PosixCondition<Event>'s
+    static bool WaitIfEqual(std::atomic<uint32_t>* word, uint32_t value, int64_t ns) {
+      return RexSwitchWaitIfEqual(reinterpret_cast<volatile uint32_t*>(word), value, ns);
+    }
+    static void Wake(std::atomic<uint32_t>* word, int32_t count) {
+      RexSwitchWakeAddress(reinterpret_cast<volatile uint32_t*>(word), count);
+    }
+  };
+  detail::AddressEventCore<HorizonArbiter> address_;
+#endif
   inline bool signaled() const override { return count_ > 0; }
   inline void post_execution() override {
     count_--;

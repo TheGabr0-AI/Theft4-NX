@@ -831,6 +831,115 @@ denormali scalari azzerati; i filtri senza il controllo d'esattezza dei `fmadds`
 l'autorizzazione dell'utente**. Il prossimo passo bit-exact (copie + nativo, `post_codegen.py` completo e ricompilazione
 di tutto il codice generato, guardia densa sul PC dal salvataggio) è pronto da fare dopo la prova U8-C.
 
+### 2.15 U9: C1 e C2 letti; i semafori del thread principale; la luce ristretta al solo deko3d (2026-11-14)
+
+**Validità di C1 e C2 (dai log, non dai toml).** In `C1/logs` ci sono due log: `renut_001.log` (00:12, "non-cpu master
+OFF", 85 di 158) è un resto di L5, il log di C1 è `renut_002.log` (10:27; `u8_run_report.py` legge il più recente). In
+`C1/capturas` 5 delle 16 PNG sono di L5 (hash identici a `u8-light/.../l5/capturas`); le 12 di C1 sono le altre. Il log
+nomina il ciclo dei worker in entrambi ("an idle pass yields" in C1, "the original loop" in C2). La regola di Halo 3 spenta
+non ha una riga di log, ma lo dicono le varianti compilate a runtime: 72 delle 84 di C1 e C2 non hanno la costante 925
+(nei run A e B, con la regola accesa, 24 su 39 la avevano). Clock 1020 / 460,8 MHz in entrambi.
+
+**I worker: la correzione funziona sulla console, il confronto degli fps no.**
+
+| Stanza, 60-120 s | C2 (ciclo originale) | C1 (cessione) |
+|---|---|---|
+| i tre worker (`sub_828E2350`) | 43-46 % di un core ciascuno | ~6 % ciascuno |
+| draw per frame | ~650 | ~2.400 (un'altra inquadratura: la cattura mostra la tromba delle scale) |
+| compilazioni uam nel run | 20 (media 3,5 s) | 142 (media 1,8 s; il thread uam al ~50 % del core 2) |
+| fps | 11-13 | 12-14 |
+
+La cessione libera circa 1,1 core sulla console. C1 non è però confrontabile con C2 negli fps: la stanza era inquadrata
+diversamente e C1 ha pagato 142 compilazioni. Le ha causate il toml di prova stesso, perché la regola di Halo 3 spenta
+azzera la costante 925 e la cache U8c era fatta con la regola accesa; C2 ha trovato sulla SD le varianti compilate da C1.
+**Nessun miglioramento degli fps dichiarato o smentito.** La correzione resta accesa.
+
+**La luce: la regola di Halo 3 non è la causa (smentita).** Con la regola spenta la stanza di C2 a 61 s è quella di L0
+(luma 10,8, 67,7 % di pixel quasi neri, contro 28,1 % sul PC). La regola resta al default della base (accesa): spegnerla
+non cambia la stanza e costerebbe le varianti della cache. Altri due fatti, confrontati sul PC dallo stesso salvataggio:
+- **la luminanza 1×1 che il gioco rilegge** per l'esposizione (`sasrt_renut_resolve_readback`, i valori scritti nel log)
+  è la stessa: 13,6; 3,99 contro 3,98; 13,23 contro 13,24, poi la stessa discesa nella stanza. Il gioco calcola quindi la
+  stessa esposizione e la differenza nasce nel rendering GPU;
+- **il ripristino della depth dal colore** (la correzione del vecchio albero per il G-buffer di GTA IV, ora
+  `sasrt_renut_depth_restore`) avviene lo stesso numero di volte. Solo la ricerca dei candidati è più frequente sulla
+  Switch (`sasrt_rt_restore_candidates`: ~556 a frame contro ~13).
+
+Quello che L0-L5 non ha mai spento:
+- i 46 interruttori del GPU round di SASRT accesi di default (`sasrt_gpu_*`, quasi tutti solo deko3d), che non sono nella
+  tabella dell'interruttore non-CPU;
+- `lo_deko3d_*`;
+- le costanti delle passate GLSL di vivapinata (975-977) e di dishonored (`clamp7e3`, 990).
+
+Le passate GLSL di `ultimate/tools/deko3d_glsl_opt.py` sono 49, contro le 27 del vecchio albero
+(`tools/deko3d/deko3d_glsl_opt.py`, sa2-nx `adf3a4e`). Le 22 nuove vengono da altri port:
+
+`scalecodes fetchspec skinonce samplerk plainfetch fetchconv onex onexsize noearly earlykill facesign clipspec nofxaa
+vsepi stack3d fetchendian expfmt vskill expwin expparts clamp7e3 invariant`
+
+Le più dipendono da una costante che quegli interruttori accendono. Il vecchio albero, con la luce giusta sulla console
+(run 72: Niko illuminato nell'appartamento), non aveva né quelle passate né il GPU round. **Prova sulla console:** il
+toml G1 del pacchetto `u9` spegne tutti e 51 (elenco generato dalle sorgenti). Se la stanza torna come sul PC, la causa è
+fra loro e si biseziona; se no, restano le passate senza costante, e si prepara una NRO con le passate di sa2-nx soltanto.
+
+**Il thread principale aspetta i suoi semafori (la causa CPU trovata nel run B).** Nel run B il thread principale
+(`Main XThread`, 24,7 % di un core) è nel kernel il 71 % dei campioni:
+
+| Attesa (stack simbolizzati con `nm` dell'ELF) | Quota delle attese |
+|---|---|
+| `pthread_mutex_lock` dentro `PosixSemaphore::Release`, da `NtReleaseSemaphore` (`sub_829A2240`) | **44,6 %** |
+| stack interrotto (codice guest) | 24,6 % |
+| critical section (`sub_827F13D8`) | 11,9 % |
+| `KeDelayExecutionThread` (`sub_829A95D0`) | 9,7 % |
+
+Il gioco rilascia i semafori che svegliano i suoi job thread. Il semaforo dell'SDK (`PosixCondition<Semaphore>`) usa un
+mutex e una condition variable con `notify_all`. Su Horizon il risveglio dà il mutex al thread svegliato prima che giri,
+e con i tre core pieni quel thread può aspettare il suo core per un intero quanto di 10 ms: chi rilascia di nuovo lo
+stesso semaforo resta bloccato dietro di lui. La base aveva già documentato e corretto lo stesso difetto per gli **Event**
+(sasrt-nx port 65, `thread_event_address_wait`: il 5,5 % del thread di gioco di SASRT), non per i Semaphore.
+**Correzione** (`ultimate/sdk/src/core/address_event_core.h` e `threading_posix.cpp`, chiave
+`thread_semaphore_address_wait`, default acceso, solo Switch):
+- chi è bloccato su un semaforo dorme su un indirizzo (`svcWaitForAddress`), come gli Event;
+- un rilascio di n unità ne consegna fino a n direttamente ai thread bloccati (`ReleaseLocked`: la semantica del 360,
+  un'unità rilasciata appartiene a un thread in attesa) e li sveglia dopo aver lasciato il mutex;
+- il thread svegliato prende il mutex solo quando gira.
+
+Il nucleo è lo stesso degli Event (`Block` è ora `BlockUntil` con un predicato). La riga di avvio del gioco dice quale
+attesa gira (`[gta4] semaphores: ...`).
+
+Prove sul PC (test host con `WaitOnAddress` al posto di `svcWaitForAddress`, CRT statico):
+- **`tools/ultimate/test_address_semaphore.cpp`, 3 esecuzioni su 3 tutte OK:** ping-pong da 200.000 giri; 20.000 round di
+  4 thread bloccati liberati da un `Release(4)` e da quattro `Release(1)` consecutivi (nessuna unità rimasta a un thread
+  addormentato); massimo, conteggio precedente, attese a zero; 1.000 interruzioni (peggiore 0,11 ms); tre mix casuali
+  (fino a 9,5 milioni di unità) con **conservazione esatta** (unità rilasciate = prese + rimaste) e contatori a zero;
+- **il test degli Event della base**, con l'header nuovo e con quello originale, si bloccava 2-3 volte su 3. È un difetto
+  del test, non del nucleo: in chiusura fa 16 `Set()` di un Event auto-reset e poi `join()`, e i Set fatti mentre nessuno
+  è bloccato si fondono in un solo segnale. Con la chiusura che ripete i Set finché i thread escono (copia nello
+  scratchpad, il file della base non è toccato), **originale e nuovo passano 3 volte su 3**, con gli stessi conteggi
+  della rete di sicurezza (0-5).
+
+Sulla console va misurato: la quota del thread principale in `PosixSemaphore::Release` (profilo con campioni) e gli fps.
+
+**Audio: il mixer è limitato dal calcolo, non dalla contesa (run B).** Il thread 26510 gira all'80 % di un core e aspetta
+nel kernel il 18 % dei campioni (un quinto di quell'attesa è il suo evento di lavoro, `sub_82169400`): non è sottratto da
+altri thread. Al 100 % di un core produrrebbe circa l'85 % del tempo reale. Due cose del piano bit-exact (§2.14) cambiano:
+- il codegen Ultimate tiene già i registri di `sub_8216DBB0` e del router in variabili locali (`REX_LEAF_LOCAL`,
+  `REX_LOOP_LOCAL`) e ha già tolto i cambi di modo FP ridondanti (4 nel router). Il nativo del router del vecchio albero
+  (run 64, `tools/switch-game/nx_audio_routes.h`, `50492e5`) dava soprattutto questo, quindi non va riportato così;
+- il router si raggiunge solo dalla tabella delle funzioni (un hook basterebbe), ma il guadagno rimasto è il nativo del
+  mix della base (`n_rex_XAudioMixFrameBufferChannel`). La funzione di GTA IV è quella che descrive (stessi g0-g3, 16
+  blocchi, tutte le letture prima delle scritture) e il router non legge i registri volatili dopo la chiamata. La strada
+  verificata della base però è la pipeline delle copie (`localize_native.py`, `hand.txt`, la guardia che confronta
+  memoria e registri): è il lavoro U10 sulle sette funzioni, non un hook scritto a mano.
+
+**UltraNX.** Nessuna occorrenza in nessun repository (questo, la base, rr6, katamari, nfsmw, torchlight, sa2, il vecchio
+`C:\dev\Theft4`), né nei documenti. Le differenze fra vecchio e nuovo albero che toccano un overlay di sistema:
+- la NRO Ultimate si collega a SaltySD/SaltyNX all'avvio (`sdk/src/ui/switch_saltynx.cpp`: scrive il blocco FPS, legge
+  quello di Reverse-NX; per avere una sessione chiude per un momento `sm:` o alza il limite delle sessioni con
+  `svcSetResourceLimitLimitValue`); il vecchio albero non lo faceva (doc 12: "noi: no");
+- la base imposta `appletSetFocusHandlingMode(SuspendHomeSleepNotify)`.
+
+Senza sapere quale overlay sia e come non si apra, nessuna correzione: domanda aperta all'utente.
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si

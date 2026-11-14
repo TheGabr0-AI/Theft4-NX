@@ -34,14 +34,26 @@ REXCVAR_DEFINE_BOOL(gta4_job_poll_yield, true, "Theft4/CPU",
 REX_EXTERN(__imp__sub_828E1F68);
 REX_EXTERN(__imp__sub_82221358);
 
+#if defined(__SWITCH__)
+// Theft4-NX (2026-11-14, U9): the SDK's semaphores (ultimate/sdk/src/core/threading_posix.cpp, threading_posix.cpp is
+// the Switch's threading only); named in the same start-up line, so a console log says which wait the run had.
+REXCVAR_DECLARE(bool, thread_semaphore_address_wait);
+#endif
+
 namespace {
 std::atomic<bool> g_logged{false};
 
 bool YieldOn() {
   static const bool on = REXCVAR_GET(gta4_job_poll_yield);
-  if (!g_logged.exchange(true, std::memory_order_relaxed))
+  if (!g_logged.exchange(true, std::memory_order_relaxed)) {
     REXLOG_INFO("[gta4] job workers' poll loop (sub_828E2350): {}", on ? "an idle pass yields (gta4_job_poll_yield)"
                                                                        : "the original loop (gta4_job_poll_yield off)");
+#if defined(__SWITCH__)
+    REXLOG_INFO("[gta4] semaphores: {}", REXCVAR_GET(thread_semaphore_address_wait)
+                                             ? "address waits, a release hands its units over (thread_semaphore_address_wait)"
+                                             : "the condition variable (thread_semaphore_address_wait off)");
+#endif
+  }
   return on;
 }
 }  // namespace
