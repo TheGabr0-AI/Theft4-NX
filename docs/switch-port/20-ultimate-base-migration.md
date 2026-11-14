@@ -940,6 +940,15 @@ altri thread. Al 100 % di un core produrrebbe circa l'85 % del tempo reale. Due 
 
 Senza sapere quale overlay sia e come non si apra, nessuna correzione: domanda aperta all'utente.
 
+**Build Switch U9** (`c9c511e` everyday, incrementale: 7 passi, `threading_posix.cpp` ricompilato; manifest
+`switch-u9.json`): NRO SHA-256 `0012aa01…` (56.416.453 byte, la stessa dimensione di U8-C per allineamento; la riga
+`[gta4] semaphores: ...` e la chiave sono nella NRO). Pacchetto `out/console-runs/u9` (fuori da git), con la cache U8c (va
+tenuta quella della SD, che la contiene) e due toml:
+- **G0:** i default della NRO, con i campioni dello stack come nel run B;
+- **G1:** G0 con le 51 ottimizzazioni solo deko3d spente.
+
+`README-U9.txt` dice cosa portare indietro, anche `deko3d_variants.txt` per la cache successiva.
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si
@@ -971,3 +980,4 @@ Senza sapere quale overlay sia e come non si apra, nessuna correzione: domanda a
 | U7 | 2026-11-13 | `12b20c2`, `aa88997` | build Switch, nessun run su console. Prima NRO di GTA IV sulla base (deko3d, nessun driver Vulkan), everyday: toml Switch di GTA IV (gamma accesa, niente di Katamari, nessuna modalità a 4 core), Zcull dopo il ripristino della depth, cartella SD propria; NRO `f42ae3e4…` riproducibile byte per byte; controlli del pacchetto e della cache superati; pacchetto `out/console-runs/u7-build`, manifest `switch-u7.json`. NRO guard non costruita (U10). §2.11 |
 | U8, primo run | 2026-11-13 | (questo commit) | **primo run su console (Erista, utente)**, NRO `aa88997`: avvio, filmato e gioco per 14 minuti senza crash. 6,96 fps (mediana), GPU 29,8 ms (78,6 nel vecchio albero), CPU 299 % su 400; audio al 69,8 % del tempo reale per i frame che il mixer guest non produce in tempo (frequenze giuste: 100 % a 60 fps); filmato = cutscene a orologio audio (ipotesi); stutter = 88 compilazioni attese da un draw (77 s), generiche con 925 che la cache non aveva. Strumento della cache corretto (924/925, generiche come plume, unione della cache della SD): 7.490 record, passo 5 senza errori. `u8_run_report.py`. Clock letti a 2193 MHz nel boost (strumento sulla console). **Nessuna correzione dichiarata riuscita:** pacchetto `u8-build` (stessa NRO, cache nuova) per i run A e B. §2.12 |
 | U8, run A e B | 2026-11-13 | (questo commit) | dal salvataggio, stessa NRO: la cache U8 **funziona sulla console** (compilazioni 495 -> 21 / 18, attese dei draw 88 -> 4 / 2; clock standard); le 94 attese dei tre run sono tutte generiche con 925 = 63 -> `--generic-with 925=63`, `--variants`. Audio: mixer identificato (thread 26510, DSP `sub_8216DBB0`/`828C…`), **limite di calcolo** (75-89 % di un core per il 57-69 % del tempo reale; non scheduling). Prestazioni: CPU piena, tre worker in attesa attiva su uno spinlock (~45 % di un core). Luce: **sbagliata solo su deko3d** (PC dallo stesso salvataggio giusto: 28 % contro 68 % di pixel quasi neri); bisezione sulla console col pacchetto `u8-light`. Salvataggi: `renut/B13EBABEBABEBABE/545407F2/…`. Strumenti `u8_capture_compare.py`. §2.13 |
+| U9 | 2026-11-14 | `c9c511e`, (questo commit) | C1/C2 letti: cessione dei worker efficace sulla console (43-46 % -> ~6 % di un core ciascuno), fps non confrontabili; **regola di Halo 3 smentita** come causa della luce; luminanza riletta e ripristino della depth uguali al PC: la causa è nel lavoro solo deko3d mai spento (GPU round SASRT, 22 passate GLSL nuove). **Thread principale:** 44,6 % delle sue attese nel rilascio dei semafori -> semafori su indirizzo (`thread_semaphore_address_wait`), test host OK. Mixer limitato dal calcolo (80 % CPU). NRO `0012aa01…`, pacchetto `u9` (G0, G1). Nessun run su console. §2.15 |
