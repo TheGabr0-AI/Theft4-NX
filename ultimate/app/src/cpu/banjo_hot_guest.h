@@ -79,6 +79,10 @@ struct Hook {
   // call outside the copy) whose stores before the stop were the same / not.
   std::atomic<uint64_t> prefix_equal{0};
   std::atomic<uint64_t> prefix_differ{0};
+  // Theft4-NX (2026-11-15, U12): a prefix difference is made again from the same inputs, as a difference is (Check):
+  // prefix_differ counts those that repeated in every pass, prefix_not_repeated those that did not (another thread's
+  // store between the guard's runs).
+  std::atomic<uint64_t> prefix_not_repeated{0};
 
   Hook(const char* name_, const char* key_, PPCFunc* orig_, void (*native_)(PPCContext&, uint8_t*),
        void (*native_logged_)(PPCContext&, uint8_t*, Logged&), void (*reference_logged_)(PPCContext&, uint8_t*, Logged&),

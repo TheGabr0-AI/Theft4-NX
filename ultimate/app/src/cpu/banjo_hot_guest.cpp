@@ -170,6 +170,7 @@ REXCVAR_DEFINE_BOOL(banjo_hand_xaudio_mix, true, "Banjo/Enhancements",
                     "(one for the range); checked by the guard of the router's hook")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+
 // katamari-nx (2026-10-30): Beautiful Katamari's own hand-written natives (cpu/hot/banjo_hand_natives.h, the end).
 REXCVAR_DEFINE_BOOL(katamari_hand_matrix_copy, true, "Katamari/Enhancements",
                     "Hand-written native of the game's 4x4 matrix copy (sub_82759C98, the hottest guest function of "
@@ -796,10 +797,12 @@ void Counted(Hook& h, PPCContext& ctx, uint8_t* base) {
 
 namespace {
 
-enum class Outcome { kEqual, kDifferent, kNotComparable, kPathsDiffer };
+enum class Outcome { kEqual, kDifferent, kNotComparable, kPathsDiffer, kPrefixDiffer };
+constexpr int kGuardPasses = 3;  // Check's passes for a difference to count (Report names it too)
 
 // One pass of the guard (the steps at the top of this file). kEqual and kDifferent: the recompiled original has run
-// for real and `diff` says what differed. kNotComparable / kPathsDiffer: nothing has run for real yet.
+// for real and `diff` says what differed. kNotComparable / kPathsDiffer / kPrefixDiffer: nothing has run for real yet
+// (kPrefixDiffer: both stopped, their stores before the stop differ; `diff` says where).
 Outcome Attempt(Hook& h, PPCContext& ctx, uint8_t* base, Scratch& t, std::string& diff) {
   const uint32_t hw_before = ctx.fpscr.getcsr();
   const uint32_t csr_before = ctx.fpscr.csr;
@@ -846,16 +849,14 @@ Outcome Attempt(Hook& h, PPCContext& ctx, uint8_t* base, Scratch& t, std::string
     }
     if (prefix && native_stopped && reference_stopped && !overflow) {  // port 74, its idea 35
       std::string where;
-      if (PrefixEqual(base, native_written, reference_written, where)) {
-        h.prefix_equal.fetch_add(1, std::memory_order_relaxed);
-      } else {
-        const uint64_t n = h.prefix_differ.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (n <= 2)
-          REXLOG_WARN("[hot] {}: the stores before the stop differ (banjo_hot_guard_prefix; not acted on): {}",
-                      h.name, where);
-      }
+      const bool equal = PrefixEqual(base, native_written, reference_written, where);
+      if (equal) h.prefix_equal.fetch_add(1, std::memory_order_relaxed);
       TrimWritten(native_written);
       TrimWritten(reference_written);
+      if (!equal) {  // Theft4-NX (U12): Check makes the pass again before counting it
+        diff = std::move(where);
+        return Outcome::kPrefixDiffer;
+      }
     }
     return Outcome::kNotComparable;
   }
@@ -951,10 +952,22 @@ void Check(Hook& h, PPCContext& ctx, uint8_t* base, uint32_t& counter) {
   // the decoder is filling), the runs differ without either being wrong. So on a difference the inputs are put back
   // (the registers the call came with, the bytes it wrote) and the whole pass is made again, twice at most: a wrong
   // copy differs every time, a race does not.
-  constexpr int kAttempts = 3;
+  constexpr int kAttempts = kGuardPasses;
   for (int attempt = 1;; ++attempt) {
     const Outcome outcome = Attempt(h, ctx, base, t, diff);
-    if (outcome == Outcome::kNotComparable) {
+    // Theft4-NX (2026-11-15, U12): a prefix difference made again like a difference (nothing has run for real, so the
+    // pass repeats from the same registers and the memory as it is now); counted only when every pass has it.
+    if (outcome == Outcome::kPrefixDiffer && attempt < kAttempts) continue;
+    if (outcome == Outcome::kPrefixDiffer) {
+      const uint64_t n = h.prefix_differ.fetch_add(1, std::memory_order_relaxed) + 1;
+      if (n <= 2)
+        REXLOG_WARN("[hot] {}: the stores before the stop differ ({} passes in a row; banjo_hot_guard_prefix; not "
+                    "acted on): {}",
+                    h.name, kAttempts, diff);
+    } else if (outcome == Outcome::kNotComparable && attempt > 1) {
+      h.prefix_not_repeated.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (outcome == Outcome::kNotComparable || outcome == Outcome::kPrefixDiffer) {
       h.not_comparable.fetch_add(1, std::memory_order_relaxed);
       if (h.verify) {
         h.orig(ctx, base);
@@ -1129,13 +1142,22 @@ void Report() {
     return;
   }
   // One line per hook that was reached, so each fits the log's line and a tool reads one function per line.
-  uint64_t compared = 0, not_comparable = 0, differences = 0, not_repeated = 0, prefix_equal = 0, prefix_differ = 0;
+  uint64_t compared = 0, not_comparable = 0, differences = 0, not_repeated = 0, prefix_equal = 0, prefix_differ = 0,
+           prefix_not_repeated = 0;
   uint32_t reached = 0, on = 0, direct = 0, bulk_total = 0, bulk_reached = 0, bulk_on = 0;
   for (Hook* h = g_hooks; h; h = h->next) {
     const uint8_t state = h->state.load(std::memory_order_relaxed);
     bulk_total += h->bulk;
     prefix_equal += h->prefix_equal.load(std::memory_order_relaxed);  // port 74, its idea 35 (every hook)
     prefix_differ += h->prefix_differ.load(std::memory_order_relaxed);
+    prefix_not_repeated += h->prefix_not_repeated.load(std::memory_order_relaxed);
+    // Theft4-NX (U12): a line for each hook whose stores before a stop differed, repeated or not.
+    if (const uint64_t pd = h->prefix_differ.load(std::memory_order_relaxed),
+        pn = h->prefix_not_repeated.load(std::memory_order_relaxed);
+        pd || pn)
+      REXLOG_INFO("[hot] {}: stores before a stop differed in {} call(s) in {} passes in a row, in {} more not when "
+                  "made again; {} with the same stores",
+                  h->name, pd, kGuardPasses, pn, h->prefix_equal.load(std::memory_order_relaxed));
     if (state == kUninit) continue;
     ++reached;
     on += state == kOn || state == kDirect;
@@ -1169,10 +1191,11 @@ void Report() {
   }
   REXLOG_INFO("[hot] native copies: {} reached, {} on ({} direct, no guard); bulk copies (banjo_cpu_native_bulk {}): {} "
               "of {} reached, {} on; {} calls compared so far, {} not comparable ({} of them stopped in both forms "
-              "with the same stores before the stop, {} not), {} differed once and not when repeated, differences: "
-              "{}{}",
+              "with the same stores before the stop, {} not in {} passes in a row, {} more not when made again), {} "
+              "differed once and not when repeated, differences: {}{}",
               reached, on, direct, REXCVAR_GET(banjo_cpu_native_bulk) ? "on" : "off", bulk_reached, bulk_total, bulk_on,
-              compared, not_comparable, prefix_equal, prefix_differ, not_repeated, differences,
+              compared, not_comparable, prefix_equal, prefix_differ, kGuardPasses, prefix_not_repeated, not_repeated,
+              differences,
               // port 78, its idea 27: a build without the guard's forms compares nothing, whatever the keys say.
               BANJO_HOT_GUARD_FORMS ? "" : " (this build has no guard forms, SASRT_HOT_GUARD_FORMS OFF: nothing compared)");
 #endif  // BANJO_HOT_IN_PLACE

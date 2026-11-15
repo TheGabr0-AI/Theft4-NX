@@ -103,6 +103,8 @@ Ogni fase ha la sua verifica; nessuna si dichiara fatta senza la sua prova (PC e
 | **U12** | Installer web (renut_nx_ultimate_installer): LZ4 a blocchi della base + ZXC da valutare per tipo di asset | decoder verificati, integrità, compatibilità con le installazioni esistenti |
 | **U13** | RAM 1600 MHz: esperimento separato, solo se i dati mostrano un limite di banda | A/B stock/1600, temperature, stabilità |
 
+I pacchetti per la console `u12` e `u13` (§2.18-§2.19) e il prossimo `u14` proseguono il lavoro di U10-U11 (audio, luce, copie macchina) con la numerazione dei pacchetti; le fasi U12 (installer) e U13 (RAM 1600 MHz) di questa tabella non sono iniziate.
+
 ### 2.4 Layout del device: Katamari (2.0.5632) contro GTA IV (2.0.6274)
 
 Confronto dei valori di `ultimate/app/src/renut_engine/gpu/d3d/d3d.h` con quelli verificati per GTA IV
@@ -1106,6 +1108,185 @@ coerente con la luminanza riletta dalla CPU uguale al PC (U9). I fari accesi di 
 (verificato sul PC: lo script registrato e quello originale coincidono entro 10 ms); sessione manuale PC con tastiera
 (`--mnk_mode=true`).
 
+### 2.18 U12: tre copie NaN escluse, la guardia ripete le differenze di prefisso, il prefetch del mix (A/B, tolto), la catena del post-processing uguale al PC (2026-11-15)
+
+**Copie macchina (PC, guardia densa `banjo_hot_guard_calls=4000`, `banjo_hot_guard_period=64`, 120-240 s dal
+salvataggio).** Tre run di guardia sul codice di U11 hanno trovato tre copie del gruppo con la stessa classe di
+differenza di U10 (§2.16), tre passaggi di fila:
+- `828DDFD8`: corsia 0 di v8, copia `fff0eeeb` / originale `7fc00001`;
+- `827F4BB0`: corsia 0 di v9, copia `7fffffff` / originale `ffffffff`;
+- `828DC908`: la stessa differenza, perché porta `827F4BB0` come membro inline (`n_828DC908.blocks.json`).
+
+Tutte e tre **escluse** (motivo nei commenti di `localized_bulk.txt`); il gruppo scende da 296 a 293 copie.
+
+**La guardia ripete anche le differenze di prefisso** (`banjo_hot_guest.cpp`, `Check`/`Attempt`, `kPrefixDiffer`): una
+differenza delle scritture fatte prima di una fermata comune (`banjo_hot_guard_prefix`) si rifà dagli stessi registri fino
+a tre volte, come le differenze complete. Run di 240 s con la lista finale: **0 differenze su 4.135.393 chiamate**, 270
+copie del gruppo su 293 raggiunte. Prefissi sparsi e non ripetuti in `828AA448` (18), `828BEBE0` (1), `8217B870` (1):
+concorrenti, restano copie. `82221530` (253 ripetute su 15.510 uguali) è il contatore globale non atomico già visto in
+U10 (`0x82BD1A10`, tre worker): l'originale gira per secondo e vede l'incremento di un altro worker; resta.
+
+**Prove sulla console (Erista, clock standard; NRO `d3642faf…`, stampo `524c9a8f62f8-dirty`; pacchetto
+`out/console-runs/u12`).** Tre run, nessun `note.txt`. M0 (prefetch spento) è partita con la `pipeline_list.bin` di U11
+(897 pipeline costruite in anticipo); **M1 è partita senza** (sparita dalla scheda tra M0 e M1; ricreata durante la run,
+nessun draw in attesa di una compilazione); V-post ha letto quella di M1. Percorsi diversi: M0 è uscita dalla stanza a
+~60 s, M1 a ~90 s ed è finita in un filmato. **Gli fps di M0 e M1 non sono confrontabili**; il costo del mixer per blocco
+sì.
+
+**Audio: il prefetch del mix non serve (`gta4_hand_xaudio_mix_prefetch`, 70 `prfm` nella copia del router).** Finestre
+60-140 s, entrambe con XAudio a 0x2D:
+
+| | M0 (spento) | M1 (acceso) | U11-X1 (senza) |
+|---|---|---|---|
+| ms del mixer per blocco da 5,33 ms (mediana / max) | 5,42 / 5,74 | 5,32 / 5,80 | 5,39 / 5,61 |
+| quota di audio consegnato | 85,8 % | 87,3 % | 87,1 % |
+| quota del router `sub_8216D7E0` nel thread del mixer | 27,1 % | 27,1 % | - |
+
+Le differenze stanno dentro la variazione tra una run e l'altra: **nessun effetto misurabile, codice tolto** (la patch
+resta in `out/console-runs/u12/u12-uncommitted.patch`). La scrittura di FPCR nel router resta: toglierla richiederebbe
+la modalità unica (`BLUR_FPCR_ONE_MODE`), non bit-exact.
+
+**Luce: la catena del post-processing è uguale al PC; la prima anomalia è la scena HDR.** Due strumenti nuovi:
+`gta4_diag_ps_constants = "HASH:PRIMO-ULTIMO"` scrive ogni 5 s le costanti float che i draw di quel pixel shader leggono
+(`[psconst]`; sul deko3d manda i draw per la via completa: solo nelle run di viste) e `banjo_renut_diag_show_texture`
+accetta una lista `HEADER@GAMMA,...` mostrata a turno (`banjo_renut_diag_show_cycle_s`, `[showtex]`). V-post (4 minuti
+da fermi nella stanza): le costanti della composizione finale `CC0C2F3146CCC96E` coincidono con il PC (c208 1,92 contro
+1,91; c212 (0,946 0,690 0,533) contro (0,946 0,692 0,541); c209, c210, c215 uguali), la luminanza 1x1 è bianca su
+entrambi, il frame finale ha la stessa luminosità media (15,5/14,3/12,5 contro 15,9/14,5/8,8). **La scena HDR `40079D00`
+no**: nella stanza 148/143/99 sulla console contro 221/212/193 sul PC; sulla console solo le lampade (gialle, a
+decadimento radiale), muri, Niko e mobili scuri fuori dai coni. Il difetto nasce prima del post-processing: **la
+conclusione di U11 ("il buio è nel post-processing", §2.17) era sbagliata**; le viste U11 erano state prese con l'utente in
+movimento e senza un riferimento della stessa inquadratura.
+
+### 2.19 U13: la luce ambientale persa nel ripristino EDRAM della base; lo stencil ripristinato come nel vecchio renderer (2026-11-15)
+
+**Prova sulla console V-light (Erista, clock standard; NRO `3ae9d456…`, stampo `524c9a8f62f8-dirty` = U12 senza prefetch
+più la riga `[pstex]`; cache U10 `438346a3…`; pacchetto `out/console-runs/u13`).** Una run, ferma nella stanza da ~46 s
+fino all'uscita. Log: build giusta, GPU 460,8 MHz, RAM 1331,2 MHz; 108 righe `[psconst]`, 108 `[pstex]`, 31 `[showtex]`;
+80 catture; `pipeline_list.bin` identico a quello di M1 (`0431E1A9…`). Nessun `note.txt`.
+
+**Gli ingressi del passaggio della luce ambientale sono uguali al PC.** Il draw a schermo intero `97AC30BA76D5515F` (VS
+`D6F569E53F3F319C`) scrive per primo in `40076EB0`: ambientale = (c37 + c38 · normale) · `40226780`.z, per l'albedo, più
+il sole; il byte dello stencil delle parole della depth (`DA1A63A0`.z) sceglie tra due modelli.
+- costanti c36-c39: **identiche** al PC in ogni campione (es. c37 (1,55134 1,29404 1,1881), c38 (4,38946 4,54775
+  4,50517)); prima dell'aggiornamento entrambi hanno c36 = 3,4e38 e c37 (1,38 1,14 1,04667);
+- texture degli slot 0, 1, 2, 4, 5, 6: stessi header, basi, formati, dimensioni, esponenti e segni (`[pstex]`; cambiano
+  solo gli indici dei descrittori, propri di ogni back end);
+- viste (medie su 255, console contro PC): `40226780` 13,7/65,1/121,5 contro 13,7/65,1/112,9 (canale z compreso);
+  `40226620` 100,2/96,3/84,8 contro 100,7/96,7/85,6; `402266B0` 90,4/192,2/136,0 contro 89,6/192,3/135,8;
+  `DA1A63A0` nera su entrambi (la vista non sa mostrare le parole della depth: non è un confronto);
+- shader: il GLSL eseguito (`ultimate/out/deko3d_shaders/glsl_opt`) e quello del vecchio renderer funzionante (run 70,
+  `out/renut-switch/deko3d/glsl_opt`) fanno lo stesso calcolo; le costanti di specializzazione della variante della
+  console (`deko3d_variants.txt`: conversioni dei fetch note e nulle, `926` fetch semplici, `990` clamp 7e3, `909` early
+  Z) non lo cambiano.
+
+Il passaggio quindi, quando gira, dà lo stesso risultato: sulla console **non scrive**.
+
+**La causa: il test di stencil del passaggio e il ripristino EDRAM della base.** Il drawlog (ora con il target di depth
+e ref/maschere dello stencil) del frame della stanza:
+
+| draw | stato | stencil |
+|---|---|---|
+| G-buffer (380-480) | depth `402265E0` | ALWAYS, REPLACE, ref 0x08 (la maggior parte), 0x89, 0x06 |
+| 500, PS `B3D105989610E354` | colore `40226810`, nessuna depth | - (copia le parole della depth come colore) |
+| 501-502 | depth `400007C0`, ripristinata da `40226810` | 502 (ambientale): **EQUAL ref 0x01, maschera 0x01** |
+| 503, 505, ... (volumi) | depth `400007C0` | ALWAYS, INCW/DECW sulle facce |
+| 504, 506, ... (luci) | depth `400007C0` | **NOTEQUAL ref 0xFF**, REPLACE |
+
+Il copy shader del gioco (draw 500) riscrive le parole della depth come colore sopra l'EDRAM della depth della luce e
+mette nel **byte basso** (lo stencil) **0xFF dove la depth c'è e 0x80 dove è nulla**. Sulla Xbox 360 l'EDRAM è una sola:
+la depth ripristinata porta quello stencil, 0xFF è il valore neutro della luce. Quindi l'ambientale (EQUAL 1/1) passa
+sulla geometria e non sul cielo; ogni luce passa solo dove i suoi volumi hanno cambiato lo stencil e lo rimette a 0xFF.
+Il ripristino della base (`RestoreDepthFromColorLocked`, porta 29 di sasrt-nx, `sasrt_renut_depth_restore`) prende la
+depth dalla parola ma lascia lo **stencil a 0** ("a game's restore copies a depth whose stencil it cleared", vero per
+Sonic). Su deko3d, che usa il ref vero, ne segue:
+- l'ambientale (EQUAL 1 su 0) **fallisce ovunque**: muri, Niko e mobili senza luce (U10-U13);
+- le luci (NOTEQUAL 0xFF su 0) **passano su tutta la loro sagoma**: le "luci locali più forti del PC" annotate in U10 e i
+  coni gialli di V-post;
+- in strada il sole diretto arriva da altri passaggi, quindi resta: "ombre nere" (U11).
+
+**Perché il PC era illuminato: due errori che si compensavano.** plume D3D12 non assegnava mai
+`D3D12GraphicsPipeline::stencilRef` da `desc.stencilReference` (`OMSetStencilRef` sempre con 0, anche nel vecchio
+albero): sul PC ogni test di stencil confrontava con 0, e l'ambientale (EQUAL 0, maschera 1) passava proprio sullo stencil
+0 del ripristino. Il deko3d imposta il ref della pipeline (`dkCmdBufSetStencil`). Il PC D3D12 non era un riferimento valido
+per lo stencil.
+
+**Il confronto con il vecchio renderer.** Il commit `6921903` ("GTA IV's lighting depth and stencil restored from
+colour") ripristinava la depth **e lo stencil bit per bit** (un passaggio per bit: scarto dove il bit è 0, scrittura di
+quel bit), perché un pixel shader non può scrivere lo stencil su ogni back end (deko3d); il run 70 (`cc64728`) aveva la
+stanza giusta sulla console. In U5b (`db37f00`, §2.9) il ripristino della base era stato giudicato equivalente ("ripristino
+della depth coperto") e se ne era riportato solo lo scambio dei mezzi tile (`00683a5`): **lo stencil è la regressione della
+migrazione**. G1 (§2.16) non poteva trovarla: il ripristino non è un'ottimizzazione solo deko3d con una chiave.
+
+**Correzione (PC verificato, console da provare).**
+- `gta4_renut_depth_restore_stencil` (**accesa di default**): il passaggio della depth scrive anche lo stencil 0 (ref 0,
+  maschera 0xFF, REPLACE), poi 8 passaggi (`depth_restore_ps.hlsl`, `param1` da -1 a -8) scrivono ciascuno un bit del byte
+  basso della parola (ref 0xFF, maschera di scrittura quel bit, scarto dove il bit è 0); Zcull invalidato dopo tutti i
+  passaggi (deko3d).
+- plume D3D12: `stencilRef = desc.stencilReference` (`plume_d3d12.cpp`): il PC fa ora i test di stencil come la
+  console, ed è di nuovo un riferimento.
+- drawlog: target di depth (`depth 33 at 400007C0`) e `sref` (ref, maschera di lettura, di scrittura; fronte/retro).
+
+Verifica sul PC (D3D12, stesso salvataggio, 100 s, medie su 255; HDR = vista `40079D00`):
+
+| run | ref D3D12 | stencil del ripristino | HDR | frame finale |
+|---|---|---|---|---|
+| A (prima) | 0 (difetto) | 0 | 224,5 / 218,1 / 197,7 | 15,6 / 14,3 / 12,5 |
+| A2, A3 | giusto | 0 (la base) | **8,4 / 7,1 / 6,1** | **0,4 / 0,4 / 0,4** |
+| B2, B3 | giusto | dai bit della parola | 224,5 / 218,0 / 197,7 | 15,6 / 14,3 / 12,6 |
+| B4 | giusto | zero col draw + bit | 224,5 / 218,1 / 198,0 | 15,6 / 14,3 / 12,6 |
+| D (default) | giusto | chiave accesa di default | non misurata (run senza viste) | 15,6 / 14,3 / 12,7 |
+
+Con il ref corretto il PC **riproduce il difetto della console** (A2/A3; più buio della console, dove le lampade si
+vedono: differenza non indagata, sparisce con la correzione) e la correzione lo toglie (B, D), con lo stesso frame del riferimento
+precedente entro 0,7/255. Nessun errore di plume. **Costo:** 9 passaggi a schermo intero per ripristino (uno nel frame
+della stanza) contro 1; il vecchio renderer li aveva. In compenso le luci tornano mascherate dai loro volumi (oggi sulla
+console coprono tutta la sagoma): il bilancio GPU si misura sulla console.
+
+**Prestazioni e audio dalla V-light (ferma nella stanza, 0x2D):** 28-30 fps; mixer 5,43-5,49 ms per blocco (mediana),
+~100 % di un core, audio 83-86,5 % (V-post 89 %). Il thread del mixer, per funzione: router `sub_8216D7E0` 28,3 % (con il
+nativo del mix inline), `sub_828C2D28` 16,8 %, `sub_828C6740` 13,9 %, `sub_828C5A58` 11,0 %, `sub_82185E38` 7,6 %,
+`sub_828C7848` 6,6 % (non copiata), `sub_82178398` 4,3 %. Render thread ~37 % di un core (`DrawStateLocked` 25 %), thread
+principale ~55 %, worker `XThreadFFED0F60` ~27 %, decoder XMA ~26 %.
+
+**Prossima prova (una sola, da autorizzare):** pacchetto `u14`, la stessa run ferma nella stanza con la correzione accesa
+(nessuna chiave diagnostica che cambi il percorso dei draw), catture ogni 5 s. Esito atteso: la stanza come il PC B; fps
+e tempo GPU contro V-light.
+
+### 2.20 U14: la luce ambientale torna sulla console; il suo costo GPU; i glitch rimasti (2026-11-15)
+
+**Prova sulla console (Erista, clock standard; NRO `59481f7d…`, stampo `524c9a8f62f8-dirty` = U13 più la correzione
+dello stencil di §2.19, `gta4_renut_depth_restore_stencil` accesa di default; cache `438346a3…`; toml = V-light senza le
+sue chiavi diagnostiche; pacchetto `out/console-runs/u14`).** Una run (`.../theft4-ultimate/U14`), nessun `note.txt`.
+Log: build giusta, restauri EDRAM disegnati, 4 compilazioni uam in background, nessun draw in attesa. La run è partita in
+un altro punto dell'appartamento (la cucina con la lampada), non nella stanza di U13, e cambia scena durante la run (finestre
+da 650, 930 e 3.700-4.100 draw a frame).
+
+**Luce: corretta.** L'utente conferma la luce diurna ripristinata; le catture mostrano muri, pavimento, mobili e Niko
+illuminati dall'ambientale, come il PC (§2.19). **Restano due glitch** (non confusi con le prestazioni):
+- **alone della lampada della cucina**: un disco bianco uniforme dal bordo netto attorno alla lampadina, che in alcune
+  catture manca. Ipotesi escluse: le query di occlusione di D3D (la costante sentinella 0xFFFFFEED di `D3DQuery_Issue`
+  non c'è nel codice di GTA IV: il gioco non le usa, quindi la risposta della base, port 76, non c'entra). Ipotesi aperte,
+  da distinguere con un riferimento PC della stessa cucina (serve il salvataggio dell'utente): la visibilità della corona
+  calcolata dallo shader sulla depth risolta (`40079D50`, la depth ripristinata) e la sfumatura del disco;
+- **ombre**: segnalate dall'utente, da localizzare nelle catture con un riferimento PC.
+
+**Prestazioni: limitate dalla GPU.** Nella prima finestra con 650 draw a frame (60-70 s), contro la V-light di U13 (stessa
+NRO meno la correzione, ~640 draw):
+
+| | U13 V-light | U14 |
+|---|---|---|
+| fps | ~26 | 16 |
+| GPU per frame | 35,5 ms | **61,5 ms** |
+| render thread per frame | 15 ms | 13,7 ms |
+
+Il calo è tutto GPU. Sul PC (D3D12, `renut_gpu_profile` + `banjo_renut_diag_gpu_shaders`, stesso salvataggio) la
+correzione costa 11,42 -> 13,57 ms (+19 %): l'etichetta del copy shader `B3D10598` (che contiene i 9 passaggi del
+ripristino) 0,64 -> 1,63 ms, il passaggio ambientale ora disegnato 0,35 ms, le luci 2,19 -> 2,64 ms. Sulla console +73 %:
+la parte in più, specifica del deko3d, si misura con il profilo GPU per passaggio sulla console (U15-P). **Audio:** 91,4 %
+consegnato, mixer 5,25 ms per blocco (finestre 60-240 s; U13 86,5 %, 5,43): coerente con gli fps più bassi, che lasciano
+più core al mixer; nessun cambio del codice audio, nessun merito attribuito.
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si
@@ -1140,3 +1321,6 @@ coerente con la luminanza riletta dalla CPU uguale al PC (U9). I fari accesi di 
 | U9 | 2026-11-14 | `c9c511e`, (questo commit) | C1/C2 letti: cessione dei worker efficace sulla console (43-46 % -> ~6 % di un core ciascuno), fps non confrontabili; **regola di Halo 3 smentita** come causa della luce; luminanza riletta e ripristino della depth uguali al PC: la causa è nel lavoro solo deko3d mai spento (GPU round SASRT, 22 passate GLSL nuove). **Thread principale:** 44,6 % delle sue attese nel rilascio dei semafori -> semafori su indirizzo (`thread_semaphore_address_wait`), test host OK. Mixer limitato dal calcolo (80 % CPU). NRO `0012aa01…`, pacchetto `u9` (G0, G1). Nessun run su console. §2.15 |
 | U10 | 2026-11-14 | (questo commit) | **baseline tecnica, non giocabile.** 297 copie macchina in place (mixer incluso) dai profili G0/B, nativo del mix XAudio corretto per `vmaddfp` fuso, layout caldo (1.600 funzioni), cache DKSH U10 (9.174 record). Guardia densa sul PC: 4 differenze NaN -> 11 funzioni lasciate generate; insieme finale **0 differenze su 1.389.924 chiamate**. NRO `d24db83b…`. Console U10-A: strada ~10,4 fps (G0 ~10,7), nessuna regressione, nessun guadagno; audio 65,8 %; 12 compilazioni; luce: manca il sole/ambiente. §2.16 |
 | U11 | 2026-11-14 | (questo commit) | console: **priorità dei thread XAudio** (0x2D, la richiesta time-critical del gioco) audio 69,1 -> 86,0 % (strada 66 -> 85 %, mixer da 82 a 105 % di un core, -8 % fps), chiave ancora spenta di default; ritmo legato alle consegne scartato (PC); `input_record`; **luce: la scena HDR della console è illuminata dal sole, il buio è nel post-processing**; `pipeline_list.bin` mancante in 5 run su 6: effetto misurato trascurabile. §2.17 |
+| U12 | 2026-11-15 | (questo commit) | PC: 3 copie NaN escluse (gruppo 293), la guardia ripete le differenze di prefisso (0 differenze su 4.135.393 chiamate). Console (NRO `d3642faf…`): **prefetch del mix senza effetto misurabile, tolto** (5,32-5,42 ms per blocco, 85,8-87,3 %); fps di M0/M1 non confrontabili (percorsi diversi, M1 senza `pipeline_list.bin`); **post-processing uguale al PC, la scena HDR no** (manca l'ambientale). §2.18 |
+| U13 | 2026-11-15 | (questo commit) | Console V-light (NRO `3ae9d456…`): ingressi del passaggio ambientale `97AC30BA…` uguali al PC (costanti, texture, G-buffer). **Causa: il ripristino EDRAM della base lascia lo stencil 0, il gioco ci mette 0xFF**: l'ambientale (EQUAL 1) fallisce, le luci (NOTEQUAL 0xFF) coprono tutta la sagoma; regressione della migrazione rispetto a `6921903`. Sul PC due errori si compensavano (plume D3D12 con ref dello stencil sempre 0). Correzione: stencil ripristinato bit per bit (`gta4_renut_depth_restore_stencil`, accesa) + ref D3D12; PC: senza la correzione la stanza è nera come sulla console, con la correzione uguale al riferimento. Console da provare (`u14`). §2.19 |
+| U14 | 2026-11-15 | (questo commit) | Console (NRO `59481f7d…`): **luce ambientale corretta** con il ripristino dello stencil (§2.19); glitch rimasti: alone della lampada (disco bianco a bordo netto, a tratti assente; query di occlusione escluse) e ombre. Prima finestra a 650 draw: 16 fps, **GPU 61,5 ms** (U13 35,5), render thread 13,7 ms; PC: la correzione costa +19 % di GPU. Audio 91,4 % (meno contesa a fps più bassi, non codice). §2.20 |

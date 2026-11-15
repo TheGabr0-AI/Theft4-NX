@@ -7,7 +7,9 @@
 // halves swapped back. present_vs draws the fullscreen triangle.
 //   g_Push.textureIndex : the colour target's slot (its words, least significant byte first: depth_resolve.hlsli)
 //   g_Push.param0       : 1 for D24FS8 (20e4 float depth), 0 for D24S8
-//   g_Push.param1       : > 0: that depth everywhere (a diagnostic)
+//   g_Push.param1       : > 0: that depth everywhere (a diagnostic); theft4-nx (2026-11-15, gta4_renut_depth_restore_stencil):
+//                         -1 to -8, the stencil pass of bit -param1 - 1 (discarded where the word's bit is clear; the
+//                         pipeline writes that bit, depth writes off), as Theft4-NX's old renderer restored it (6921903)
 //   g_Push.scale.x      : theft4-nx (2026-11-13): the depth target's render scale (host pixels a guest pixel)
 #include "utility.hlsli"
 
@@ -41,6 +43,10 @@ float main(float4 position : SV_Position) : SV_Depth
     const float4 c = g_Textures[NonUniformResourceIndex(g_Push.textureIndex)].Load(int3(texel, 0));
     const uint4 b = uint4(round(saturate(c) * 255.0));
     const uint word = b.x | (b.y << 8) | (b.z << 16) | (b.w << 24);
+    // theft4-nx (2026-11-15): the stencil is the word's low byte (depth_resolve.hlsli writes the depth target's stencil
+    // there); a pixel shader cannot write the stencil on every back end (deko3d), so one pass a bit.
+    if (g_Push.param1 < 0.0 && ((word >> uint(-g_Push.param1 - 1.0)) & 1u) == 0u)
+        discard;
     const uint depth24 = word >> 8;
     return g_Push.param0 != 0.0 ? DecodeFloat20e4(depth24) : float(depth24) * (1.0 / 16777215.0);
 }

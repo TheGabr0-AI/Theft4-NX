@@ -3113,6 +3113,10 @@ namespace plume {
         assert(desc.pipelineLayout != nullptr);
 
         topology = toD3D12(desc.primitiveTopology);
+        // theft4-nx (2026-11-15, U13): the pipeline's stencil reference (checkStencilRef sets it at each draw); it was left
+        // 0, so every stencil test on D3D12 compared against 0 (GTA IV's ambient pass, EQUAL 1, passed on a stencil the
+        // restore left 0, which on deko3d, whose reference is right, it failed).
+        stencilRef = desc.stencilReference;
 
         const D3D12PipelineLayout *pipelineLayout = static_cast<const D3D12PipelineLayout *>(desc.pipelineLayout);
         const D3D12Shader *vertexShader = static_cast<const D3D12Shader *>(desc.vertexShader);

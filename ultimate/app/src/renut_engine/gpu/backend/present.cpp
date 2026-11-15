@@ -11,6 +11,7 @@
 #include "renut_engine/gpu/sasrt_gpu_round.h"  // sasrt-nx (2026-11-08): the GPU round
 #include <condition_variable>
 #include <cstdlib>
+#include <vector>
 #include <mutex>
 #include <string>
 
@@ -51,6 +52,10 @@ REXCVAR_DEFINE_STRING(banjo_renut_diag_show_texture, "", "Banjo/Renut",
                       "resolve lines name them) instead of the frame, on screen and in captures");
 REXCVAR_DEFINE_DOUBLE(banjo_renut_diag_show_gamma, 1.0, "Banjo/Renut",
                       "Diagnostic: banjo_renut_diag_show_texture's exponent (depth near 1 shows with 64 or so)");
+// Theft4-NX (2026-11-15, U12): see DiagTextureImageLocked.
+REXCVAR_DEFINE_INT32(banjo_renut_diag_show_cycle_s, 20, "Banjo/Renut",
+                     "Diagnostic: with a list in banjo_renut_diag_show_texture, the seconds each entry (and the frame "
+                     "itself, first) stays on screen");
 
 // banjo-nx (2026-10-20): see GameGamma below.
 // theft4-nx (2026-11-13): on for GTA IV, as its display shows it on the Xbox 360 and as Theft4-NX's ReNut renderer did
@@ -580,13 +585,55 @@ void ServeCaptureLocked(VideoState &s, const PresentImage *image) {
 }
 
 // banjo_renut_diag_show_texture: the texture to show instead of the frame, when it has a 2D host texture and slot.
+// Theft4-NX (2026-11-15, U12, docs/switch-port/20 section 2.18): also a list "HEADER@GAMMA,HEADER@GAMMA,..." shown in
+// turn, each for banjo_renut_diag_show_cycle_s seconds from the first frame shown (the frame itself first, for one turn),
+// so one console run without input captures every buffer of a chain at the same view; "@GAMMA" may be left out
+// (banjo_renut_diag_show_gamma). The log names each change ([showtex]).
 bool DiagTextureImageLocked(PresentImage &out) {
-  static const u32 va = [] {
+  struct Item {
+    u32 va;
+    float gamma;
+  };
+  static const std::vector<Item> items = [] {
+    std::vector<Item> list;
     const std::string v = REXCVAR_GET(banjo_renut_diag_show_texture);
-    return v.empty() ? 0u : u32(std::strtoul(v.c_str(), nullptr, 16));
+    size_t at = 0;
+    while (at < v.size()) {
+      size_t end = v.find(',', at);
+      if (end == std::string::npos) end = v.size();
+      const std::string item = v.substr(at, end - at);
+      at = end + 1;
+      const size_t g = item.find('@');
+      const u32 va = u32(std::strtoul(item.substr(0, g).c_str(), nullptr, 16));
+      const float gamma = g == std::string::npos ? float(REXCVAR_GET(banjo_renut_diag_show_gamma))
+                                                 : float(std::atof(item.substr(g + 1).c_str()));
+      if (va) list.push_back({va, gamma});
+    }
+    return list;
   }();
-  if (!va)
+  if (items.empty())
     return false;
+  u32 va = items[0].va;
+  float gamma = items[0].gamma;
+  if (items.size() > 1) {  // one entry: always that texture, as before
+    static const auto start = std::chrono::steady_clock::now();
+    const int64_t period = std::max(1, REXCVAR_GET(banjo_renut_diag_show_cycle_s));
+    const int64_t turn =
+        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count() / period;
+    const int64_t index = turn % int64_t(items.size() + 1) - 1;  // -1: the frame itself
+    static int64_t logged = -2;
+    if (index != logged) {
+      logged = index;
+      if (index < 0)
+        RGPU_INFO("[showtex] turn {}: the frame", turn);
+      else
+        RGPU_INFO("[showtex] turn {}: texture {:08X} at gamma {}", turn, items[size_t(index)].va, items[size_t(index)].gamma);
+    }
+    if (index < 0)
+      return false;
+    va = items[size_t(index)].va;
+    gamma = items[size_t(index)].gamma;
+  }
   HostTexture *t = FindHostTextureLocked(va);
   if (!t || !t->texture || t->slot == UINT32_MAX || t->slot == kInvalidDescriptor ||
       t->dimension != TextureDimension::Tex2D || t->stacked)
@@ -596,7 +643,7 @@ bool DiagTextureImageLocked(PresentImage &out) {
   out.descriptor = t->slot;
   out.width = t->alloc_width;
   out.height = t->alloc_height;
-  out.gamma = float(REXCVAR_GET(banjo_renut_diag_show_gamma));
+  out.gamma = gamma;
   return true;
 }
 

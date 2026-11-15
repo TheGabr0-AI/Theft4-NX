@@ -86,6 +86,11 @@ REXCVAR_DEFINE_STRING(banjo_renut_diag_stream_dump_vs, "", "Banjo/Renut",
 REXCVAR_DEFINE_INT32(banjo_renut_diag_draw_log_s, 0, "Banjo/Renut",
                      "Diagnostic: this many seconds after the first draw, log every draw of the next two frames "
                      "([drawlog]: shaders, counts, target, state; 0 = off)");
+// Theft4-NX (2026-11-15, U12): see LogPsConstants.
+REXCVAR_DEFINE_STRING(gta4_diag_ps_constants, "", "Theft4/Diagnostics",
+                      "Diagnostic: \"HASH:FIRST-LAST\" logs every 5 s the float constants FIRST..LAST that the draws of "
+                      "pixel shader HASH (hex) read, as the game wrote them ([psconst]); empty: off. On deko3d it sends "
+                      "every draw the full way, as the draw log does (slower: not for timing runs)");
 REXCVAR_DEFINE_STRING(banjo_renut_diag_blend_skip_exclude, "", "Banjo/Renut",
                       "Diagnostic: pixel shader hashes (hex, comma separated) banjo_gpu_blend_skip leaves alone");
 
@@ -9317,6 +9322,66 @@ bool DrawsWithoutPixelShader(const GuestDevice &device, const Targets &t, const 
   return ((color_control >> 4) & 1) == 0;  // alpha to coverage, as MakeKey's
 }
 
+// Theft4-NX (2026-11-15, U12, docs/switch-port/20 section 2.18): gta4_diag_ps_constants, "HASH:FIRST-LAST": every 5 s,
+// the float constants FIRST..LAST (registers c0-c255) the draws of pixel shader HASH read, as the game wrote them (the
+// values the guest device holds for the draw). The same line on the PC and the console says whether the game hands both
+// renderers the same parameters (GTA IV's post-processing reads its exposure and grading from c208-c215).
+// U13: the same line, then the shader's texture slots as this draw binds them: the device's header address (the
+// address banjo_renut_diag_show_texture takes), the fetch constant's base, format, size and exponent adjust, and the
+// words the host put in the shared constants for the slot (texture_indices, and sampler_indices with the shader's
+// per-channel decode bits 13-19), so a pass that reads another texture or decodes it otherwise shows on one line.
+void LogPsConstants(const ShaderRecord *ps, const FloatConstants &constants, const SharedConstants &sc,
+                    const TextureFetch *fetches, const GuestDevice &device) {
+  static const std::string spec = REXCVAR_GET(gta4_diag_ps_constants);
+  static uint64_t hash = 0;
+  static u32 first = 0, last = 0;
+  static bool parsed = false;
+  if (!parsed) {
+    parsed = true;
+    const size_t colon = spec.find(':');
+    const size_t dash = spec.find('-', colon == std::string::npos ? 0 : colon);
+    if (colon != std::string::npos && dash != std::string::npos) {
+      hash = std::strtoull(spec.substr(0, colon).c_str(), nullptr, 16);
+      first = u32(std::strtoul(spec.substr(colon + 1, dash - colon - 1).c_str(), nullptr, 10));
+      last = u32(std::strtoul(spec.substr(dash + 1).c_str(), nullptr, 10));
+      last = std::min(last, 255u);
+    }
+  }
+  if (!ps || !hash || ps->hash != hash || first > last)
+    return;
+  static auto next = std::chrono::steady_clock::time_point{};
+  const auto now = std::chrono::steady_clock::now();
+  if (now < next)
+    return;
+  next = now + std::chrono::seconds(5);
+  std::string line;
+  for (u32 r = first; r <= last; ++r) {
+    const u8 *p = constants.Register(r);
+    float f[4];
+    for (int i = 0; i < 4; ++i) {
+      u32 w;
+      std::memcpy(&w, p + 4 * i, 4);
+      w = __builtin_bswap32(w);  // the guest's big-endian words
+      std::memcpy(&f[i], &w, 4);
+    }
+    line += fmt::format(" c{}=({:.6g} {:.6g} {:.6g} {:.6g})", r, f[0], f[1], f[2], f[3]);
+  }
+  RGPU_INFO("[psconst] ps {:016X}:{}", hash, line);
+  if (!ps->entry)
+    return;
+  std::string tex;
+  for (u32 bits = ps->entry->textureFetchMask; bits; bits &= bits - 1) {
+    const u32 r = u32(std::countr_zero(bits));
+    const TextureFetch &f = fetches[r];
+    u32 w = 0, h = 0, d = 0;
+    f.Size(w, h, d);
+    tex += fmt::format(" t{}: header {:08X} base {:08X} fmt {} {}x{} exp {} signs {:02X} ti {:08X} si {:08X};", r,
+                       device.U32(d3d::kDeviceOffsetTextures + r * 4), f.BasePage() << 12, u32(f.Format()), w, h,
+                       f.ExpAdjust(), (f.dword[0] >> 2) & 0xFF, sc.texture_indices[0][r], sc.sampler_indices[r]);
+  }
+  RGPU_INFO("[pstex] ps {:016X}:{}", hash, tex);
+}
+
 // banjo-nx (2026-10-18, matching RenderDoc captures of Ryujinx to the game's shaders): banjo_renut_diag_draw_log_s
 // seconds after the first draw, every draw of the next two frames: its shaders, counts, target and state, in order.
 void DrawLog(const DrawCall &call, const Geometry &geometry, const ShaderRecord *vs, const ShaderRecord *ps,
@@ -9342,13 +9407,14 @@ void DrawLog(const DrawCall &call, const Geometry &geometry, const ShaderRecord 
   }
   const HostSurface *c0 = targets.color_count ? targets.colors[0] : nullptr;
   RGPU_INFO("[drawlog] frame {} draw {}: vs {:016X} ps {:016X} prim {} count {} -> {} {} inst {}{} target {}x{} fmt {} "
-            "x{} depth {} dc {:08X} blend {:08X} mask {:X} a2c {} vfetch {} bytes, exports {}",
+            "x{} depth {}{}{:08X} dc {:08X} sref {:06X}/{:06X} blend {:08X} mask {:X} a2c {} vfetch {} bytes, exports {}",
             frame, ordinal++, vs ? vs->hash : 0, ps ? ps->hash : 0, call.primitive, call.count,
             geometry.indexed ? "indices" : "vertices", geometry.indexed ? geometry.index_count : geometry.vertex_count,
             geometry.instance_count, call.tessellation ? " tess" : "", c0 ? c0->width : 0, c0 ? c0->height : 0,
             c0 ? int(c0->format) : -1, targets.color_count, targets.depth ? int(targets.depth->format) : -1,
-            key.depth_control, key.blend_control[0], key.color_mask, key.alpha_to_coverage, sc.vertex_fetch_bytes,
-            export_count);
+            targets.depth ? " at " : " ", targets.depth ? targets.depth->guest_va : 0u, key.depth_control,
+            key.stencil_ref_mask, key.stencil_ref_mask_bf, key.blend_control[0], key.color_mask, key.alpha_to_coverage,
+            sc.vertex_fetch_bytes, export_count);
 }
 
 #if defined(PLUME_DEKO3D)
@@ -10267,7 +10333,8 @@ int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayCon
     Config c;
     c.on = REXCVAR_GET(banjo_renut_fast_draw) && REXCVAR_GET(banjo_renut_persistent_shared) &&
            REXCVAR_GET(banjo_renut_fetch_data_unread) && REXCVAR_GET(banjo_renut_chain_reuse);
-    c.draw_log = !REXCVAR_GET(banjo_renut_lean_diagnostics) || REXCVAR_GET(banjo_renut_diag_draw_log_s) > 0;
+    c.draw_log = !REXCVAR_GET(banjo_renut_lean_diagnostics) || REXCVAR_GET(banjo_renut_diag_draw_log_s) > 0 ||
+                 !REXCVAR_GET(gta4_diag_ps_constants).empty();  // Theft4-NX (U12): LogPsConstants is the full path's
     c.census = REXCVAR_GET(banjo_renut_diag_fast_census) || UnleashedCensusOn();
     c.verify = REXCVAR_GET(banjo_renut_fast_draw_verify);
     return c;
@@ -13234,6 +13301,9 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
                                REXCVAR_GET(banjo_renut_diag_draw_log_s) > 0;
   if (draw_log)
     DrawLog(call, geometry, vs, ps, targets, key, sc, export_count);
+  static const bool ps_constants_log = !REXCVAR_GET(gta4_diag_ps_constants).empty();  // Theft4-NX (U12)
+  if (ps_constants_log) [[unlikely]]
+    LogPsConstants(ps, ps_constants, sc, draw_fetches.f, device);
   // banjo-nx (2026-10-19, banjo_renut_resolve_skip): the targets this draw can write.
   for (u32 i = 0; i < targets.color_count && i < key.color_count; ++i)
     if ((key.color_mask >> (4 * i)) & 0xF) {
@@ -14685,6 +14755,15 @@ bool ResolveFixed16Locked(HostSurface *surface, HostTexture *dest, const plume::
   return true;
 }
 
+// theft4-nx (2026-11-15, U13): the restore's stencil from the words' low byte, as Theft4-NX's old renderer did (6921903,
+// on the console since run 70's lit scene). On the Xenos the EDRAM bits are the depth and the stencil both: GTA IV copies
+// its G-buffer's depth words (stencil in the low byte: depth_resolve.hlsli) as colour over the lighting's depth buffer,
+// and its lighting tests that stencil (the full-screen ambient pass PS 97AC30BA76D5515F EQUAL, the light volumes'
+// NOTEQUAL after their marks). The base's restore left the stencil 0.
+REXCVAR_DEFINE_BOOL(gta4_renut_depth_restore_stencil, true, "GTA4/Renut",
+                    "The EDRAM depth restore (sasrt_renut_depth_restore) also restores the stencil from the colour words' "
+                    "low byte, one pass a bit (Theft4-NX's old renderer, 6921903); off: the stencil 0 (the base)");
+
 // sasrt-nx (2026-10-20): the EDRAM depth restore (see DepthRestoreSourceLocked): the depth of 'depth' from the words 'color'
 // holds over the same EDRAM, its stencil 0 (a game's restore copies a depth whose stencil it cleared).
 bool RestoreDepthFromColorLocked(HostSurface *depth, HostSurface *color) {
@@ -14721,6 +14800,22 @@ bool RestoreDepthFromColorLocked(HostSurface *depth, HostSurface *color) {
       desc.depthEnabled = true;
       desc.depthWriteEnabled = true;
       desc.depthFunction = plume::RenderComparisonFunction::ALWAYS;
+      // theft4-nx (2026-11-15, gta4_renut_depth_restore_stencil): the depth pass also writes the stencil 0 (reference 0,
+      // write mask 0xFF, REPLACE), as the old renderer's pass 0 did: the stencil bits below start from 0 whatever the
+      // stencil-only clear above left.
+      if (REXCVAR_GET(gta4_renut_depth_restore_stencil)) {
+        desc.stencilEnabled = true;
+        desc.stencilReadMask = 0xFF;
+        desc.stencilWriteMask = 0xFF;
+        desc.stencilReference = 0;
+        plume::RenderStencilFaceDesc face;
+        face.compareFunction = plume::RenderComparisonFunction::ALWAYS;
+        face.passOp = plume::RenderStencilOp::REPLACE;
+        face.depthFailOp = plume::RenderStencilOp::REPLACE;
+        face.failOp = plume::RenderStencilOp::KEEP;
+        desc.stencilFrontFace = face;
+        desc.stencilBackFace = face;
+      }
       e.pipeline = s.device->createGraphicsPipeline(desc);
       e.format = depth->format;
       if (e.pipeline)
@@ -14769,11 +14864,66 @@ bool RestoreDepthFromColorLocked(HostSurface *depth, HostSurface *color) {
   push.param0 = GpuTextureFormat(depth->format_word & 0x3F) == GpuTextureFormat::Fmt24_8_Float ? 1.0f : 0.0f;
   cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
   cmd->drawInstanced(3, 1, 0, 0);
+  // theft4-nx (2026-11-15, gta4_renut_depth_restore_stencil): the stencil from the words, after the depth: one pass a bit
+  // (the pixels whose bit is set write it: reference 0xFF, write mask that bit, REPLACE), over the stencil cleared above.
+  static const bool restore_stencil = REXCVAR_GET(gta4_renut_depth_restore_stencil);
+  if (restore_stencil) {
+    struct StencilEntry {
+      plume::RenderFormat format = plume::RenderFormat::UNKNOWN;
+      std::unique_ptr<plume::RenderPipeline> pipelines[8];
+    };
+    static StencilEntry stencil_entries[4];
+    StencilEntry *entry = nullptr;
+    for (StencilEntry &e : stencil_entries) {
+      if (e.format == depth->format || e.format == plume::RenderFormat::UNKNOWN) {
+        e.format = depth->format;
+        entry = &e;
+        break;
+      }
+    }
+    for (uint32_t bit = 0; entry && ps && s.present_vs && bit < 8; ++bit) {
+      std::unique_ptr<plume::RenderPipeline> &p = entry->pipelines[bit];
+      if (!p) {
+        plume::RenderGraphicsPipelineDesc desc;
+        desc.pipelineLayout = s.utility_layout.get();
+        desc.vertexShader = s.present_vs.get();
+        desc.pixelShader = ps.get();
+        desc.primitiveTopology = plume::RenderPrimitiveTopology::TRIANGLE_LIST;
+        desc.cullMode = plume::RenderCullMode::NONE;
+        desc.renderTargetCount = 0;
+        desc.depthTargetFormat = depth->format;
+        desc.depthEnabled = true;
+        desc.depthWriteEnabled = false;
+        desc.depthFunction = plume::RenderComparisonFunction::ALWAYS;
+        desc.stencilEnabled = true;
+        desc.stencilReadMask = 0xFF;
+        desc.stencilWriteMask = 1u << bit;
+        desc.stencilReference = 0xFF;
+        plume::RenderStencilFaceDesc face;
+        face.compareFunction = plume::RenderComparisonFunction::ALWAYS;
+        face.passOp = plume::RenderStencilOp::REPLACE;
+        face.depthFailOp = plume::RenderStencilOp::REPLACE;
+        face.failOp = plume::RenderStencilOp::KEEP;
+        desc.stencilFrontFace = face;
+        desc.stencilBackFace = face;
+        p = s.device->createGraphicsPipeline(desc);
+        if (p)
+          p->setName("theft4 depth restore stencil");
+      }
+      if (!p)
+        break;
+      cmd->setPipeline(p.get());
+      push.param1 = -float(bit + 1);
+      cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
+      cmd->drawInstanced(3, 1, 0, 0);
+    }
+  }
 #if defined(PLUME_DEKO3D)
   // theft4-nx (2026-11-13, U7; from Theft4-NX's run 68 fix 1846a14, on the console since run 70's right scene): the
   // depth came from the pixel shader, which Zcull never sees; it kept describing the depth cleared just above, and
   // GTA IV's lighting tests this depth right after (light volumes, LESS against reverse Z). Dropped, as plume does after
   // a copy into a depth target (plume_deko3d_commands.cpp, Deko3DInvalidateZcull: nothing with banjo_deko3d_zcull off).
+  // (2026-11-15: after the stencil passes too, which Zcull's stencil part does not see either.)
   if (IsDeko3D())
     plume::Deko3DInvalidateZcull(cmd);
 #endif

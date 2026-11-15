@@ -183,3 +183,29 @@ thread: trascurabile.
 6. **RAM a 1600 MHz**: esperimento separato, solo dopo la baseline stock e le prime ottimizzazioni (richiesta
    dell'utente): stesso percorso, A/B stock/1600, temperature e stabilità; la build di riferimento resta a clock
    standard.
+
+## 7. Ultimate Base: misure U13-U14 e piano (2026-11-15)
+
+La matrice sopra resta il catalogo; le misure della base sono in `20-ultimate-base-migration.md` §2.12-§2.20. Il quadro
+dopo la correzione della luce (U14, console, clock standard):
+
+| misura (prima finestra a 650 draw) | U13 V-light (luce sbagliata) | U14 (luce giusta) |
+|---|---|---|
+| fps | ~26 | 16 |
+| GPU per frame | 35,5 ms | 61,5 ms |
+| render thread per frame | 15 ms | 13,7 ms |
+| mixer per blocco da 5,33 ms | 5,43 ms | 5,25 ms |
+| audio consegnato | 86,5 % | 91,4 % |
+
+In strada (U10/U11): ~10 fps, render thread 35-70 ms e GPU 33-45 ms, tre core pieni. Il mixer è limitato dal calcolo
+(router `sub_8216D7E0` 28 %, `sub_828C2D28` 17 %, `sub_828C6740` 14 %, `sub_828C5A58` 11 %, `sub_828C7848` 7 % non copiata).
+
+Piano, un gruppo per prova, ognuno con misura prima/dopo:
+1. **U15**: i port 129-141 della base (esatti; CG-13 resta spento): cache XMA v2 (PC: frame serviti dalla cache 6,5 ->
+   92 %), salto delle scritture FPSCR, catture ristrette, handle fuori dal lock globale, correzione deko3d della
+   decompressione differita. Più il profilo GPU per passaggio sulla console (run P).
+2. **GPU**: dal profilo di U15-P, il passaggio che costa sul deko3d (il ripristino dello stencil, l'ambientale, le luci,
+   le ombre 1280x1280) e la sua riduzione esatta.
+3. **CPU / audio (U16)**: rigenerazione con i passaggi di codegen della base (136: float loads a ogni modo, fmadds noti;
+   140: store cards per le viste), `sub_828C7848` tra le copie, nativo del biquad `sub_828C2D28` (stato del filtro nei
+   registri, stesse operazioni nello stesso ordine), guardia sul PC.

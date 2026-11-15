@@ -13,6 +13,10 @@
 # 828B06C8, whose guarded calls stopped at a real call with a different byte stored before the stop (heap 0x307c56b3,
 # 01/02 and 03/00) that could not be shown to be another thread's write (docs/switch-port/20, section 2.16); and
 # 82259B30 (14 samples), whose copy took 82257D48 in as an inline member.
+# Also left out (U12, PC dense guard with the same keys, 120 s from the save): 828DDFD8 (43 samples), a NaN payload
+# like U10's four (vector lane 0: copy fff0eeeb / original 7fc00001, three passes in a row; docs/switch-port/20,
+# section 2.18); in the 240 s run, 827F4BB0 (21 samples) the same way (copy 7fffffff / original ffffffff), and
+# 828DC908, whose copy took 827F4BB0 in as an inline member and differed with it.
 82221358 3390 console samples, 34 instructions, 1 direct callees
 828C2D28 2389 console samples, 656 instructions, 3 direct callees
 828C6740 1966 console samples, 470 instructions, 1 direct callees
@@ -44,7 +48,6 @@
 828CBE88 166 console samples, 126 instructions, 1 direct callees
 828BFE48 163 console samples, 404 instructions, 2 direct callees
 82954120 163 console samples, 982 instructions, 12 direct callees
-828DC908 149 console samples, 357 instructions, 2 direct callees
 824A30E8 143 console samples, 330 instructions, 3 direct callees
 827B68E8 138 console samples, 996 instructions, 5 direct callees
 824E1EF8 137 console samples, 170 instructions, 3 direct callees
@@ -132,7 +135,6 @@
 8284E658 46 console samples, 42 instructions, 1 direct callees
 8290E5B0 46 console samples, 46 instructions, 0 direct callees
 82967588 46 console samples, 44 instructions, 0 direct callees
-828DDFD8 43 console samples, 90 instructions, 1 direct callees
 8285A198 41 console samples, 46 instructions, 3 direct callees
 828D9DA0 41 console samples, 44 instructions, 1 direct callees
 8298FD28 41 console samples, 76 instructions, 0 direct callees
@@ -204,7 +206,6 @@
 828A9A88 22 console samples, 624 instructions, 2 direct callees
 825A92A0 22 console samples, 198 instructions, 6 direct callees
 82223058 22 console samples, 152 instructions, 1 direct callees
-827F4BB0 21 console samples, 90 instructions, 0 direct callees
 829D1008 21 console samples, 112 instructions, 2 direct callees
 82871038 21 console samples, 52 instructions, 3 direct callees
 8289AC30 21 console samples, 54 instructions, 2 direct callees
