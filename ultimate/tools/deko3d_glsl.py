@@ -140,6 +140,51 @@ def sampler_variant(expr, temps):
     return expr, 0
 
 
+# GLSL built-ins that write an argument (an `out` parameter): a temporary passed to one is written there.
+_OUT_BUILTINS = ('modf', 'frexp', 'uaddCarry', 'usubBorrow', 'umulExtended', 'imulExtended')
+_TEMP_DECL_RE = re.compile(r'^[ \t]*(?:const )?uint (_\d+)(?: = ([^;]+))?;', re.M)
+# A write of a temporary after its declaration: `_N = x;`, a compound assignment, or an increment / decrement. The
+# lookbehind leaves out a member (`s._1 = ...`) and a longer name (`x_1`); `==` is a comparison.
+_TEMP_WRITE_RE = re.compile(r'(?<![\w.])(_\d+)\s*(?:(?:<<|>>|[-+*/%&|^])?=(?!=)|\+\+|--)|(?:\+\+|--)\s*(_\d+)\b')
+_OUT_FUNC_RE = re.compile(r'^[ \t]*\w+ (\w+)\(([^)]*\b(?:out|inout)\b[^)]*)\)\s*$', re.M)
+
+
+def immutable_uint_temps(src):
+    """SPIRV-Cross's `uint _N = expr;` temporaries that hold that one value wherever they are read: {name: expr}.
+
+    A descriptor index resolved through a temporary (shared_word_offset, sampler_variant) decides that a fetch reads one
+    SharedConstants word and so gets a bound texture (dk_tex_bK, the banjo-dk line's texb); that is only true when the
+    temporary still holds its initial value at the fetch. SPIRV-Cross also writes variables it assigns again in this
+    form: a phi whose first value comes from the dominating block (`uint _N = A; if (c) { _N = B; }`), a loop's carried
+    value. Resolving those to their declaration bound the texture of word A for a fetch that reads word B's (the wrong
+    texture, silently). Left out here, so their fetches stay bindless (dkh), which reads the word the shader computed:
+    a temporary written anywhere after its declaration (an assignment, a compound assignment, ++ / --), passed to a
+    function with an out / inout parameter or to a built-in with one, or declared more than once."""
+    decls = {}
+    count = {}
+    for m in _TEMP_DECL_RE.finditer(src):
+        count[m.group(1)] = count.get(m.group(1), 0) + 1
+        if m.group(2) is not None:
+            decls[m.group(1)] = m.group(2).strip()
+    mutable = {n for n, c in count.items() if c > 1}
+    decl_spans = [(m.start(1), m.end(1)) for m in _TEMP_DECL_RE.finditer(src)]
+    decl_starts = {a for a, _ in decl_spans}
+    for m in _TEMP_WRITE_RE.finditer(src):
+        name = m.group(1) or m.group(2)
+        if m.group(1) and m.start(1) in decl_starts:
+            continue  # the declaration's own initialiser
+        mutable.add(name)
+    out_funcs = set(_OUT_BUILTINS) | {m.group(1) for m in _OUT_FUNC_RE.finditer(src)}
+    for m in re.finditer(r'\b(' + '|'.join(map(re.escape, sorted(out_funcs))) + r')\(', src):
+        try:
+            close = matching(src, m.end() - 1, '(', ')')
+        except Unsupported:
+            continue
+        # every temporary named in the call: which parameter is the out one is not worked out
+        mutable.update(re.findall(r'(?<![\w.])(_\d+)\b', src[m.end():close]))
+    return {n: e for n, e in decls.items() if n not in mutable}
+
+
 def convert(src, stage, ubo_map, sampler_words='ids'):
     text = src.replace('\r\n', '\n')
     notes = []
@@ -155,7 +200,8 @@ def convert(src, stage, ubo_map, sampler_words='ids'):
     # type texture2DMS": the fetch became 0, the depth of field read depth 0 everywhere and blurred the whole scene);
     # bound, uam emits the multisampled TLDS.LZ form, which it decodes.
     ms_bound = {}  # index expression -> (binding, sampler type)
-    temps = {m.group(1): m.group(2).strip() for m in re.finditer(r'^\s*uint (_\d+) = ([^;]+);', src, re.M)}
+    # Only temporaries that keep their declared value: a reassigned one is not a fixed word (immutable_uint_temps).
+    temps = immutable_uint_temps(src)
 
     def bind(stype, t_off, s_off, variant=0):
         key = (stype, t_off, s_off, variant)
