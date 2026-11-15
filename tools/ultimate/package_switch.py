@@ -17,6 +17,10 @@ Checks before writing anything (each failure stops the script, nothing is half w
     stamp, THEFT4_BUILD_COMMIT; --allow-dirty for a trial package);
   - the build folder's options (CMakeCache.txt): deko3d only (REXGLUE_SWITCH_NVK, PLUME_SWITCH_NVK_LINK off), the
     built-in config on, the release shader mode off (the GLSL package built in), the flavour's guard / in-place options;
+    LTO and PGO (2026-11-15, option_problems): no instrumented build (BANJO_PGO=generate counts every branch and
+    writes pgo/ on the card: its fps are not the game's; --allow-pgo-generate for a training package), no profile
+    used without LTO or with the guard forms, a known BANJO_PGO value, and with --lto on|off the build's
+    BANJO_SWITCH_LTO as asked (so a run meant to measure LTO cannot be an everyday build under another name);
   - the NRO: its header, its NACP (name, author, version), the ELF it was made from (same build, newer than nothing);
   - the ELF: the commit string, the GLSL package (g_deko3dGlslPackage, its size = deko3d_glsl.bin's), the shader table
     (g_shaderCacheEntries), the deko3d host shaders (g_<stem>_deko3d), no Vulkan driver (no NVK symbol);
@@ -104,6 +108,46 @@ def cmake_cache(build):
     return values
 
 
+def is_on(value):
+    return str(value or '').strip().upper() in ('ON', '1', 'TRUE', 'YES', 'Y')
+
+
+def option_problems(cache, flavour, lto=None, allow_pgo_generate=False):
+    """What is wrong with a build folder's options for a test package: a list of messages (empty: none).
+
+    cache: CMakeCache.txt's values; flavour: THEFT4_BUILD_NAME; lto: 'on' / 'off' when the package is meant to be (or
+    not to be) the LTO build, None to accept either (it is recorded in package.json either way)."""
+    problems = []
+    expect = {'REXGLUE_SWITCH_NVK': 'OFF', 'PLUME_SWITCH_NVK_LINK': 'OFF', 'KATAMARI_BUILTIN_CONFIG': 'ON',
+              'BANJO_RENUT_RELEASE_SHADERS': 'OFF', 'PLUME_DEKO3D': 'ON', 'REXGLUE_PLATFORM_SWITCH': 'ON'}
+    if flavour == 'guard':
+        expect.update({'SASRT_HOT_GUARD_FORMS': 'ON', 'SASRT_HOT_IN_PLACE': 'OFF'})
+    elif flavour == 'everyday':
+        expect.update({'SASRT_HOT_GUARD_FORMS': 'OFF', 'SASRT_HOT_IN_PLACE': 'ON'})
+    else:
+        return [f'unknown flavour {flavour!r}'], expect
+    for k, v in expect.items():
+        if cache.get(k, '').upper() != v:
+            problems.append(f'CMakeCache {k} = {cache.get(k)!r}, expected {v}')
+    pgo = cache.get('BANJO_PGO', '').strip()
+    lto_on = is_on(cache.get('BANJO_SWITCH_LTO'))
+    if pgo not in ('', 'generate', 'use'):
+        problems.append(f'CMakeCache BANJO_PGO = {pgo!r}: not empty, generate or use')
+    if pgo == 'generate' and not allow_pgo_generate:
+        problems.append('BANJO_PGO = generate: an instrumented build (it counts every branch and writes pgo/ on the '
+                        'card), not one to measure or play; --allow-pgo-generate for a training package')
+    if pgo == 'use' and not lto_on:
+        problems.append('BANJO_PGO = use without BANJO_SWITCH_LTO: the profile build is the LTO one '
+                        '(ultimate/tools/build_switch_release.bat)')
+    if pgo and flavour == 'guard':
+        problems.append(f'BANJO_PGO = {pgo} with the guard forms: the profile is of the in-place or the hooked form, '
+                        'never of the guard build')
+    if lto is not None and lto_on != (lto == 'on'):
+        problems.append(f'CMakeCache BANJO_SWITCH_LTO = {cache.get("BANJO_SWITCH_LTO")!r}, the package was asked for '
+                        f'with --lto {lto}')
+    return problems, expect
+
+
 def read_nro(path):
     data = open(path, 'rb').read()
     if len(data) < 0x80 or data[0x10:0x14] != b'NRO0':
@@ -145,6 +189,10 @@ def main():
     ap.add_argument('--dksh-manifest')
     ap.add_argument('--manifest')
     ap.add_argument('--allow-dirty', action='store_true')
+    ap.add_argument('--lto', choices=('on', 'off'), default=None,
+                    help='the build must (on) or must not (off) be the LTO one; without it either is packaged')
+    ap.add_argument('--allow-pgo-generate', action='store_true',
+                    help='package an instrumented build (BANJO_PGO=generate): a profile training run, not a measurement')
     a = ap.parse_args()
 
     repo = os.path.abspath(a.repo)
@@ -168,17 +216,9 @@ def main():
             fail(f'the build is {stamp}, HEAD is {head}: build again (tools/ultimate/build_switch.bat)')
         if dirty_now:
             fail('ultimate/ or tools/ultimate/ have uncommitted changes: commit, build again, then package')
-    expect = {'REXGLUE_SWITCH_NVK': 'OFF', 'PLUME_SWITCH_NVK_LINK': 'OFF', 'KATAMARI_BUILTIN_CONFIG': 'ON',
-              'BANJO_RENUT_RELEASE_SHADERS': 'OFF', 'PLUME_DEKO3D': 'ON', 'REXGLUE_PLATFORM_SWITCH': 'ON'}
-    if flavour == 'guard':
-        expect.update({'SASRT_HOT_GUARD_FORMS': 'ON', 'SASRT_HOT_IN_PLACE': 'OFF'})
-    elif flavour == 'everyday':
-        expect.update({'SASRT_HOT_GUARD_FORMS': 'OFF', 'SASRT_HOT_IN_PLACE': 'ON'})
-    else:
-        fail(f'unknown flavour {flavour!r}')
-    for k, v in expect.items():
-        if cache.get(k, '').upper() != v:
-            fail(f'CMakeCache {k} = {cache.get(k)!r}, expected {v}')
+    problems, expect = option_problems(cache, flavour, a.lto, a.allow_pgo_generate)
+    if problems:
+        fail('; '.join(problems))
     options = {k: cache.get(k, '') for k in sorted(set(expect) | {
         'CMAKE_BUILD_TYPE', 'BANJO_SWITCH_LTO', 'BANJO_PGO', 'BANJO_GEN_SWITCH_THREAD', 'BANJO_SWITCH_OMIT_FRAME_POINTER',
         'BLUR_FPCR_ONE_MODE', 'KATAMARI_RENUT_HOOKS', 'BANJO_RENUT_RENDERER'})}
@@ -289,6 +329,8 @@ def main():
         'flavour': flavour,
         'compiler': gcc_version,
         'cmake_options': options,
+        'lto': is_on(cache.get('BANJO_SWITCH_LTO')),
+        'pgo': cache.get('BANJO_PGO', '').strip() or 'none',
         'nro': nro_info,
         'elf_checks': {
             'commit_string': True, 'glsl_package_bytes': pkg[1], 'shader_table_symbol': True,
@@ -309,6 +351,7 @@ def main():
             json.dump(record, f, indent=2)
             f.write('\n')
     print(f'package_switch: {out}')
+    print(f'  LTO {"on" if record["lto"] else "off"}, PGO {record["pgo"]}')
     print(f'  {flavour} build of {stamp}; NRO {nro_info["bytes"]:,} bytes, sha256 {files["COPY_TO_SD/" + SD_FOLDER + "/" + NRO_NAME]["sha256"]}')
     print(f'  NACP {nro_info.get("name")!r} / {nro_info.get("author")!r} / {nro_info.get("version")!r}; '
           f'{len(host)} deko3d host shaders; GLSL package {pkg[1]:,} bytes; cache {tag} {cache_sha[:16]}')
