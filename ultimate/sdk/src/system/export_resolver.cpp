@@ -63,6 +63,8 @@ Export* ExportResolver::GetExportByOrdinal(const std::string_view module_name, u
   return nullptr;
 }
 
+VariableImportHook g_variable_import_hook = nullptr;  // blur-nx (2026-11-13, M-38): export_resolver.h
+
 void ExportResolver::SetVariableMapping(const std::string_view module_name, uint16_t ordinal,
                                         uint32_t value) {
   auto export_entry = GetExportByOrdinal(module_name, ordinal);

@@ -43,6 +43,18 @@ REXCVAR_DEFINE_INT32(kernel_timestamp_interval_ms, 1, "Kernel",
                      "original 1 ms, about 1000 host wake-ups per second; 4 = 250/s: the guest-visible "
                      "millisecond tick then advances in 4 ms steps)");
 
+// blur-nx (2026-11-13, M-38 of Blur's docs/cpu-moonshots-50-1113.md): Blur's XEX does not import KeTimeStampBundle
+// (xboxkrnl ordinal 0xAD: no import record names it), yet the timer woke a host thread a thousand times a second to
+// refresh it (the TimerQueue thread, ~1.5 % of a core in Blur's console races).
+// renut-ultimate (2026-11-14, port 139): OFF in the base. The timer's reads of the clock (each tick reads the guest
+// uptime) also kept port 57's clock_nap_clamp from seeing a gap: without them, a stretch of a game's loading with no
+// clock read of its own is taken for a suspension and cut from the guest's time (Katamari in Ryujinx: 9 cuts, ~7 s, in
+// its boot, against 1 of 249 ms with the timer). A game whose loading reads the clock often may turn it on.
+REXCVAR_DEFINE_BOOL(kernel_timestamp_timer_on_import, false, "Kernel",
+                    "Start the KeTimeStampBundle refresh timer only when a loaded XEX imports the bundle (xboxkrnl "
+                    "ordinal 0xAD). NOT exact with clock_nap_clamp: the timer's reads keep the clock from cutting a "
+                    "load's stretches without clock reads out of the guest's time. false = always, as before");
+
 REXCVAR_DEFINE_BOOL(log_high_frequency_kernel_calls, false, "Kernel",
                     "Log kernel calls with the kHighFrequency tag");
 
@@ -64,6 +76,10 @@ bool XboxkrnlModule::SendPIXCommand(const char* cmd) {
   (void)cmd;
   return false;
 }
+
+namespace {
+XboxkrnlModule* g_timestamp_module = nullptr;  // blur-nx (2026-11-13, M-38): the module whose timer the hook starts
+}  // namespace
 
 XboxkrnlModule::XboxkrnlModule(Runtime* emulator, KernelState* kernel_state)
     : KernelModule(kernel_state, "xe:\\xboxkrnl.exe"), timestamp_timer_(nullptr) {
@@ -199,13 +215,19 @@ XboxkrnlModule::XboxkrnlModule(Runtime* emulator, KernelState* kernel_state)
   memory::store_and_swap<uint32_t>(lpKeTimeStampBundle + 16,
                                    chrono::Clock::QueryGuestUptimeMillis());
   memory::store_and_swap<uint32_t>(lpKeTimeStampBundle + 20, 0);
-  timestamp_timer_ = rex::thread::HighResolutionTimer::CreateRepeating(
-      std::chrono::milliseconds(std::clamp(REXCVAR_GET(kernel_timestamp_interval_ms), 1, 50)),
-      [lpKeTimeStampBundle]() {
-        REX_SYS_COUNT(rex::syscount::kTimestampTick, 1);
-        memory::store_and_swap<uint32_t>(lpKeTimeStampBundle + 16,
-                                         chrono::Clock::QueryGuestUptimeMillis());
-      });
+  // blur-nx (2026-11-13, M-38): the timer now, or at the first import of the bundle (kernel_timestamp_timer_on_import;
+  // the uptime written above until then: nothing can have read it).
+  timestamp_bundle_ = lpKeTimeStampBundle;
+  if (REXCVAR_GET(kernel_timestamp_timer_on_import)) {
+    g_timestamp_module = this;
+    runtime::g_variable_import_hook = [](std::string_view library, uint16_t ordinal) {
+      if (ordinal == 0x00AD && library == "xboxkrnl.exe" && g_timestamp_module) {
+        g_timestamp_module->StartTimestampTimer();
+      }
+    };
+  } else {
+    StartTimestampTimer();
+  }
 
   // Wire kernel object type variables to KernelGuestGlobals.
   // KernelGuestGlobals is allocated in KernelState ctor, which runs before this.
@@ -267,6 +289,29 @@ void XboxkrnlModule::RegisterExportTable(rex::runtime::ExportResolver* export_re
   export_resolver->RegisterTable("xboxkrnl.exe", &xboxkrnl_exports);
 }
 
-XboxkrnlModule::~XboxkrnlModule() = default;
+XboxkrnlModule::~XboxkrnlModule() {
+  if (g_timestamp_module == this) {  // blur-nx (2026-11-13, M-38)
+    runtime::g_variable_import_hook = nullptr;
+    g_timestamp_module = nullptr;
+  }
+}
+
+// blur-nx (2026-11-13, M-38): the KeTimeStampBundle refresh timer (once).
+void XboxkrnlModule::StartTimestampTimer() {
+  std::lock_guard<std::mutex> lock(timestamp_mutex_);
+  if (timestamp_timer_ || !timestamp_bundle_) {
+    return;
+  }
+  uint8_t* const bundle = timestamp_bundle_;
+  memory::store_and_swap<uint32_t>(bundle + 16, chrono::Clock::QueryGuestUptimeMillis());
+  timestamp_timer_ = rex::thread::HighResolutionTimer::CreateRepeating(
+      std::chrono::milliseconds(std::clamp(REXCVAR_GET(kernel_timestamp_interval_ms), 1, 50)),
+      [bundle]() {
+        REX_SYS_COUNT(rex::syscount::kTimestampTick, 1);
+        memory::store_and_swap<uint32_t>(bundle + 16, chrono::Clock::QueryGuestUptimeMillis());
+      });
+  REXLOG_INFO("KeTimeStampBundle: refresh timer started ({} ms)",
+              std::clamp(REXCVAR_GET(kernel_timestamp_interval_ms), 1, 50));
+}
 
 }  // namespace rex::kernel::xboxkrnl

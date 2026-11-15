@@ -111,6 +111,14 @@ REXCVAR_DEFINE_INT32(sasrt_texture_long_idle_frames, 0, "SASRT/Graphics",
                      "before. KNOWN TO HANG THE GPU on the Switch (SASRT, 1800): leave 0")
     .range(0, 1000000)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// renut-ultimate (2026-11-13, sasrt-nx's resolve project R2): ResolveTarget.
+REXCVAR_DEFINE_BOOL(sasrt_gpu_words_probe_kept, true, "SASRT/GPU",
+                    "Renut renderer (sasrt-nx's resolve project R2): a resolve destination made again at the same "
+                    "address and host format (a dynamic-resolution step) keeps its depth words state "
+                    "(banjo_renut_depth_words_lazy), so a destination whose words nothing reads does not write them for "
+                    "another 300 resolves. A late reader is served as before (drawn again from an unchanged source, else "
+                    "written from then on). Same pixels")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 // Linear textures (see BindTextureLocked): how often a lock-driven texture
 // is checked for writes that went around an unlock, and a dynamic one for
@@ -951,9 +959,20 @@ HostTexture *ResolveTarget(u32 texture_va, plume::RenderFormat format, RenderSca
   }
   // banjo-nx (2026-10-28, night_gpu5, dynamic resolution steps): a destination of a settable code made at another
   // height of it (render/surfaces.cpp CodeForHeightLocked) is made again: its size is the old height's.
+  // renut-ultimate (2026-11-13, sasrt-nx's resolve project R2, sasrt_gpu_words_probe_kept): what a destination made
+  // again at the same address and host format knew about its depth words (banjo_renut_depth_words_lazy) goes to the new
+  // one: its readers do not change with the scale. Before, each remake started the 300-resolve words probe again.
+  static const bool probe_kept = REXCVAR_GET(sasrt_gpu_words_probe_kept);
+  bool carry_words = false, carried_wanted = false;
+  uint32_t carried_probe = 0;
   if (slot && !keep_other_format && (!slot->render_target || std::memcmp(slot->desc, desc, sizeof(desc)) != 0 ||
                !slot->texture || slot->host_format != format || slot->scale != scale ||
                slot->alloc_width != scale.Size(slot->width) || slot->alloc_height != scale.Size(slot->height))) {
+    if (probe_kept && slot->host_format == format) {
+      carry_words = true;
+      carried_wanted = slot->words_wanted;
+      carried_probe = slot->words_probe;
+    }
     Retire(*slot);
     slot.reset();
   }
@@ -967,6 +986,14 @@ HostTexture *ResolveTarget(u32 texture_va, plume::RenderFormat format, RenderSca
                  slot->width, slot->height);
       Retire(*slot);
       return nullptr;
+    }
+    if (carry_words) {  // renut-ultimate (2026-11-13, sasrt-nx's R2)
+      slot->words_wanted = carried_wanted;
+      slot->words_probe = carried_probe;
+      static uint64_t kept_n = 0;
+      if (const uint64_t n = ++kept_n; n <= 4 || (n & (n - 1)) == 0)
+        RGPU_INFO("[renut] resolve destination {:08X} made again kept its depth words state (wanted {}, probe {}; {} "
+                  "so far, sasrt_gpu_words_probe_kept)", texture_va, carried_wanted, carried_probe, n);
     }
     // A new render target has no defined content, and D3D12 wants it
     // discarded (or cleared) before a resolve or copy writes part of it.

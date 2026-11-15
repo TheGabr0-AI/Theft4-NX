@@ -38,4 +38,16 @@ namespace rex::ppc {
   return FmaddsDouble(a, b, c);
 }
 
+// blur-nx (2026-11-13, M-24 of docs/cpu-moonshots-50-1113.md): the fused forms with the three inputs proven single by
+// tools/single_floats.py (a forward must-analysis over the guest code: CG-14's): FmaddsSingle's test is always true
+// there, so only its true branch (one single-precision fused multiply-add). REX_FMADDS_DOUBLE_ROUNDING: the double
+// form, as FmaddsSingle gives then.
+[[gnu::always_inline]] inline double FmaddsSingleKnown(double a, double b, double c) {
+#if !defined(REX_FMADDS_DOUBLE_ROUNDING)
+  return double(__builtin_fmaf(float(a), float(b), float(c)));
+#else
+  return double(float(__builtin_fma(a, b, c)));
+#endif
+}
+
 }  // namespace rex::ppc

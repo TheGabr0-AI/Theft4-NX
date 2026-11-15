@@ -176,6 +176,9 @@ extern uint64_t g_ab_draws;
 void CountExactCheck(uint64_t bytes, bool stale, bool repeat_in_frame);
 void CountKick();        // a KickOff reached the render thread (FlushVertexFillsLocked)
 void CountDrawKind(bool depth_only, bool depth_only_plain, bool writes_nothing, bool partial_mask);  // package 28
+// blur-nx (2026-11-13, #47 of Blur's docs/cpu-near-exact-50-1113.md): a draw's shaders that index their float
+// constants (their masks hold every register: all of them uploaded), and the registers the others upload.
+void CountConstantUse(bool vs_indexed, bool ps_indexed, uint32_t registers);
 void CountExactMemoHit(uint64_t bytes);  // a check answered by the interval memo (no bytes read)
 void CountFenceQuery();  // the game asked whether a fence is done (BlockOnFence / IsFencePending)
 void CountLateStale(uint64_t copies);

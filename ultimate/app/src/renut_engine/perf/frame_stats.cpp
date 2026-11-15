@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <chrono>
 #include <mutex>
+#include <string>
+
+#include <fmt/format.h>  // blur-nx (2026-11-13): WaitReport
 
 // Counter 0 of the console profiler: presented frames, which the Status Monitor overlay's FPS (SaltyNX) and the
 // profiler's "game N fps" are made from (sdk/src/ui/switch_perf.cpp; a stub on the PC, me_pc_stubs.cpp).
@@ -30,6 +33,10 @@ struct State {
   double window_worst = 0.0;
   double gpu_sum = 0.0, render_sum = 0.0, wait_sum = 0.0;
   int gpu_n = 0, render_n = 0;
+  // blur-nx (2026-11-13, #37's census): by source (OnGameThreadWait), since the last WaitReport.
+  double source_ms[3] = {};
+  uint64_t source_n[3] = {};
+  Clock::time_point report_start = Clock::now();
 };
 
 State& S() {
@@ -106,10 +113,32 @@ void OnRenderThreadFrame(double busy_ms) {
   ++s.render_n;
 }
 
-void OnGameThreadWait(double ms) {
+void OnGameThreadWait(double ms, int source) {
   State& s = S();
   std::lock_guard lock(s.mutex);
   s.wait_sum += ms;
+  if (source >= 0 && source < 3) {  // blur-nx (2026-11-13, #37's census)
+    s.source_ms[source] += ms;
+    ++s.source_n[source];
+  }
+}
+
+std::string WaitReport() {
+  State& s = S();
+  std::lock_guard lock(s.mutex);
+  const auto now = Clock::now();
+  const double seconds = std::max(1e-3, std::chrono::duration<double>(now - s.report_start).count());
+  std::string out = fmt::format(
+      "game thread's waits for the renderer per second (#37's census): fences {:.0f} ({:.1f} ms), Swap's frames-ahead "
+      "limit {:.0f} ({:.1f} ms), the display's refresh {:.0f} ({:.1f} ms)",
+      double(s.source_n[0]) / seconds, s.source_ms[0] / seconds, double(s.source_n[1]) / seconds,
+      s.source_ms[1] / seconds, double(s.source_n[2]) / seconds, s.source_ms[2] / seconds);
+  for (int i = 0; i < 3; ++i) {
+    s.source_ms[i] = 0.0;
+    s.source_n[i] = 0;
+  }
+  s.report_start = now;
+  return out;
 }
 
 Snapshot Get() {

@@ -29,7 +29,8 @@
 // rewrite data before the render thread reads it. Ryujinx rarely shows it; a slow GPU shows it constantly.
 REXCVAR_DEFINE_INT32(rr6_frames_ahead, 1, "Banjo/Enhancements",
                      "How many frames the game may run ahead of Renut's render thread. 0: the game waits at its Swap "
-                     "until the render thread has done the frame. 1: one frame ahead")
+                     "until the render thread has done the frame. 1: one frame ahead. 2 (blur-nx #37, near-exact): two "
+                     "frames ahead (the game may rewrite data the render thread has yet to read)")
     .range(0, 1)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(rr6_diag_render_delay_ms, 0, "Banjo/Enhancements",
@@ -692,7 +693,7 @@ uint64_t QueueFrame(std::function<void()> work) {
   const uint64_t done = g_frames_done;
   lock.unlock();
   const auto waited = std::chrono::steady_clock::now() - waiting;
-  frame_stats::OnGameThreadWait(std::chrono::duration<double, std::milli>(waited).count());
+  frame_stats::OnGameThreadWait(std::chrono::duration<double, std::milli>(waited).count(), 1);  // blur-nx: #37
   // banjo-nx (2026-10-19, banjo_late_input): this frame's slack (the game thread only: one Swap at a time).
   {
     // The game's frame interval (the game thread only), averaged over about 16 frames.

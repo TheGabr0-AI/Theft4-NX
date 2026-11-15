@@ -19,6 +19,8 @@
 #include <rex/system/kernel_state.h>
 #include <rex/thread.h>
 
+#include <mutex>  // blur-nx (2026-11-13, M-38)
+
 // All of the exported functions:
 #include <rex/kernel/xboxkrnl/rtl.h>
 
@@ -40,6 +42,11 @@ class XboxkrnlModule : public system::KernelModule {
 
  private:
   std::unique_ptr<rex::thread::HighResolutionTimer> timestamp_timer_;
+  // blur-nx (2026-11-13, M-38): the bundle (host pointer) and the timer started at its first import
+  // (kernel_timestamp_timer_on_import) or at once.
+  uint8_t* timestamp_bundle_ = nullptr;
+  std::mutex timestamp_mutex_;
+  void StartTimestampTimer();
 };
 
 }  // namespace rex::kernel::xboxkrnl

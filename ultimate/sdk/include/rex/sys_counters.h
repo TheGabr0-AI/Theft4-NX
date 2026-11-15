@@ -70,7 +70,12 @@ enum : unsigned {
   // result). The any-mode helpers' cold paths (rex/ppc/diet_ops.h) are counted as before (g_rex_diet_census[3]).
   kCensusFpuRegions = 79,     // FPU-mode regions ended by a switch of the flush mode on
   kCensusFpuDenormal = 80,    // ... of those, with a denormal operand or an underflow inside
-  kCensusCount = 81,
+  // blur-nx (2026-11-13, #57 / #34 of Blur's docs/cpu-near-exact-50-1113.md): single-object waits with a zero timeout
+  // (polls), and of those the ones that timed out (each then yields: MaybeYield).
+  kCensusWaitPoll = 81,
+  kCensusWaitPollTimeout = 82,
+  kCensusWaitSignalled = 83,  // single-object waits of any timeout that succeeded
+  kCensusCount = 84,
 };
 
 #if !defined(__SWITCH__)

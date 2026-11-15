@@ -197,8 +197,10 @@ dopo la correzione della luce (U14, console, clock standard):
 | mixer per blocco da 5,33 ms | 5,43 ms | 5,25 ms |
 | audio consegnato | 86,5 % | 91,4 % |
 
+U15-A (port 129-141 della base), stessa cucina: 16,1 fps, GPU 61,2 ms, render thread 13,4 ms, audio 89,8 %, mixer 5,56 ms per blocco (interno): invariati; thread XMA ~30 -> ~10 % di un core. U15-P: il ripristino dello stencil a nove passaggi costa ~12,8 ms di GPU a ripristino (25,6 ms a frame in cucina).
+
 In strada (U10/U11): ~10 fps, render thread 35-70 ms e GPU 33-45 ms, tre core pieni. Il mixer è limitato dal calcolo
-(router `sub_8216D7E0` 28 %, `sub_828C2D28` 17 %, `sub_828C6740` 14 %, `sub_828C5A58` 11 %, `sub_828C7848` 7 % non copiata).
+(router `sub_8216D7E0` 28 %, `sub_828C2D28` 17 %, `sub_828C6740` 14 %, `sub_828C5A58` 11 %, `sub_828C7848` 7 %; tutte e cinque sono già copie macchina in place, che il profilo nomina come la funzione generata).
 
 Piano, un gruppo per prova, ognuno con misura prima/dopo:
 1. **U15**: i port 129-141 della base (esatti; CG-13 resta spento): cache XMA v2 (PC: frame serviti dalla cache 6,5 ->
@@ -207,5 +209,5 @@ Piano, un gruppo per prova, ognuno con misura prima/dopo:
 2. **GPU**: dal profilo di U15-P, il passaggio che costa sul deko3d (il ripristino dello stencil, l'ambientale, le luci,
    le ombre 1280x1280) e la sua riduzione esatta.
 3. **CPU / audio (U16)**: rigenerazione con i passaggi di codegen della base (136: float loads a ogni modo, fmadds noti;
-   140: store cards per le viste), `sub_828C7848` tra le copie, nativo del biquad `sub_828C2D28` (stato del filtro nei
+   140: store cards per le viste), nativo del biquad `sub_828C2D28` (stato del filtro nei
    registri, stesse operazioni nello stesso ordine), guardia sul PC.

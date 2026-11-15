@@ -2145,9 +2145,17 @@ plume::RenderRect ScaleRect(const plume::RenderRect &rect, RenderScale scale) {
 
 bool RestoreDepthFromColorLocked(HostSurface *depth, HostSurface *color);  // sasrt-nx (2026-10-20): below
 
+// blur-nx (2026-11-13, #55): GatherTargets on the target words (draw.h kResolveTargetWords: the four render targets,
+// then the depth-stencil surface), as a queued clear keeps them.
+bool GatherTargetsWords(const u32 *words, Targets &t);
 bool GatherTargets(const GuestDevice &device, Targets &t) {
+  u32 words[kResolveTargetWords];
+  ReadResolveTargets(device.Bytes(0), words);
+  return GatherTargetsWords(words, t);
+}
+bool GatherTargetsWords(const u32 *words, Targets &t) {
   for (u32 i = 0; i < d3d::kMaxRenderTargets; ++i) {
-    const u32 va = device.U32(d3d::kDeviceOffsetRenderTargets + i * 4);
+    const u32 va = words[i];
     if (!va)
       break;
     HostSurface *surface = GetHostSurfaceLocked(va);
@@ -2155,14 +2163,13 @@ bool GatherTargets(const GuestDevice &device, Targets &t) {
       break;
     t.colors[t.color_count++] = surface;
   }
-  HostSurface *depth = GetHostSurfaceLocked(device.U32(d3d::kDeviceOffsetDepthStencil));
+  HostSurface *depth = GetHostSurfaceLocked(words[4]);  // kDeviceOffsetDepthStencil
   if (depth && depth->depth) {
     // rr6-nx (2026-11-02, rr6_depth_covers_colour): a colour target larger than the depth surface under it.
     if (t.color_count && depth->scale == t.colors[0]->scale &&
         (depth->width < t.colors[0]->width || depth->height < t.colors[0]->height) &&
         banjo::renut_gpu::DepthCoversColourOn())
-      depth = GrowDepthToColourLocked(device.U32(d3d::kDeviceOffsetDepthStencil), depth, t.colors[0]->width,
-                                      t.colors[0]->height);
+      depth = GrowDepthToColourLocked(words[4], depth, t.colors[0]->width, t.colors[0]->height);
     t.depth = depth;
   }
   if (!t.color_count && !t.depth)
@@ -2252,6 +2259,31 @@ REXCVAR_DEFINE_BOOL(sasrt_gpu_diag_profile_vs, false, "SASRT/Diagnostics",
 bool SasrtProfileVsOn() {
   static const bool on = REXCVAR_GET(sasrt_gpu_diag_profile_vs);
   return on;
+}
+// renut-ultimate (2026-11-13, sasrt-nx's resolve project: finer timing): with banjo_renut_diag_gpu_shaders and
+// sasrt_gpu_diag_profile_vs, each resolve's span splits into its parts: up to its draw (the transitions' barriers, which
+// wait for the work before them), the copy / depth draw itself, what follows it, and (a depth resolve) after its
+// destination's move to shader read; and each depth clear has its own label. Off: nothing changes.
+REXCVAR_DEFINE_BOOL(sasrt_gpu_diag_resolve_split, false, "SASRT/Diagnostics",
+                    "Diagnostic (sasrt-nx, 2026-11-13): with banjo_renut_diag_gpu_shaders and sasrt_gpu_diag_profile_vs, "
+                    "a resolve's GPU time splits into its barriers, its draw and what follows it (with its resolves a "
+                    "frame), and every depth clear is under its own \"clears | depth WxH\" label")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+bool SasrtResolveSplitOn() {
+  static const bool on = REXCVAR_GET(sasrt_gpu_diag_resolve_split);
+  return on && banjo::renut_gpu::DiagGpuShadersOn() && SasrtProfileVsOn() && gpu_profile::Timed();
+}
+// The label for one part of a resolve: the source's kind, size and format, and which part.
+uint32_t SasrtResolvePartLabel(const HostSurface *surface, int part) {
+  static std::unordered_map<uint64_t, uint32_t> labels;
+  const uint64_t k = uint64_t(surface->width) | uint64_t(surface->height) << 14 |
+                     uint64_t(int(surface->format)) << 28 | uint64_t(surface->depth) << 40 | uint64_t(part) << 41;
+  uint32_t &label = labels[k];
+  static const char *const kParts[] = {"barriers", "draw", "after", "after the move to shader read (the clear, ...)"};
+  if (!label)
+    label = gpu_profile::Label(fmt::format("resolve parts | {} {}x{} format {}: {}", surface->depth ? "depth" : "colour",
+                                           surface->width, surface->height, int(surface->format), kParts[part])) + 1;
+  return label - 1;
 }
 // sasrt-nx (2026-11-08, sasrt_gpu_diag_profile_vs): a memexport draw's label also names its size (the draw's vertex
 // count rounded down to a power of two, its primitive type and instances): set by DrawStateLocked around the label.
@@ -13065,6 +13097,21 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
       partial |= m != 0 && m != 0xF;
     }
     const bool exports = (vs->entry && vs->entry->memExportConstants[0]) || (ps && ps->entry && ps->entry->memExportConstants[0]);
+    {  // blur-nx (2026-11-13, #47's census): shaders indexing their float constants (all bits set), else the reads
+      const auto all_set = [](const uint32_t *m) {
+        for (int w = 0; w < 8; ++w)
+          if (m[w] != ~0u) return false;
+        return true;
+      };
+      const bool vs_all = vs->entry && all_set(vs->entry->floatConstants);
+      const bool ps_all = ps && ps->entry && all_set(ps->entry->floatConstants);
+      uint32_t regs = 0;
+      if (vs->entry && !vs_all)
+        for (int w = 0; w < 8; ++w) regs += uint32_t(__builtin_popcount(vs->entry->floatConstants[w]));
+      if (ps && ps->entry && !ps_all)
+        for (int w = 0; w < 8; ++w) regs += uint32_t(__builtin_popcount(ps->entry->floatConstants[w]));
+      banjo::renut_gpu::CountConstantUse(vs_all, ps_all, regs);
+    }
     banjo::renut_gpu::CountDrawKind(no_colour && depth, no_colour && depth && sc.alpha_test_func == 7 &&
                                     !key.alpha_to_coverage && ps != nullptr,
                                     no_colour && !depth_writes && !stencil_writes && !exports, partial);
@@ -14242,6 +14289,17 @@ void ClearTargets(const Targets &t, u32 flags, const plume::RenderRect &rect, co
     }
     return;
   }
+  // renut-ultimate (2026-11-13, sasrt-nx's sasrt_gpu_diag_resolve_split): a depth clear's GPU time under its own label
+  // (SASRT's cascades' and scene depth's clears are full-bandwidth writes on deko3d whatever the image's state).
+  if (t.depth && (flags & 0x30) && SasrtResolveSplitOn()) [[unlikely]] {
+    static std::unordered_map<uint64_t, uint32_t> labels;
+    const uint64_t k = uint64_t(t.depth->width) | uint64_t(t.depth->height) << 16 | uint64_t(flags & 0x30) << 32;
+    uint32_t &label = labels[k];
+    if (!label)
+      label = gpu_profile::Label(fmt::format("clears | depth {}x{}{}", t.depth->width, t.depth->height,
+                                             (flags & 0x30) == 0x30 ? " and stencil" : "")) + 1;
+    gpu_profile::Mark(State(), label - 1);
+  }
   // banjo-nx (2026-10-19, banjo_deko3d_depth_handover): before the target is bound for the clear.
   if (t.depth && t.depth->handed)
     DepthHandOverBeforeBindLocked(t.depth, &rect, flags);
@@ -14384,9 +14442,16 @@ bool ResolveDepth(HostSurface *surface, HostTexture *dest, const ClearRect &src,
   plume::RenderCommandList *cmd = s.command_list;
   static const uint32_t kProfileLabel = gpu_profile::Label("depth resolves");
   gpu_profile::Mark(s, kProfileLabel);
+  const bool split = SasrtResolveSplitOn();  // renut-ultimate (2026-11-13, sasrt_gpu_diag_resolve_split)
+  if (split) [[unlikely]]
+    gpu_profile::Mark(s, SasrtResolvePartLabel(surface, 0));
   TransitionSurfaceLocked(surface, plume::RenderTextureLayout::SHADER_READ);
   TransitionTextureLocked(dest, plume::RenderTextureLayout::COLOR_WRITE);
   TransitionTextureLocked(dest->words.get(), plume::RenderTextureLayout::COLOR_WRITE);
+  if (split) [[unlikely]] {
+    gpu_profile::Mark(s, SasrtResolvePartLabel(surface, 1));
+    gpu_profile::CountDraw(s, SasrtResolvePartLabel(surface, 1));  // its resolves a frame
+  }
   cmd->setFramebuffer(dest->depth_framebuffer.get());
   // Pixel coordinates are destination texels.
   cmd->setViewports(plume::RenderViewport(0.0f, 0.0f, float(dest->alloc_width),
@@ -14438,7 +14503,11 @@ bool ResolveDepth(HostSurface *surface, HostTexture *dest, const ClearRect &src,
 #endif
   cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
   cmd->drawInstanced(3, 1, 0, 0);
+  if (split) [[unlikely]]
+    gpu_profile::Mark(s, SasrtResolvePartLabel(surface, 2));
   TransitionTextureLocked(dest, plume::RenderTextureLayout::SHADER_READ);
+  if (split) [[unlikely]]  // the move to shader read apart from the clear and what follows
+    gpu_profile::Mark(s, SasrtResolvePartLabel(surface, 3));
 
   // The draw path binds its own layout, pipeline, targets and viewport again.
   g_bound.framebuffer = nullptr;
@@ -14729,8 +14798,15 @@ bool ResolveFixed16Locked(HostSurface *surface, HostTexture *dest, const plume::
       return false;
   }
   plume::RenderCommandList *cmd = s.command_list;
+  const bool split = SasrtResolveSplitOn();  // renut-ultimate (2026-11-13, sasrt_gpu_diag_resolve_split)
+  if (split) [[unlikely]]
+    gpu_profile::Mark(s, SasrtResolvePartLabel(surface, 0));
   TransitionSurfaceLocked(surface, plume::RenderTextureLayout::SHADER_READ);
   TransitionTextureLocked(dest, plume::RenderTextureLayout::COLOR_WRITE);
+  if (split) [[unlikely]] {
+    gpu_profile::Mark(s, SasrtResolvePartLabel(surface, 1));
+    gpu_profile::CountDraw(s, SasrtResolvePartLabel(surface, 1));
+  }
   cmd->setFramebuffer(dest->copy_framebuffer.get());
   cmd->setViewports(plume::RenderViewport(0.0f, 0.0f, float(dest->alloc_width), float(dest->alloc_height)));
   cmd->setScissors(plume::RenderRect(int32_t(host_x), int32_t(host_y), int32_t(host_x) + (rect.right - rect.left),
@@ -14747,6 +14823,8 @@ bool ResolveFixed16Locked(HostSurface *surface, HostTexture *dest, const plume::
   push.sampler_index = kPointClampSamplerSlot;
   cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
   cmd->drawInstanced(3, 1, 0, 0);
+  if (split) [[unlikely]]
+    gpu_profile::Mark(s, SasrtResolvePartLabel(surface, 2));
   // The draw path binds its own layout, pipeline, targets and viewport again.
   g_bound.framebuffer = nullptr;
   g_bound.pipeline = nullptr;
@@ -15034,8 +15112,10 @@ bool DrawSampleGridResolveLocked(HostSurface *grid, HostTexture *dest, const plu
 // or a staging image): dest's region at (host_x, host_y) from the source texels at rect's corner, times color_scale
 // (resolve_copy_ps). The caller has made the source readable. The pipeline is the destination format's (the source's
 // when not converting).
+// renut-ultimate (2026-11-13, sasrt-nx's sasrt_gpu_diag_resolve_split): 'split_surface', DrawResolveCopy's source with
+// the split diagnostic on (its parts 1 and 2 are marked here, part 0 there); null for none (the staging sources).
 bool DrawCopyFromSlotLocked(uint32_t source_slot, HostTexture *dest, const plume::RenderRect &rect, uint32_t host_x,
-                            uint32_t host_y, float color_scale) {
+                            uint32_t host_y, float color_scale, const HostSurface *split_surface = nullptr) {
   auto &s = State();
   if (source_slot == kInvalidDescriptor || !s.resolve_copy_ps || !dest->texture || !dest->render_target)
     return false;
@@ -15063,7 +15143,13 @@ bool DrawCopyFromSlotLocked(uint32_t source_slot, HostTexture *dest, const plume
       return false;
   }
   plume::RenderCommandList *cmd = s.command_list;
+  const HostSurface *const surface = split_surface;
+  const bool split = surface != nullptr;  // renut-ultimate (2026-11-13, sasrt_gpu_diag_resolve_split)
   TransitionTextureLocked(dest, plume::RenderTextureLayout::COLOR_WRITE);
+  if (split) [[unlikely]] {
+    gpu_profile::Mark(s, SasrtResolvePartLabel(surface, 1));
+    gpu_profile::CountDraw(s, SasrtResolvePartLabel(surface, 1));  // its resolves a frame
+  }
   cmd->setFramebuffer(dest->copy_framebuffer.get());
   cmd->setViewports(plume::RenderViewport(0.0f, 0.0f, float(dest->alloc_width), float(dest->alloc_height)));
   cmd->setScissors(plume::RenderRect(int32_t(host_x), int32_t(host_y), int32_t(host_x) + (rect.right - rect.left),
@@ -15081,6 +15167,8 @@ bool DrawCopyFromSlotLocked(uint32_t source_slot, HostTexture *dest, const plume
   push.sampler_index = kPointClampSamplerSlot;
   cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
   cmd->drawInstanced(3, 1, 0, 0);
+  if (split) [[unlikely]]
+    gpu_profile::Mark(s, SasrtResolvePartLabel(surface, 2));
   banjo::renut_gpu::CountDrawnResolve();
   // The draw path binds its own layout, pipeline, targets and viewport again.
   g_bound.framebuffer = nullptr;
@@ -15104,8 +15192,11 @@ bool DrawResolveCopy(HostSurface *surface, HostTexture *dest, const plume::Rende
   const uint32_t source_slot = SurfaceSampleSlotLocked(surface);
   if (source_slot == kInvalidDescriptor)
     return false;
+  const bool split = SasrtResolveSplitOn();  // renut-ultimate (2026-11-13, sasrt_gpu_diag_resolve_split)
+  if (split) [[unlikely]]
+    gpu_profile::Mark(s, SasrtResolvePartLabel(surface, 0));
   TransitionSurfaceLocked(surface, plume::RenderTextureLayout::SHADER_READ);
-  return DrawCopyFromSlotLocked(source_slot, dest, rect, host_x, host_y, color_scale);
+  return DrawCopyFromSlotLocked(source_slot, dest, rect, host_x, host_y, color_scale, split ? surface : nullptr);
 }
 
 // halo3-nx (2026-11-03): a resolve about to read 'surface', when another format's target over the same EDRAM view was drawn to
@@ -15205,23 +15296,41 @@ plume::RenderRect ClampRect(const ClearRect *rect, uint32_t width, uint32_t heig
 
 } // namespace
 
+void ReadClearViewport(const u8 *device_state, float viewport[4]) {  // blur-nx (2026-11-13, #55)
+  const GuestDevice device(device_state);
+  for (u32 i = 0; i < 4; ++i)
+    viewport[i] = device.F32(kClearViewportOffset + i * 4);
+}
+
 void ClearStateLocked(const u8 *device_state, u32 flags, const ClearRect *rect,
                       const float color[4], float depth, u32 stencil) {
+  if (!device_state) {  // (as before: a null device clears nothing; the command list and SyncBound first)
+    ClearTargetsLocked(nullptr, nullptr, flags, rect, color, depth, stencil);
+    return;
+  }
+  u32 targets[kResolveTargetWords];
+  float viewport[4];
+  ReadResolveTargets(device_state, targets);
+  ReadClearViewport(device_state, viewport);
+  ClearTargetsLocked(targets, viewport, flags, rect, color, depth, stencil);
+}
+
+void ClearTargetsLocked(const u32 *target_words, const float *viewport, u32 flags, const ClearRect *rect,
+                        const float color[4], float depth, u32 stencil) {
   auto &s = State();
   if (!Video::EnsureCommandListLocked())
     return;
   SyncBound(s);
-  const GuestDevice device(device_state);
-  if (!device.valid())
+  if (!target_words)  // blur-nx (2026-11-13, #55): was a null device state
     return;
   Targets targets;
-  if (!GatherTargets(device, targets))
+  if (!GatherTargetsWords(target_words, targets))
     return;
 
-  // D3D clamps clears to the viewport (CDevice viewport floats at 0x3170).
+  // D3D clamps clears to the viewport (CDevice viewport floats at 0x3170; blur-nx: 0x3218, kClearViewportOffset).
   ClearRect r = rect ? *rect : ClearRect{0, 0, int32_t(targets.width), int32_t(targets.height)};
-  const float vx = device.F32(0x3160), vy = device.F32(0x3164);  // katamari-nx: 0x3170->0x3160, 0x3174->0x3164
-  const float vw = device.F32(0x3168), vh = device.F32(0x316C);  // katamari-nx: 0x3178->0x3168, 0x317C->0x316C
+  const float vx = viewport[0], vy = viewport[1];
+  const float vw = viewport[2], vh = viewport[3];
   if (vw > 0.0f && vh > 0.0f) {
     int32_t vx2 = int32_t(vx + vw), vy2 = int32_t(vy + vh);
     // A target grown for tiling: D3D bounds the viewport by the tile-sized
@@ -15245,8 +15354,74 @@ void ClearStateLocked(const u8 *device_state, u32 flags, const ClearRect *rect,
 // banjo-nx (2026-10-19, banjo_renut_depth_words_lazy): a destination's first resolves write the words either way.
 constexpr uint32_t kDepthWordsProbe = 300;
 
+// renut-ultimate (2026-11-13, sasrt-nx's resolve project R1; logging only, off by default): per depth resolve destination
+// (guest address and size, the first 16), its resolves asked with and without the words, the reads of its words
+// (EnsureDepthWordsLocked: a fetch of the words), and whether a read set words_wanted this run. The 10 s line tells which
+// destinations' words nothing reads (banjo_renut_depth_words_lazy, sasrt_gpu_words_probe_kept), sasrt-nx's base for R2.
+// Render thread; the line is the stats thread's: a mutex.
+REXCVAR_DEFINE_BOOL(sasrt_gpu_diag_depth_words, false, "SASRT/Diagnostics",
+                    "Diagnostic (sasrt-nx's resolve project R1), logging only, every 10 s: per depth resolve destination, "
+                    "its resolves with and without the depth words, how often the words were read, and whether a read "
+                    "first asked for them")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+namespace {
+struct DepthWordsCensus {
+  u32 va = 0, w = 0, h = 0;
+  uint64_t with_words = 0, without = 0, reads = 0;
+  bool wanted_by_read = false;  // a read set words_wanted (this run)
+};
+std::mutex g_depth_words_census_mutex;
+std::vector<DepthWordsCensus> g_depth_words_census;
+bool DepthWordsCensusOn() {
+  static const bool on = REXCVAR_GET(sasrt_gpu_diag_depth_words);
+  return on;
+}
+DepthWordsCensus *DepthWordsCensusOf(const HostTexture &d) {  // under the mutex
+  for (auto &c : g_depth_words_census)
+    if (c.va == d.guest_va && c.w == d.width && c.h == d.height)
+      return &c;
+  if (g_depth_words_census.size() >= 16)
+    return nullptr;
+  g_depth_words_census.push_back({d.guest_va, d.width, d.height});
+  return &g_depth_words_census.back();
+}
+void DepthWordsCensusResolve(const HostTexture &d, bool words) {
+  if (!DepthWordsCensusOn()) [[likely]]
+    return;
+  std::lock_guard lock(g_depth_words_census_mutex);
+  if (DepthWordsCensus *c = DepthWordsCensusOf(d))
+    ++(words ? c->with_words : c->without);
+}
+void DepthWordsCensusRead(const HostTexture &d) {
+  if (!DepthWordsCensusOn()) [[likely]]
+    return;
+  std::lock_guard lock(g_depth_words_census_mutex);
+  if (DepthWordsCensus *c = DepthWordsCensusOf(d)) {
+    ++c->reads;
+    if (!d.words_wanted)
+      c->wanted_by_read = true;
+  }
+}
+}  // namespace
+
+std::string DepthWordsCensusReport() {
+  if (!DepthWordsCensusOn())
+    return {};
+  std::lock_guard lock(g_depth_words_census_mutex);
+  std::string out = "[renut] depth resolve words by destination (sasrt_gpu_diag_depth_words):";
+  if (g_depth_words_census.empty())
+    out += " none";
+  for (auto &c : g_depth_words_census) {
+    out += fmt::format(" {:08X} {}x{}: {} with words, {} without, read {}, first wanted by {};", c.va, c.w, c.h,
+                       c.with_words, c.without, c.reads, c.wanted_by_read ? "a read" : "nothing (this run)");
+    c.with_words = c.without = c.reads = 0;
+  }
+  return out;
+}
+
 void EnsureDepthWordsLocked(HostTexture &dest) {
   DepthResolveReadLocked(dest, 2);  // vivapinata-nx (2026-11-12, vivapinata_depth_resolve_skip_unread)
+  DepthWordsCensusRead(dest);  // renut-ultimate (2026-11-13, sasrt-nx's R1)
   if (!banjo::renut_gpu::DepthWordsLazyOn())
     return;
   dest.words_wanted = true;
@@ -15405,10 +15580,31 @@ static uint64_t ResolveSignature(const HostSurface *surface, const ClearRect &sr
   return h ? h : 1;
 }
 
+// blur-nx (2026-11-13, M-35): draw.h kResolveTargetWords.
+static_assert(d3d::kDeviceOffsetDepthStencil == d3d::kDeviceOffsetRenderTargets + 16);
+static_assert(d3d::kDeviceOffsetRenderTargets + kResolveTargetWords * 4 <= d3d::kDeviceSnapshotSize);
+
+void ReadResolveTargets(const u8 *device_state, u32 targets[kResolveTargetWords]) {
+  const GuestDevice device(device_state);
+  for (u32 i = 0; i < kResolveTargetWords; ++i)
+    targets[i] = device.U32(d3d::kDeviceOffsetRenderTargets + i * 4);
+}
+
 void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *source_rect,
                         u32 dest_texture_va, const d3d::TextureFetchConstant *dest_format,
                         i32 dest_x, i32 dest_y, u32 dest_level, u32 dest_slice,
                         const float clear_color[4], float clear_depth, u32 clear_stencil) {
+  u32 targets[kResolveTargetWords];
+  if (device_state)
+    ReadResolveTargets(device_state, targets);
+  ResolveTargetsLocked(device_state ? targets : nullptr, flags, source_rect, dest_texture_va, dest_format, dest_x,
+                       dest_y, dest_level, dest_slice, clear_color, clear_depth, clear_stencil);
+}
+
+void ResolveTargetsLocked(const u32 *targets, u32 flags, const ClearRect *source_rect,
+                          u32 dest_texture_va, const d3d::TextureFetchConstant *dest_format,
+                          i32 dest_x, i32 dest_y, u32 dest_level, u32 dest_slice,
+                          const float clear_color[4], float clear_depth, u32 clear_stencil) {
   auto &s = State();
   static const uint32_t kProfileLabel = gpu_profile::Label("resolves");
   gpu_profile::Mark(s, kProfileLabel);
@@ -15417,13 +15613,12 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
   if (!Video::EnsureCommandListLocked())
     return;
   SyncBound(s);
-  const GuestDevice device(device_state);
-  if (!device.valid())
+  if (!targets)  // blur-nx (2026-11-13, M-35): was a null device state
     return;
 
   const u32 source = flags & 7;
-  const u32 source_va = source == 4 ? device.U32(d3d::kDeviceOffsetDepthStencil)
-                                    : device.U32(d3d::kDeviceOffsetRenderTargets + source * 4);
+  // blur-nx (2026-11-13, M-35): word 4 is the depth-stencil surface (kDeviceOffsetDepthStencil), as before.
+  const u32 source_va = targets[source];
   HostSurface *surface = GetHostSurfaceLocked(source_va);
   // sasrt-nx (2026-11-09, sasrt_gpu_diag_profile_vs; the fourth round): with the shaders' breakdown, each resolve's own
   // label: its source's size and format, colour or depth, and whether it clears after.
@@ -15517,6 +15712,7 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
         // probing a new destination).
         const bool lazy = banjo::renut_gpu::DepthWordsLazyOn();
         const bool words = !lazy || dest->words_wanted || dest->words_probe < kDepthWordsProbe;
+        DepthWordsCensusResolve(*dest, words);  // renut-ultimate (2026-11-13, sasrt-nx's R1)
         // vivapinata-nx (2026-11-12, vivapinata_depth_resolve_skip_unread; NOT exact in principle, the owner's call): a
         // resolve of a multisampled depth target into a destination nothing has read yet (neither its float nor its
         // words, nor a destination at its address before) is left out; DepthResolveReadLocked draws it when one is
@@ -15852,8 +16048,7 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
     // RePowered (MaxDeadBear, BiRabittoh; MIT).
     const u32 other_flags = surface->depth ? clear_flags & 1u : clear_flags & 0x30u;
     if (banjo::renut_gpu::ResolveClearsBothOn() && other_flags) {
-      HostSurface *other = GetHostSurfaceLocked(
-          device.U32(surface->depth ? d3d::kDeviceOffsetRenderTargets : d3d::kDeviceOffsetDepthStencil));
+      HostSurface *other = GetHostSurfaceLocked(targets[surface->depth ? 0 : 4]);  // M-35: render target 0 or depth
       if (other && other != surface) {
         Targets o;
         if (other->depth)

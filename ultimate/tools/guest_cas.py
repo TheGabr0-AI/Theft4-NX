@@ -38,8 +38,16 @@ MACROS = MARKER + '''
 #if defined(__aarch64__)
 extern "C" unsigned char g_rex_atomic_legacy_barrier;
 #endif
+#if defined(REX_NX_CENSUS_ON)
+// blur-nx (2026-11-13, #32 of Blur's docs/cpu-near-exact-50-1113.md): the PC census of which threads use each word a
+// guest compare-and-swap writes (app/src/cpu/banjo_codegen_checks.cpp).
+extern "C" void RexNxCasCensus(const void* word);
+#endif
 template <typename T, typename E, typename D>
 [[gnu::always_inline]] static inline bool RexGuestCas(T* p, E e, D d) noexcept {
+#if defined(REX_NX_CENSUS_ON)
+  RexNxCasCensus(static_cast<const void*>(p));
+#endif
   T expected = static_cast<T>(e);
   const bool swapped = __atomic_compare_exchange_n(p, &expected, static_cast<T>(d), false, __ATOMIC_SEQ_CST,
                                                    __ATOMIC_SEQ_CST);

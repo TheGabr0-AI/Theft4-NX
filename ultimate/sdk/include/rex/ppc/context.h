@@ -92,14 +92,24 @@ struct CRRegister {
     lt = left < right;
     gt = left > right;
     eq = left == right;
+    REX_NX_CENSUS_IF(xer.so, 11);
+#if defined(REX_NX_XER_SO_ZERO)
+    so = 0;  // blur-nx (2026-11-13, #5 of docs/cpu-near-exact-50-1113.md): diet_ops.h
+#else
     so = xer.so;
+#endif
   }
 
   REX_SMALL_HELPER void compare(double left, double right) noexcept {
 #ifndef REX_NO_FAST_FCMP
     // Mass Effect diet: same truth table, but the quiet comparison builtins let one fcmp serve all four
     // flags (the relational operators and == compiled to fcmpe and fcmp pairs plus NaN tests).
+    REX_NX_CENSUS_IF(__builtin_isunordered(left, right), 5);
+#if defined(REX_NX_FCMP_NO_UN)
+    un = 0;  // blur-nx (2026-11-13, #41): diet_ops.h (lt, gt and eq are 0 for a NaN either way)
+#else
     un = __builtin_isunordered(left, right);
+#endif
     lt = __builtin_isless(left, right);
     gt = __builtin_isgreater(left, right);
     eq = left == right;
@@ -242,6 +252,7 @@ struct FPSCRRegister {
   }
 
   inline uint32_t loadFromHost() noexcept {
+    REX_NX_CENSUS(10);  // blur-nx (2026-11-13, #4)
     csr = getcsr();
     REX_FPU_CENSUS_CLEAN(csr);
     return HostToGuest[(csr & RoundMaskVal) >> RoundShift];
@@ -252,8 +263,24 @@ struct FPSCRRegister {
                    : (value & kRoundMask) == kRoundTowardZero ? rex::syscount::kCensusRoundZero
                                                               : rex::syscount::kCensusRoundUpDown,
                    1);
-    csr &= ~RoundMaskVal;
-    csr |= Platform::GuestToHost[value & kRoundMask];
+    // blur-nx (2026-11-13, docs/cpu-near-exact-50-1113.md #3): the census of the writes; the write itself (an `msr fpcr`,
+    // dozens of cycles on the A57) skipped when the host's word already is what it would write (exact: read back with
+    // `mrs`, not taken from the cached copy, which a thread-context restore sets without writing the host's;
+    // REX_FPSCR_WRITE_ALWAYS: every write, as before). REX_NX_RN_ONLY (near-exact, NOT for Blur: its census shows
+    // round-toward-zero selected, 11,776 times against 23,629 to nearest): the rounding mode stays round-to-nearest.
+    const uint32_t next = uint32_t((csr & ~RoundMaskVal) | Platform::GuestToHost[value & kRoundMask]);
+    REX_NX_CENSUS(7);
+    REX_NX_CENSUS_IF(next != csr, 8);
+    REX_NX_CENSUS_IF((value & kRoundMask) != kRoundNearest, 9);
+#if defined(REX_NX_RN_ONLY)
+    return;
+#endif
+    csr = next;
+#if !defined(REX_FPSCR_WRITE_ALWAYS)
+    if (next == getcsr()) {
+      return;
+    }
+#endif
     setcsr(csr);
   }
 

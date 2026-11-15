@@ -8,6 +8,7 @@
 #include "renut_engine/gpu/d3d/d3d_native.h"  // banjo-nx (2026-10-26): g_touch_compare
 #include "renut_engine/gpu/backend/queued.h"
 #include "renut_engine/gpu/render/draw.h"
+#include "renut_engine/perf/frame_stats.h"  // blur-nx (2026-11-13): #37's census
 #include "renut_engine/gpu/render/graphics_options.h"  // banjo-nx (2026-10-28): dynamic resolution's ranges
 #include "renut_engine/gpu/guest/command_buffers.h"  // banjo-nx (2026-10-26): TagsReport
 #include "renut_engine/gpu/banjo_renut_record.h"
@@ -867,6 +868,8 @@ std::atomic<uint64_t> g_cards_clean{0}, g_cards_clean_bytes{0}, g_cards_dirty{0}
 std::atomic<uint64_t> g_kick_reuse[3]{}, g_kick_reuse_bytes[2]{};  // banjo-nx (2026-10-23, batch 6)
 std::atomic<uint64_t> g_tex_cards[4], g_tex_cards_bytes{0};  // proven, hashed, re-uploads saved, changed (verify)
 std::atomic<uint64_t> g_kind_depth_only{0}, g_kind_depth_plain{0}, g_kind_nothing{0}, g_kind_partial{0};
+// blur-nx (2026-11-13, #47's census): CountConstantUse.
+std::atomic<uint64_t> g_const_vs_indexed{0}, g_const_ps_indexed{0}, g_const_draws{0}, g_const_registers{0};
 std::atomic<uint64_t> g_depth_only_draws{0};  // banjo_gpu_depth_only (package 28)
 std::atomic<uint64_t> g_resolves_drawn{0};  // banjo_deko3d_draw_resolves (2026-10-18)
 std::atomic<uint64_t> g_smaa_runs{0};       // banjo_renut_smaa (2026-10-21)
@@ -1392,6 +1395,15 @@ void StatsGameFrame() {
   if (::renut::gpu::IsDeko3D())  // banjo-nx (2026-10-17): the deko3d back end
     REXLOG_INFO("[renut] {}", deko3d::Report());
 #endif
+  REXLOG_INFO("[renut] {}", renut::frame_stats::WaitReport());  // blur-nx (2026-11-13, #37's census)
+  {  // blur-nx (2026-11-13, #47's census; banjo_renut_lean_diagnostics' draws)
+    const uint64_t draws = g_const_draws.exchange(0, std::memory_order_relaxed);
+    const uint64_t regs = g_const_registers.exchange(0, std::memory_order_relaxed);
+    REXLOG_INFO("[renut] float constants (#47's census): {} draws, {} with a vertex shader and {} with a pixel shader "
+                "that index the register file (every register uploaded); the others read {:.1f} registers a draw",
+                draws, g_const_vs_indexed.exchange(0, std::memory_order_relaxed),
+                g_const_ps_indexed.exchange(0, std::memory_order_relaxed), draws ? double(regs) / double(draws) : 0.0);
+  }
   REXLOG_INFO("[renut] draw kinds: {} depth-only ({} of them without alpha test or alpha to coverage, with a pixel "
               "shader; {} drawn without it, banjo_gpu_depth_only), {} writing nothing, {} writing part of a target's "
               "channels",
@@ -1415,6 +1427,9 @@ void StatsGameFrame() {
               g_words_lazy[0].exchange(0, std::memory_order_relaxed),
               g_words_lazy[1].exchange(0, std::memory_order_relaxed),
               g_words_lazy[2].exchange(0, std::memory_order_relaxed));
+  // renut-ultimate (2026-11-13, sasrt-nx's resolve project R1): while sasrt_gpu_diag_depth_words is on.
+  if (const std::string words = ::renut::gpu::DepthWordsCensusReport(); !words.empty())
+    REXLOG_INFO("{}", words);
   // vivapinata-nx (2026-11-12, port 115): while vivapinata_depth_resolve_skip_unread is on.
   if (REXCVAR_GET(vivapinata_depth_resolve_skip_unread))
     REXLOG_INFO("[renut] depth resolves nothing had read (vivapinata_depth_resolve_skip_unread): {} left out; read "
@@ -1975,6 +1990,15 @@ void CountTextureCards(uint64_t bytes, int what) {
 void CountExactMemoHit(uint64_t bytes) {
   Bump(g_exact_memo, 1);
   Bump(g_exact_memo_bytes, bytes);
+}
+
+void CountConstantUse(bool vs_indexed, bool ps_indexed, uint32_t registers) {  // blur-nx (2026-11-13, #47)
+  Bump(g_const_draws, 1);
+  if (vs_indexed)
+    Bump(g_const_vs_indexed, 1);
+  if (ps_indexed)
+    Bump(g_const_ps_indexed, 1);
+  Bump(g_const_registers, registers);
 }
 
 void CountDrawKind(bool depth_only, bool depth_only_plain, bool writes_nothing, bool partial_mask) {

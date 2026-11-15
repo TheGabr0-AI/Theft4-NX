@@ -51,7 +51,16 @@ SQRT = re.compile(r'^\t(\S+)\.f64 = double\(float\(sqrt\((\S+)\.f64\)\)\);$')
 FRSP = re.compile(r'^\t(\S+)\.f64 = double\(float\((\S+)\.f64\)\);$')
 MACRO = {'+': 'REX_FADDS', '-': 'REX_FSUBS', '*': 'REX_FMULS', '/': 'REX_FDIVS'}
 OPS = {'fadds': '+', 'fsubs': '-', 'fmuls': '*', 'fdivs': '/'}
-WANTED = tuple('\t// %s ' % mn for mn in ('fadds', 'fsubs', 'fmuls', 'fdivs', 'fsqrts', 'frsp', 'fcmpu', 'fcmpo'))
+WANTED = tuple('\t// %s ' % mn for mn in ('fadds', 'fsubs', 'fmuls', 'fdivs', 'fsqrts', 'frsp', 'fcmpu', 'fcmpo',
+                                            'fmadds', 'fmsubs', 'fnmadds', 'fnmsubs'))
+# blur-nx (2026-11-13, M-24): the fused forms with three proven single inputs: REX_FMADDS_KNOWN (fma_single.h's
+# FmaddsSingleKnown, the true branch of REX_FMADDS's test). The generator's form (before tools/fma_single.py) and the
+# REX_FMADDS form (after it) are both taken; fnmadds / fnmsubs negate the whole, fmsubs / fnmsubs the third input.
+FUSED = ('fmadds', 'fmsubs', 'fnmadds', 'fnmsubs')
+FUSED_GEN = re.compile(r'^\t(\S+)\.f64 = double\(float\((-?)std::fma\((-?\S+\.f64), (-?\S+\.f64), (-?\S+\.f64)\)\)\);$')
+FUSED_MACRO = re.compile(r'^\t(\S+)\.f64 = (\(-)?REX_FMADDS\((-?\S+\.f64), (-?\S+\.f64), (-?\S+\.f64)\)(\))?;$')
+UNDO_FUSED = re.compile(r'^\t(\S+)\.f64 = (\(-)?REX_FMADDS_KNOWN\((-?\S+\.f64), (-?\S+\.f64), (-?\S+\.f64)\)(\))?;$',
+                        re.M)
 UNMACRO = {v: k for k, v in MACRO.items()}
 UNDO_BINARY = re.compile(r'^\t(\S+)\.f64 = (REX_FADDS|REX_FSUBS|REX_FMULS|REX_FDIVS)\((\S+)\.f64, (\S+)\.f64\);$', re.M)
 UNDO_SQRT = re.compile(r'^\t(\S+)\.f64 = REX_FSQRTS\((\S+)\.f64\);$', re.M)
@@ -105,6 +114,14 @@ MACROS = MARKER + '''
 #define REX_COMPARE_SINGLES(cr, a, b) (cr).compare((a), (b))
 #endif  // REX_SINGLE_FLOATS_OFF
 #endif  // REX_FADDS_KNOWN
+// blur-nx (2026-11-13, M-24): the fused forms with proven single inputs (REX_FMADDS: tools/fma_single.py's macros).
+#ifndef REX_FMADDS_KNOWN
+#if defined(REX_SINGLE_FLOATS_OFF)
+#define REX_FMADDS_KNOWN(a, b, c) REX_FMADDS((a), (b), (c))
+#else
+#define REX_FMADDS_KNOWN(a, b, c) rex::ppc::FmaddsSingleKnown((a), (b), (c))
+#endif  // REX_SINGLE_FLOATS_OFF
+#endif  // REX_FMADDS_KNOWN
 ''' + END
 
 
@@ -198,6 +215,9 @@ def main():
         text = UNDO_KNOWN.sub(lambda m: '\t%s.f64 = rex::ppc::%sSingleAnyMode(%s.f64, %s.f64);' % (
             m.group(1), m.group(2).capitalize(), m.group(3), m.group(4)), text)
         text = UNDO_FRSP_ANY.sub(r'\t\1.f64 = rex::ppc::RoundToSingleAnyMode(\2.f64);', text)
+        # blur-nx (2026-11-13, M-24): the generator's form (fma_single.py runs after this step and makes REX_FMADDS)
+        text = UNDO_FUSED.sub(lambda m: '\t%s.f64 = double(float(%sstd::fma(%s, %s, %s)));' % (
+            m.group(1), '-' if m.group(2) else '', m.group(3), m.group(4), m.group(5)), text)
         text = UNDO_CMP.sub(r'\trex::ppc::CompareAnyMode(\1, \2.f64, \3.f64);', text)
         lines = text.split('\n')
         i = 0
@@ -217,15 +237,32 @@ def main():
             nodes, guest, chunk_lines, state = analyse(body)
             for k, (mn, ops) in enumerate(guest):
                 base = mn.rstrip('.')
-                if base not in OPS and base not in ('fsqrts', 'frsp', 'fcmpu', 'fcmpo'):
+                if base not in OPS and base not in ('fsqrts', 'frsp', 'fcmpu', 'fcmpo') and base not in FUSED:
                     continue
                 parts = [o.strip() for o in ops.split(',')]
                 sources = [freg(p) for p in parts[1:]]
+                if base in FUSED and len(sources) != 3:
+                    continue
                 counts[base + ' seen'] += 1
                 if None in sources or not all((state[k] >> s) & 1 for s in sources):
                     continue
                 for line_no in chunk_lines[k]:
                     line = body[line_no]
+                    if base in FUSED:  # blur-nx (2026-11-13, M-24)
+                        g = FUSED_GEN.match(line)
+                        if g:
+                            call = 'REX_FMADDS_KNOWN(%s, %s, %s)' % (g.group(3), g.group(4), g.group(5))
+                            edits[i + 1 + line_no] = '\t%s.f64 = %s;' % (g.group(1),
+                                                                          '(-%s)' % call if g.group(2) else call)
+                            counts['fused'] += 1
+                            continue
+                        f = FUSED_MACRO.match(line)
+                        if f and bool(f.group(2)) == bool(f.group(6)):
+                            call = 'REX_FMADDS_KNOWN(%s, %s, %s)' % (f.group(3), f.group(4), f.group(5))
+                            edits[i + 1 + line_no] = '\t%s.f64 = %s;' % (f.group(1),
+                                                                          '(-%s)' % call if f.group(2) else call)
+                            counts['fused'] += 1
+                        continue
                     if base in ('fcmpu', 'fcmpo'):
                         c = ANY_CMP.match(line)
                         if c:
@@ -290,6 +327,7 @@ def main():
           '%d fcmpu and %d fcmpo as the known-single forms' % (
               counts['any fadds'], counts['any fsubs'], counts['any fmuls'], counts['any fdivs'], counts['any frsp'],
               counts['any fcmpu'], counts['any fcmpo']))
+    print('single_floats (M-24, the fused forms with three single inputs): %d as REX_FMADDS_KNOWN' % counts['fused'])
 
 
 if __name__ == '__main__':

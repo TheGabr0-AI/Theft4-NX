@@ -212,14 +212,19 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t a
   XThread::CheckTitleTermination();
   auto result = rex::thread::Wait(wait_handle, alertable ? true : false, timeout_ms);
   XThread::CheckTitleTermination();
+  // blur-nx (2026-11-13, #57 / #34's census, PC): polls, and their timeouts.
+  const bool poll = timeout_ms.count() == 0;
+  if (poll) REX_SYS_CENSUS(rex::syscount::kCensusWaitPoll, 1);
   switch (result) {
     case rex::thread::WaitResult::kSuccess:
+      REX_SYS_CENSUS(rex::syscount::kCensusWaitSignalled, 1);
       WaitCallback();
       return X_STATUS_SUCCESS;
     case rex::thread::WaitResult::kUserCallback:
       // Or X_STATUS_ALERTED?
       return X_STATUS_USER_APC;
     case rex::thread::WaitResult::kTimeout:
+      if (poll) REX_SYS_CENSUS(rex::syscount::kCensusWaitPollTimeout, 1);
       rex::thread::MaybeYield();
       return X_STATUS_TIMEOUT;
     default:

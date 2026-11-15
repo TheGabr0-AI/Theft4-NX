@@ -34,8 +34,10 @@ import re
 import sys
 
 R1 = re.compile(r'(?<![\w.])(?:ctx\.r1|r1l|l_r1|ll_r1|r1)\.[us](?:32|64)\b')
+# blur-nx (2026-11-13, M-23): and tools/float_loads.py's single stores from the vector unit (REX_STORE_(D_)F32ANY).
 STORE = re.compile(r'\b(REX_STORE_D_U(?:8|16|32|64)|REX_STORE_U(?:8|16|32|64)|REX_STVLX|REX_STVRX|'
-                   r'REX_MM_STORE_U(?:8|16|32|64)|BANJO_HOT_STORE_(?:D_)?U(?:8|16|32|64))\(')
+                   r'REX_MM_STORE_U(?:8|16|32|64)|BANJO_HOT_STORE_(?:D_)?U(?:8|16|32|64)|'
+                   r'REX_STORE_(?:D_)?F32ANY|BANJO_HOT_STORE_(?:D_)?F32ANY)\(')
 VEC = 'simde_mm_store_si128((simde__m128i*)REX_RAW_ADDR(ea),'
 DCBZ = re.compile(r'(?<![\w,] )\bmemset\(\(void\*\)REX_RAW_ADDR\(ea\), 0, (?:32|128)\);')
 CAS = 'REX_GUEST_CAS(reinterpret_cast<'
@@ -52,6 +54,20 @@ MACROS = MARKER + '''
 #ifndef REX_CARD
 #if defined(REX_STORE_CARDS_OFF)
 #define REX_CARD(ea) ((void)0)
+#elif defined(REX_NX_CENSUS_ON)  // blur-nx (2026-11-13, near-exact #38's census: card marks of the generated tree)
+#define REX_CARD(ea) ((void)(REX_NX_CENSUS(25), *(u8*)(base + ((u32)(ea) >> 12)) = 0))
+#elif defined(REX_CARD_VIEWS_ONLY)
+// blur-nx (2026-11-13, with near-exact #38; exact): the copies' rule (cpu/banjo_hot_prelude.h, VS-11 / VS-12 of
+// 2026-11-11) for the generated tree too: only the pages whose cards Renut reads (its views 0xA0000000 and up and
+// 0x7F000000-0x7FFFFFFF, and the page in front of each), and the card byte written only when it is not zero yet (a
+// zero card is the result either way; the card lines stay shared between the cores).
+[[gnu::always_inline]] static inline void rex_card_gen_(uint8_t* base_, u32 page) {
+  if (page - 0x9FFFFu <= 0x60000u || page - 0x7EFFFu <= 0x1000u) {
+    u8* const card = (u8*)(base_ + page);
+    if (*card) *card = 0;
+  }
+}
+#define REX_CARD(ea) rex_card_gen_(base, ((u32)(ea)) >> 12)
 #else
 #define REX_CARD(ea) ((void)(*(u8*)(base + ((u32)(ea) >> 12)) = 0))
 #endif
@@ -161,7 +177,9 @@ def apply_line(lines, k, counts):
         out.append(line[pos:m.start()])
         out.append(name + '_C(')
         pos = m.end()
-        key = 'BANJO_HOT' if name.startswith('BANJO_HOT') else (name.split('_U')[0] if '_U' in name else name)
+        key = ('BANJO_HOT' if name.startswith('BANJO_HOT') else
+               'REX_STORE_D' if name == 'REX_STORE_D_F32ANY' else 'REX_STORE' if name == 'REX_STORE_F32ANY' else
+               (name.split('_U')[0] if '_U' in name else name))
         counts[key] += 1
     out.append(line[pos:])
     line = ''.join(out)
@@ -189,7 +207,8 @@ def apply_line(lines, k, counts):
 
 UNDO = [
     (re.compile(r'\b(REX_STORE_D_U(?:8|16|32|64)|REX_STORE_U(?:8|16|32|64)|REX_STVLX|REX_STVRX|'
-                r'REX_MM_STORE_U(?:8|16|32|64)|BANJO_HOT_STORE_(?:D_)?U(?:8|16|32|64))_C\('), r'\1('),
+                r'REX_MM_STORE_U(?:8|16|32|64)|BANJO_HOT_STORE_(?:D_)?U(?:8|16|32|64)|'
+                r'REX_STORE_(?:D_)?F32ANY|BANJO_HOT_STORE_(?:D_)?F32ANY)_C\('), r'\1('),
     (re.compile(r'REX_CARD\(ea\), (?=simde_mm_store_si128|memset\()'), ''),
     (re.compile(r'REX_GUEST_CAS_C\(ea, '), 'REX_GUEST_CAS('),
 ]

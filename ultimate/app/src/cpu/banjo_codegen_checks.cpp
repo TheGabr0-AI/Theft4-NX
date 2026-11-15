@@ -55,6 +55,10 @@ extern "C" {
 volatile unsigned long long g_rex_ro_checked = 0;      // plain lossy counts: "at least this many"
 volatile unsigned long long g_rex_promoted_calls = 0;
 unsigned char g_rex_indirect_census = 0;
+// renut-ultimate (2026-11-14, port 140): RexNxCasCensus (below) only while banjo_diag_runtime_census is on. Unguarded,
+// every guest compare-and-swap of a PC build took one global mutex: Katamari's start-up spin locks crawled for ~33 s
+// (the main thread caught in RexNxCasCensus; 2026-11-14 runs p138_*).
+unsigned char g_rex_cas_census = 0;
 volatile unsigned long long g_rex_flush_flow_checked = 0;
 // 2026-10-16 (the CPU codegen agent's aggressive round): tools/r1_local.py (the r1 mirror after kept or assumed calls,
 // REX_R1_CHECK) and tools/lr_preserve.py --rewrite (link-register write-backs proven redundant,
@@ -66,7 +70,70 @@ volatile unsigned long long g_rex_stack_fwd_checked = 0;
 // rex/ppc/diet_ops.h, REX_DIET_CENSUS_ON: executions of the any-mode float helpers in the game code (conversions,
 // compares, arithmetic, cold paths, float copy loads and stores).
 volatile unsigned long long g_rex_diet_census[6] = {};
+// blur-nx (2026-11-13, docs/cpu-near-exact-50-1113.md): the near-exact ideas' census (rex/ppc/diet_ops.h REX_NX_CENSUS).
+volatile unsigned long long g_rex_nx_census[48] = {};
 }
+
+#if !defined(__SWITCH__)
+// blur-nx (2026-11-13, #32 of docs/cpu-near-exact-50-1113.md): the words the guest's compare-and-swaps write, and
+// whether more than one thread ever does (a word only one thread uses could take plain operations). An open-addressing
+// table of 65,536 words under a lock (the PC census only: tools/guest_cas.py's RexGuestCas calls it).
+namespace {
+struct CasWord {
+  uintptr_t word = 0;
+  uint32_t thread = 0;
+  bool shared = false;
+  uint64_t count = 0;
+};
+std::mutex g_cas_mutex;
+CasWord g_cas_words[65536];
+uint64_t g_cas_full = 0;
+uint32_t CasThreadId() {
+  static std::atomic<uint32_t> next{1};
+  thread_local uint32_t id = next.fetch_add(1, std::memory_order_relaxed);
+  return id;
+}
+}  // namespace
+extern "C" void RexNxCasCensus(const void* word) {
+  if (!g_rex_cas_census) [[likely]] return;  // renut-ultimate (2026-11-14): the census runs only
+  const uintptr_t w = reinterpret_cast<uintptr_t>(word);
+  const uint32_t thread = CasThreadId();
+  std::lock_guard<std::mutex> lock(g_cas_mutex);
+  size_t i = size_t((w >> 2) * 0x9E3779B97F4A7C15ull >> 48);
+  for (size_t probes = 0; probes < 65536; ++probes, i = (i + 1) & 65535) {
+    CasWord& c = g_cas_words[i];
+    if (c.word == w) {
+      if (c.thread != thread) c.shared = true;
+      ++c.count;
+      return;
+    }
+    if (c.word == 0) {
+      c.word = w;
+      c.thread = thread;
+      c.count = 1;
+      return;
+    }
+  }
+  ++g_cas_full;
+}
+static void CasCensusReport() {
+  std::lock_guard<std::mutex> lock(g_cas_mutex);
+  uint64_t words = 0, single = 0, single_count = 0, shared_count = 0;
+  for (const CasWord& c : g_cas_words) {
+    if (!c.word) continue;
+    ++words;
+    if (c.shared) {
+      shared_count += c.count;
+    } else {
+      ++single;
+      single_count += c.count;
+    }
+  }
+  REXLOG_INFO("[census] near-exact #32 (cumulative): {} words written by guest compare-and-swaps, {} of them by one "
+              "thread only ({} of {} compare-and-swaps; {} not tabled: the table full)",
+              words, single, single_count, single_count + shared_count, g_cas_full);
+}
+#endif
 
 #if defined(_WIN32)
 extern "C" __declspec(dllimport) void* __stdcall GetModuleHandleW(const wchar_t* name);
@@ -250,6 +317,36 @@ void RuntimeCensusReport(int seconds) {
                 "cold paths {:.0f}; proven flush checks executed {:.0f}",
                 diet[0], diet[1], diet[2], diet[3], proven_s);
     REXLOG_INFO("[census] float copy forms per second (fp_copy_pairs): loads {:.0f}, stores {:.0f}", diet[4], diet[5]);
+    // blur-nx (2026-11-13, docs/cpu-near-exact-50-1113.md): each rare case a near-exact switch would change, cumulative
+    // (rex/ppc/diet_ops.h REX_NX_CENSUS: the numbers there are the doc's idea numbers).
+    {
+      unsigned long long nx[48];
+      for (int i = 0; i < 48; ++i) nx[i] = g_rex_nx_census[i];
+      REXLOG_INFO("[census] near-exact (cumulative): #1 signalling NaNs at float copy stores {} | #2 NaNs into "
+                  "float-to-integer conversions {} | #17 signed divisions by zero {}, INT_MIN / -1 {}, unsigned "
+                  "divisions by zero {} | #41 float compares with a NaN {} | #42 vector max/min with a differing lane "
+                  "{} of {} | #3 FPSCR writes {}, changing the mode {}, to a mode other than nearest {} | #4 FPSCR "
+                  "reads {} | #5 integer compares copying XER[SO] = 1 {}",
+                  nx[0], nx[1], nx[2], nx[3], nx[4], nx[5], nx[6], nx[13], nx[7], nx[8], nx[9], nx[10], nx[11]);
+      REXLOG_INFO("[census] near-exact audio (cumulative; Blur's node loop, tools/blur_mix_nx.py): gains unity {}, "
+                  "zero {}, other constant {} (within 1e-7 of 1: {}, within 1e-5: {}; under 2^-16: {}) | ramps {} "
+                  "(under 1e-6: {}, under 2^-16: {}; both ends under 2^-16: {})",
+                  nx[18], nx[22], nx[16], nx[17], nx[23], nx[21], nx[19], nx[20], nx[24], nx[30]);
+      REXLOG_INFO("[census] near-exact #38 (cumulative): card marks of the generated tree {}, the copies' run marks {} "
+                  "(#66: with a run pending; {} of them on a page Renut reads, {} writing the card)",
+                  nx[25], nx[26], nx[33], nx[34]);
+      REXLOG_INFO("[census] near-exact #49 (cumulative): resampling blocks {}, of them 256 samples at a ratio other "
+                  "than 1 (the copy would newly take them) {}",
+                  nx[27], nx[28]);
+      REXLOG_INFO("[census] near-exact #43 (cumulative): exp memo hits {}, misses {} (cpu_nx_exp_memo)", nx[31], nx[32]);
+#if !defined(__SWITCH__)
+      CasCensusReport();  // blur-nx (2026-11-13, #32)
+      REXLOG_INFO("[census] near-exact #57 / #34 (cumulative): single-object waits that succeeded {}, polls (a zero "
+                  "timeout) {}, of them timed out (then a yield) {}",
+                  CensusRead(rex::syscount::kCensusWaitSignalled), CensusRead(rex::syscount::kCensusWaitPoll),
+                  CensusRead(rex::syscount::kCensusWaitPollTimeout));
+#endif
+    }
     // blur-nx (2026-11-12, codegen-ideas-3 CG-13's census): what one flush mode for all code would change. The
     // any-mode cold paths above are scalar results in VMX code that met a denormal; the FPU-mode regions are the plain
     // scalar code between switches, and a region with a denormal operand or an underflow (x86 flags, a lower bound)
@@ -322,6 +419,7 @@ void RuntimeCensusReport(int seconds) {
 namespace banjo {
 
 void CodegenChecksInit() {
+  g_rex_cas_census = REXCVAR_GET(banjo_diag_runtime_census) ? 1 : 0;  // renut-ultimate (2026-11-14, port 140)
   g_rex_indirect_census = REXCVAR_GET(banjo_diag_indirect_census).empty() ? 0 : 1;
   if (g_rex_indirect_census) {
     REXLOG_INFO("[census] indirect calls: every tagged call site reports its target; the table goes to {} with each "

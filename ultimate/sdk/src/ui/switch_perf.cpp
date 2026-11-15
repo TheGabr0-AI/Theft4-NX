@@ -134,6 +134,12 @@ struct Slot {
   // sasrt-nx (2026-11-09; port 58, the guest threads' 16 MB host stacks: ~500 MB of heap in SASRT): the deepest the
   // sampled sp has been below the top of its stack mapping (svcQueryMemory of sp), since the slot's thread registered.
   std::atomic<u64> stack_deepest{0};
+  // blur-nx (2026-11-13, M-44 of Blur's docs/cpu-moonshots-50-1113.md; the census of #34 in docs/cpu-near-exact-50-1113.md):
+  // the thread's svcSleepThread calls by kind, written by the thread itself (its slot found once, a thread_local), read
+  // by the report: yields (0, -1, -2), short sleeps (up to 1 ms) and the ticks spent inside them, longer sleeps.
+  std::atomic<u64> yields{0}, sleeps{0}, sleep_ticks{0}, long_sleeps{0};
+  u64 last_yields = 0, last_sleeps = 0, last_sleep_ticks = 0, last_long = 0;  // the profiler thread's
+  double yields_s = 0.0, sleeps_s = 0.0, sleep_ms = 0.0, long_s = 0.0;
 };
 Slot g_slots[kMaxThreads];
 std::atomic<u64> g_stack_deepest_all{0};  // port 58: the deepest of any thread so far
@@ -165,7 +171,30 @@ std::atomic<u32> g_num_hitches{0};
 Sample g_samples[kMaxSamples];
 size_t g_sample_count = 0;
 
-std::atomic<u64> g_counters[kCounterCount];
+// blur-nx (2026-11-13, cycle 3, M-39's kind: Blur's docs/cpu-moonshots-50-1113.md): the counters in kCounterShards sets
+// on lines of their own, a thread's set picked by its TLS slot (tpidrro_el0, one register read; libnx's slots are 0x200
+// bytes apart). They were one array every thread added to: the kernel's REX_SYS_COUNT sites alone ~20,000 times a
+// second in Blur's races (ObjectTable lookups 11,700, signals with nobody blocked 8,000), each add an exclusive
+// load/store loop on a line other cores had just written. Two threads that share a set still count right (atomic
+// adds); CounterRead sums the sets. The max counters (RexSwitchPerfMax, 23) are set 0's alone (nothing adds to them).
+constexpr unsigned kCounterShards = 8;
+struct alignas(64) CounterShard {
+  std::atomic<u64> c[kCounterCount];
+};
+CounterShard g_counter_shards[kCounterShards];
+
+inline std::atomic<u64>& CounterOf(unsigned id) {
+  const uintptr_t tls = reinterpret_cast<uintptr_t>(armGetTls());
+  return g_counter_shards[(tls >> 9) % kCounterShards].c[id];
+}
+
+u64 CounterRead(unsigned id) {
+  u64 sum = 0;
+  for (const CounterShard& shard : g_counter_shards) {
+    sum += shard.c[id].load(std::memory_order_relaxed);
+  }
+  return sum;
+}
 
 /*
  * Wrapped libnx calls (see the file header): how many, how much time inside and, where it makes
@@ -194,11 +223,25 @@ struct Calls {
   std::atomic<u64> ticks{0};
   std::atomic<u64> bytes{0};
 };
-Calls g_calls[kCallsCount];
+// blur-nx (2026-11-13, cycle 3, M-39's kind: Blur's docs/cpu-moonshots-50-1113.md): the counters in kCallShards sets, a
+// thread's set picked by its TLS slot (tpidrro_el0, one register read; libnx's slots are 0x200 bytes apart), each set on
+// lines of its own. They were one array every thread added to: svcSleepThread alone ~4,500 times a second from the job
+// workers' yields (each add an exclusive load/store loop on a line the other cores had just written). Two threads that
+// share a set still count right (the adds are atomic); the report sums the sets.
+constexpr unsigned kCallShards = 8;
+struct alignas(64) CallShard {
+  Calls calls[kCallsCount];
+};
+CallShard g_call_shards[kCallShards];
+
+inline Calls& CallsOf(unsigned id) {
+  const uintptr_t tls = reinterpret_cast<uintptr_t>(armGetTls());
+  return g_call_shards[(tls >> 9) % kCallShards].calls[id];
+}
 
 inline void Note(unsigned id, u64 from, u64 bytes = 0) {
   const u64 ticks = armGetSystemTick() - from;
-  Calls& l = g_calls[id];
+  Calls& l = CallsOf(id);
   l.n.fetch_add(1, std::memory_order_relaxed);
   l.ticks.fetch_add(ticks, std::memory_order_relaxed);
   if (bytes) {
@@ -296,6 +339,10 @@ void Register(Handle h) {
     if (s.handle.compare_exchange_strong(expected, h)) {
       s.name[0] = 0;
       s.stack_deepest.store(0, std::memory_order_relaxed);  // port 58
+      s.last_yields = s.yields.load(std::memory_order_relaxed);  // blur-nx (M-44): a reused slot's counts go on
+      s.last_sleeps = s.sleeps.load(std::memory_order_relaxed);
+      s.last_sleep_ticks = s.sleep_ticks.load(std::memory_order_relaxed);
+      s.last_long = s.long_sleeps.load(std::memory_order_relaxed);
       return;
     }
   }
@@ -424,7 +471,7 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
 
   u64 counters_now[kCounterCount];
   for (unsigned i = 0; i < kCounterCount; ++i) {
-    counters_now[i] = g_counters[i].load(std::memory_order_relaxed);
+    counters_now[i] = CounterRead(i);
   }
 
   // CPU of each thread over the interval, as % of one core.
@@ -449,6 +496,21 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
     }
     s.cpu = double(ticks - s.last_ticks) * 100.0 / double(elapsed_ticks);
     s.last_ticks = ticks;
+    {  // blur-nx (2026-11-13, M-44): the thread's sleeps and yields in the interval
+      const double seconds = double(elapsed_ticks) / double(armGetSystemTickFreq());
+      const u64 y = s.yields.load(std::memory_order_relaxed), n = s.sleeps.load(std::memory_order_relaxed);
+      const u64 t = s.sleep_ticks.load(std::memory_order_relaxed), l = s.long_sleeps.load(std::memory_order_relaxed);
+      s.yields_s = double(y - s.last_yields) / seconds;
+      s.sleeps_s = double(n - s.last_sleeps) / seconds;
+      s.sleep_ms = n != s.last_sleeps ? double(t - s.last_sleep_ticks) * 1000.0 / double(armGetSystemTickFreq()) /
+                                            double(n - s.last_sleeps)
+                                      : 0.0;
+      s.long_s = double(l - s.last_long) / seconds;
+      s.last_yields = y;
+      s.last_sleeps = n;
+      s.last_sleep_ticks = t;
+      s.last_long = l;
+    }
     /*
      * All threads are sampled, including those that use no CPU. In a hang caused by
      * a wait, the thread that matters is exactly that one: the stopped one.
@@ -501,7 +563,7 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
   // Mix clipping before conversion to 16 bits (21 samples above 1.0, 22 buffers with a peak of 0.98 or
   // more, 23 maximum peak of the interval in ten-thousandths) and the console mode, for the crackling
   // in handheld mode.
-  const u64 audio_peak = g_counters[23].exchange(0, std::memory_order_relaxed);
+  const u64 audio_peak = g_counter_shards[0].c[23].exchange(0, std::memory_order_relaxed);  // a max: set 0's
   std::fprintf(f,
                "     audio: %.0f client blocks mixed, %.0f requests without data, "
                "%.0f/%.0f audout buffers with non-zero PCM, %.0f saturated samples (above 1.0 before clipping), "
@@ -610,9 +672,12 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
     static u64 last[kCallsCount][3];
     double n[kCallsCount], ms[kCallsCount], mb[kCallsCount];
     for (unsigned i = 0; i < kCallsCount; ++i) {
-      const u64 vn = g_calls[i].n.load(std::memory_order_relaxed);
-      const u64 vt = g_calls[i].ticks.load(std::memory_order_relaxed);
-      const u64 vb = g_calls[i].bytes.load(std::memory_order_relaxed);
+      u64 vn = 0, vt = 0, vb = 0;  // blur-nx (2026-11-13): the sets summed (CallShard)
+      for (const CallShard& shard : g_call_shards) {
+        vn += shard.calls[i].n.load(std::memory_order_relaxed);
+        vt += shard.calls[i].ticks.load(std::memory_order_relaxed);
+        vb += shard.calls[i].bytes.load(std::memory_order_relaxed);
+      }
       n[i] = double(vn - last[i][0]) / seconds;
       ms[i] = double(vt - last[i][1]) * 1000.0 / double(tick_freq) / seconds;
       mb[i] = double(vb - last[i][2]) / 1048576.0 / seconds;
@@ -755,11 +820,13 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
     svcGetThreadCoreMask(&preferred, &mask, s.handle.load());
     std::fprintf(f,
                  "\n-- thread %" PRIu64 " \"%s\": CPU %.1f%% | priority 0x%X, preferred core %d, "
-                 "mask 0x%llX | stack %llu KB deepest sampled (all threads %llu KB)\n",
+                 "mask 0x%llX | stack %llu KB deepest sampled (all threads %llu KB) | per second: yields %.0f, "
+                 "sleeps up to 1 ms %.0f (%.2f ms each), longer sleeps %.1f\n",
                  tid, s.name[0] ? s.name : "?", s.cpu, static_cast<unsigned>(priority),
                  static_cast<int>(preferred), static_cast<unsigned long long>(mask),
                  static_cast<unsigned long long>(s.stack_deepest.load(std::memory_order_relaxed) >> 10),
-                 static_cast<unsigned long long>(g_stack_deepest_all.load(std::memory_order_relaxed) >> 10));
+                 static_cast<unsigned long long>(g_stack_deepest_all.load(std::memory_order_relaxed) >> 10),
+                 s.yields_s, s.sleeps_s, s.sleep_ms, s.long_s);
 
     auto lo = std::lower_bound(samples.begin(), samples.end(), i,
                                [](const Sample& a, size_t v) { return a.slot < v; });
@@ -906,7 +973,7 @@ struct TicOverlay {
 
   void Boot(u64 now) {
     tic = now;
-    presented = g_counters[0].load(std::memory_order_relaxed);
+    presented = CounterRead(0);
     // Publish what is known right away: the resolution is valid from the first instant (g_resolution
     // starts at 1280x720 and the game corrects it when choosing the video mode), so the overlay's RES
     // row can show up even before the first frame.
@@ -921,7 +988,7 @@ struct TicOverlay {
       return;
     }
     const double seconds = double(now - tic) / double(freq);
-    const u64 presented_now = g_counters[0].load(std::memory_order_relaxed);
+    const u64 presented_now = CounterRead(0);
     const double fps = seconds > 0.0 ? double(presented_now - presented) / seconds : 0.0;
     media[pos] = fps;
     pos = (pos + 1) % 10;
@@ -962,8 +1029,13 @@ struct TicOverlay {
 // generator's fp_moves_modeless, fp_mode_lookahead and fp_copy_pairs) hangs on that cost, which had never been
 // measured on the A57. Four loops of the same shape, the best of five runs each: empty, a read, a write of the
 // value already there, a write that toggles FZ (what a real switch does). Run once, for the report's header.
+// renut-ultimate (2026-11-13, from sasrt-nx's handoff of 2026-11-13): also FPSR's read and clear, and one exclusive
+// increment of a cache-resident word, relaxed (ldxr/stxr) and acquire/release (ldaxr/stlxr): what a guest lwarx/stwcx.
+// pair costs in each form (sasrt-nx's A57, handheld: 17.6 and 26.4 ns).
 struct FpcrCost {
   double read_ns, write_same_ns, write_toggle_ns;
+  double fpsr_read_ns = 0, fpsr_clear_ns = 0;
+  double llsc_relaxed_ns = 0, llsc_acqrel_ns = 0;
 };
 FpcrCost MeasureFpcrCost(u64 tick_freq) {
   constexpr int kCount = 200000;
@@ -982,6 +1054,19 @@ FpcrCost MeasureFpcrCost(u64 tick_freq) {
         } else if (kind == 3) {
           v ^= u64(1) << 24;  // FZ
           asm volatile("msr fpcr, %0" : : "r"(v));
+        } else if (kind == 4) {
+          asm volatile("mrs %0, fpsr" : "=r"(v));
+        } else if (kind == 5) {
+          asm volatile("msr fpsr, %0" : : "r"(u64(0)));
+        } else if (kind == 6 || kind == 7) {  // an exclusive increment, as a guest lwarx/stwcx.
+          static u32 word = 0;
+          u32 t, fail;
+          if (kind == 6)
+            asm volatile("1: ldxr %w0, [%2]\n add %w0, %w0, #1\n stxr %w1, %w0, [%2]\n cbnz %w1, 1b"
+                         : "=&r"(t), "=&r"(fail) : "r"(&word) : "memory");
+          else
+            asm volatile("1: ldaxr %w0, [%2]\n add %w0, %w0, #1\n stlxr %w1, %w0, [%2]\n cbnz %w1, 1b"
+                         : "=&r"(t), "=&r"(fail) : "r"(&word) : "memory");
         } else {
           asm volatile("" : "+r"(v));
         }
@@ -993,7 +1078,15 @@ FpcrCost MeasureFpcrCost(u64 tick_freq) {
     return double(best) * 1e9 / double(tick_freq) / double(kCount);
   };
   const double empty = loop(0);
-  return {loop(1) - empty, loop(2) - empty, loop(3) - empty};
+  u64 fpsr_saved;
+  asm volatile("mrs %0, fpsr" : "=r"(fpsr_saved));
+  FpcrCost out{loop(1) - empty, loop(2) - empty, loop(3) - empty};
+  out.fpsr_read_ns = loop(4) - empty;
+  out.fpsr_clear_ns = loop(5) - empty;
+  out.llsc_relaxed_ns = loop(6) - empty;
+  out.llsc_acqrel_ns = loop(7) - empty;
+  asm volatile("msr fpsr, %0" : : "r"(fpsr_saved));
+  return out;
 }
 
 void ProfilerMain(void*) {
@@ -1031,7 +1124,7 @@ void ProfilerMain(void*) {
 
   u64 counters_last[kCounterCount]{};
   for (unsigned i = 0; i < kCounterCount; ++i) {
-    counters_last[i] = g_counters[i].load(std::memory_order_relaxed);
+    counters_last[i] = CounterRead(i);
   }
   if (FILE* f = std::fopen(ReportPath().c_str(), "w")) {
     std::fprintf(f, "image 0x%016" PRIx64 ", code up to 0x%016" PRIx64 "\n\n", g_base,
@@ -1040,8 +1133,11 @@ void ProfilerMain(void*) {
     const FpcrCost fpcr = MeasureFpcrCost(tick_freq);
     std::fprintf(f,
                  "FPCR on this CPU (per access, loop overhead taken off): read %.1f ns, write of the same value "
-                 "%.1f ns, write that toggles the flush mode %.1f ns (one cycle is 0.98 ns at 1020 MHz)\n",
-                 fpcr.read_ns, fpcr.write_same_ns, fpcr.write_toggle_ns);
+                 "%.1f ns, write that toggles the flush mode %.1f ns (one cycle is 0.98 ns at 1020 MHz); FPSR: read "
+                 "%.1f ns, write of zero %.1f ns; an exclusive increment: relaxed (ldxr/stxr) %.1f ns, acquire/release "
+                 "(ldaxr/stlxr) %.1f ns\n",
+                 fpcr.read_ns, fpcr.write_same_ns, fpcr.write_toggle_ns, fpcr.fpsr_read_ns, fpcr.fpsr_clear_ns,
+                 fpcr.llsc_relaxed_ns, fpcr.llsc_acqrel_ns);
     std::fclose(f);
   }
 
@@ -1202,7 +1298,7 @@ Result __wrap_threadClose(Thread* t) {
   return __real_threadClose(t);
 }
 
-/* libnx calls that cost IPC or walk memory. See g_calls. */
+/* libnx calls that cost IPC or walk memory. See CallShard. */
 Result __wrap_nvFenceWait(NvFence* f, s32 timeout_us) {
   const u64 from = armGetSystemTick();
   const Result rc = __real_nvFenceWait(f, timeout_us);
@@ -1280,10 +1376,40 @@ Result __wrap_bqDequeueBuffer(Binder* b, bool async, u32 width, u32 height, s32 
   return rc;
 }
 
+// blur-nx (2026-11-13, M-44): the calling thread's slot, found once (none: not registered, e.g. the main thread).
+Slot* CurrentSlot() {
+  thread_local size_t index = SIZE_MAX;
+  if (index == SIZE_MAX) [[unlikely]] {
+    const u32 h = threadGetCurHandle();
+    index = kMaxThreads;
+    for (size_t i = 0; i < kMaxThreads; ++i) {
+      if (g_slots[i].handle.load(std::memory_order_relaxed) == h) {
+        index = i;
+        break;
+      }
+    }
+  }
+  return index < kMaxThreads ? &g_slots[index] : nullptr;
+}
+
+void AddOwn(std::atomic<u64>& counter, u64 value) {  // one writer: a load and a store
+  counter.store(counter.load(std::memory_order_relaxed) + value, std::memory_order_relaxed);
+}
+
 void __wrap_svcSleepThread(s64 nano) {
   const u64 from = armGetSystemTick();
   __real_svcSleepThread(nano);
   Note(nano == 0 ? kSleep0 : nano < 0 ? kSleepYield : nano <= 1000000 ? kSleepShort : kSleepLong, from);
+  if (Slot* slot = CurrentSlot()) {  // blur-nx (2026-11-13, M-44): the thread's own counters
+    if (nano <= 0) {
+      AddOwn(slot->yields, 1);
+    } else if (nano <= 1000000) {
+      AddOwn(slot->sleeps, 1);
+      AddOwn(slot->sleep_ticks, armGetSystemTick() - from);
+    } else {
+      AddOwn(slot->long_sleeps, 1);
+    }
+  }
 }
 
 /*
@@ -1321,7 +1447,7 @@ void RexSwitchPerfIntervalSwap(unsigned vblanks) {
 
 void RexSwitchPerfCount(unsigned id) {
   if (id < kCounterCount) {
-    g_counters[id].fetch_add(1, std::memory_order_relaxed);
+    CounterOf(id).fetch_add(1, std::memory_order_relaxed);
   }
   if (id == 0) {
     // Counter 0 is presents. The console overlay clears the "alive" mark and the resolution mark and
@@ -1342,7 +1468,7 @@ void RexSwitchPerfCount(unsigned id) {
  */
 void RexSwitchPerfAdd(unsigned id, u64 value) {
   if (id < kCounterCount) {
-    g_counters[id].fetch_add(value, std::memory_order_relaxed);
+    CounterOf(id).fetch_add(value, std::memory_order_relaxed);
   }
 }
 
@@ -1351,8 +1477,9 @@ void RexSwitchPerfMax(unsigned id, u64 value) {
   if (id >= kCounterCount) {
     return;
   }
-  u64 actual = g_counters[id].load(std::memory_order_relaxed);
-  while (value > actual && !g_counters[id].compare_exchange_weak(actual, value, std::memory_order_relaxed)) {
+  std::atomic<u64>& max = g_counter_shards[0].c[id];  // blur-nx (2026-11-13): set 0's (CounterShard)
+  u64 actual = max.load(std::memory_order_relaxed);
+  while (value > actual && !max.compare_exchange_weak(actual, value, std::memory_order_relaxed)) {
   }
 }
 

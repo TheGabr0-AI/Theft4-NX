@@ -1246,7 +1246,7 @@ console coprono tutta la sagoma): il bilancio GPU si misura sulla console.
 **Prestazioni e audio dalla V-light (ferma nella stanza, 0x2D):** 28-30 fps; mixer 5,43-5,49 ms per blocco (mediana),
 ~100 % di un core, audio 83-86,5 % (V-post 89 %). Il thread del mixer, per funzione: router `sub_8216D7E0` 28,3 % (con il
 nativo del mix inline), `sub_828C2D28` 16,8 %, `sub_828C6740` 13,9 %, `sub_828C5A58` 11,0 %, `sub_82185E38` 7,6 %,
-`sub_828C7848` 6,6 % (non copiata), `sub_82178398` 4,3 %. Render thread ~37 % di un core (`DrawStateLocked` 25 %), thread
+`sub_828C7848` 6,6 % (una copia in place: il profilo la nomina `sub_828C7848`; U16), `sub_82178398` 4,3 %. Render thread ~37 % di un core (`DrawStateLocked` 25 %), thread
 principale ~55 %, worker `XThreadFFED0F60` ~27 %, decoder XMA ~26 %.
 
 **Prossima prova (una sola, da autorizzare):** pacchetto `u14`, la stessa run ferma nella stanza con la correzione accesa
@@ -1287,6 +1287,75 @@ la parte in più, specifica del deko3d, si misura con il profilo GPU per passagg
 consegnato, mixer 5,25 ms per blocco (finestre 60-240 s; U13 86,5 %, 5,43): coerente con gli fps più bassi, che lasciano
 più core al mixer; nessun cambio del codice audio, nessun merito attribuito.
 
+### 2.21 U15: i port 129-141 della base nel nostro albero; la prova console preparata (2026-11-15)
+
+**La base è andata avanti.** `ChanseyIsTheBest/renut_nx_ultimate_base` è passata da `8de5d51a` (U1) a `3e6ae026` (14
+novembre): quattro commit, port 129-141 (da sasrt-nx e blur-nx). Presi con lo strumento della base,
+`tools/ult_port_sync.py` (merge a tre vie per file di ogni commit di port: il cambiamento del port entra, il nostro resta):
+66 file puliti, 4 nuovi, **1 conflitto** (`banjo_hot_guest.cpp`, la riga di riepilogo della guardia: la nostra versione
+U12 e il conteggio del port 141, unite) e **3 file a mano** (quelli che il nostro albero tiene nella forma di GTA IV):
+- `d3d.h`: `kDeviceOffsetViewport = 0x3160`, l'offset del viewport che i nostri clear e le letture del viewport usano già
+  per GTA IV (`d3d_native_state.cpp`, `hooks/draw.cpp`, `hooks/state.cpp`);
+- `hooks/resource.cpp`: `ForgetInPlaceShader` anche nel nostro hook di `D3DResource_Destroy` (`sub_829D8D40`);
+- `hooks/shader.cpp`: la mappa degli shader in place (`InPlaceShaderEntry`, `NoteInPlaceShader`).
+
+| port | cosa | esatto | in U15 |
+|---|---|---|---|
+| 129 | deko3d: la decompressione differita della depth tiene lo stato della lista (un draw poteva restare senza target) | sì | sì |
+| 130 | una destinazione di resolve rifatta tiene la sonda delle parole della depth | sì | sì |
+| 131, 132 | diagnostiche dei resolve; `ult_port_sync.py` | - | sì (spente) |
+| 133 | CG-13, una sola modalità FPCR (`BLUR_FPCR_ONE_MODE`) | **no** (denormali scalari) | **spento** anche sulla Switch (`app/CMakeLists.txt`) |
+| 134 | cache XMA v2, un frame di recupero, apertura pigra del codec | sì | sì |
+| 135 | pompa audio a coppie (spenta), configurazione degli altoparlanti, censimento | sì | sì (spenti) |
+| 136 | passaggi di codegen (float loads a ogni modo, fmadds noti) | sì | **no**: serve una rigenerazione (U16) |
+| 137 | memo delle estensioni delle texture a due vie | sì | sì |
+| 138 | catture dei Begin*Vertices ristrette, resolve e clear in coda con il loro stato | sì | sì |
+| 139 | ricerche degli handle col lock della tabella, non quello globale | sì | sì |
+| 140 | salto delle scritture FPSCR uguali; store card per le viste (`BLUR_CARD_VIEWS_ONLY`); interruttori quasi esatti (spenti) | sì / no (spenti) | sì, tranne i quasi esatti |
+| 141 | la guardia prende un NaN diverso solo nel segno come uguale | sì | sì |
+
+`sdk/thirdparty` non è nel repository: il port 134 cambia anche `FFmpeg/libavcodec/wmaprodec.c` (copiato nel pacchetto,
+`u15-new-files/`; va aggiunto a `tools/ultimate/fetch_sdk_thirdparty.ps1` prima del commit dei port).
+
+**Verifica sul PC (D3D12, stesso salvataggio, build completa: le intestazioni SDK cambiano tutto il codice generato).**
+- Immagine: uguale a U14 (differenza media 0,4-1,9 su 255 sulle stesse catture).
+- **Cache XMA**: frame serviti dalla cache 6,5 % (v1, 50.977 decodificati in 100 s) -> **92,1 %** (4.071 decodificati);
+  `banjo_xma_frame_cache_chain_verify`: 53.824 frame confrontati con la catena completa, **0 diversi**.
+- Guardia densa delle copie (`banjo_hot_guard_calls=4000`, periodo 64, 200 s): 271 copie raggiunte, **0 differenze su
+  3.554.875 chiamate**, 0 NaN di solo segno; controlli del codice generato 0 differenze.
+- Render thread 3,82 -> 3,69 ms a frame (PC, indicativo).
+
+**Prova console preparata (non eseguita):** NRO `063dcbb7…`, pacchetto `out/console-runs/u15`. Due run brevi dalla stessa
+posizione di U14 (la cucina): **A** = il toml di U14 invariato (il confronto: fps, GPU, render thread, mixer, audio, CPU del
+decoder XMA); **P** = A più il profilo GPU per passaggio e per pixel shader (`renut_gpu_profile = 10`,
+`banjo_renut_diag_gpu_shaders`): separa il costo del ripristino dello stencil, dell'ambientale, delle luci e delle ombre
+sul deko3d (il +73 % di U14 contro il +19 % del PC).
+
+**Risultato sulla console (U15-A e U15-P, Erista, clock standard; NRO `063dcbb7…`).** Nessun `note.txt`; osservazioni
+dell'utente: prestazioni come U14, audio ancora robotico (forse un po' meglio), ombre che lampeggiano leggermente, l'alone
+della lampada sempre presente e a tratti spento, un triangolo luminoso più evidente. Le due run hanno di nuovo cambiato
+scena (stanza, cucina, strada, guida, un filmato nell'ufficio dei taxi): si confrontano le finestre con gli stessi draw a
+frame.
+
+| finestra (draw a frame) | U14: fps / render thread / GPU | U15-A: fps / render thread / GPU |
+|---|---|---|
+| cucina (~650) | 16,0 / 13,7 / 61,5 ms | 16,1 / 13,4 / 61,2 ms |
+| interno (~950) | 19,6-20,8 / 16,2-20,0 / 47-50 ms | 19,5-20,7 / 16,4-19,4 / 48-50 ms |
+| strada (3.200-4.700) | 8,3-9,3 / 45-50 / 48-59 ms | 7,7-10,3 / 46-62 / 38-65 ms |
+
+- **Prestazioni: nessuna differenza misurabile**, come percepito.
+- **CPU: il thread del decoder XMA scende da ~30 % a ~10 % di un core** in ogni finestra confrontabile (cache XMA v2:
+  94,2 % dei frame serviti, 2.639 decodificati contro 43.180 di U14). Il core liberato non cambia gli fps: in cucina il
+  limite è la GPU, in strada il render thread e il thread principale.
+- Audio: 89,8 % consegnato dai 60 s (U14 89,9 %), mixer 5,56 ms per blocco nell'interno (U14 5,56): **invariato**; il
+  salto delle scritture FPSCR (port 140) non si vede nel costo per blocco.
+- **U15-P, il profilo GPU per passaggio (la prima misura per passaggio sulla console):** in cucina 60,9 ms a frame, di cui
+  **25,6 ms nell'etichetta del copy shader `B3D105989610E354`**, che contiene i nove passaggi del ripristino dello stencil
+  (due ripristini a frame: ~12,8 ms l'uno; nell'interno, uno: 12,95 ms; sul PC 1,6 ms). Poi i resolve 6,1 ms, i volumi
+  delle luci senza pixel shader 3,8, le luci `23C88DA6` 2,9, l'ambientale `97AC30BA` 2,3, i resolve della depth 2,3, la
+  composizione `CC0C2F31` 2,2 ms. **Il +26 ms di U14 è il ripristino dello stencil a nove passaggi.**
+
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si
@@ -1324,3 +1393,4 @@ più core al mixer; nessun cambio del codice audio, nessun merito attribuito.
 | U12 | 2026-11-15 | (questo commit) | PC: 3 copie NaN escluse (gruppo 293), la guardia ripete le differenze di prefisso (0 differenze su 4.135.393 chiamate). Console (NRO `d3642faf…`): **prefetch del mix senza effetto misurabile, tolto** (5,32-5,42 ms per blocco, 85,8-87,3 %); fps di M0/M1 non confrontabili (percorsi diversi, M1 senza `pipeline_list.bin`); **post-processing uguale al PC, la scena HDR no** (manca l'ambientale). §2.18 |
 | U13 | 2026-11-15 | (questo commit) | Console V-light (NRO `3ae9d456…`): ingressi del passaggio ambientale `97AC30BA…` uguali al PC (costanti, texture, G-buffer). **Causa: il ripristino EDRAM della base lascia lo stencil 0, il gioco ci mette 0xFF**: l'ambientale (EQUAL 1) fallisce, le luci (NOTEQUAL 0xFF) coprono tutta la sagoma; regressione della migrazione rispetto a `6921903`. Sul PC due errori si compensavano (plume D3D12 con ref dello stencil sempre 0). Correzione: stencil ripristinato bit per bit (`gta4_renut_depth_restore_stencil`, accesa) + ref D3D12; PC: senza la correzione la stanza è nera come sulla console, con la correzione uguale al riferimento. Console da provare (`u14`). §2.19 |
 | U14 | 2026-11-15 | (questo commit) | Console (NRO `59481f7d…`): **luce ambientale corretta** con il ripristino dello stencil (§2.19); glitch rimasti: alone della lampada (disco bianco a bordo netto, a tratti assente; query di occlusione escluse) e ombre. Prima finestra a 650 draw: 16 fps, **GPU 61,5 ms** (U13 35,5), render thread 13,7 ms; PC: la correzione costa +19 % di GPU. Audio 91,4 % (meno contesa a fps più bassi, non codice). §2.20 |
+| U15 | 2026-11-15 | (questo commit) | I port 129-141 della base (`3e6ae026`, `ult_port_sync.py`; 1 conflitto, 3 file a mano; CG-13 spento; `BASE_COMMIT` -> `3e6ae026`). PC: cache XMA 6,5 -> 92 %, guardia 0 differenze. Console (NRO `063dcbb7…`): prestazioni e audio invariati, **thread XMA ~30 -> ~10 % di un core**; profilo GPU per passaggio: il ripristino dello stencil costa ~12,8 ms a ripristino (25,6 ms dei 60,9 in cucina). §2.21 |

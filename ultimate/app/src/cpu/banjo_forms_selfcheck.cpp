@@ -41,6 +41,7 @@
 #include <rex/ppc/vec_batch2.h>  // blur-nx (2026-11-11): the dot-product merges (VecBatch2 below)
 #include "hot/blur_swap.h"  // blur-nx (2026-11-12): word swaps for lane-wise natives (VecBatch3 below)
 #include <rex/ppc/fma_single.h>  // blur-nx (2026-11-12): fmadds rounded once (FmaSingle below)
+#include <rex/ppc/float_be.h>  // blur-nx (2026-11-13, M-23): singles stored and loaded in the vector unit
 
 namespace {
 
@@ -185,6 +186,24 @@ void FloatCopies(Tally& t) {
     t.Expect("SingleToDoublePure", in, std::bit_cast<uint64_t>(rex::ppc::SingleToDoublePure(Opaque(c.single))),
              c.as_double);
     t.Expect("QuietSingleBits", in, rex::ppc::QuietSingleBits(Opaque(c.single)), c.stored);
+  }
+}
+
+// blur-nx (2026-11-13, M-23): the vector-unit single store and load (rex/ppc/float_be.h) against the integer forms:
+// the same four bytes, every class of value (zeros, normals, denormals, infinities, quiet and signalling NaNs).
+void FloatBigEndian(Tally& t) {
+  uint32_t bits[] = {0x00000000u, 0x80000000u, 0x3F800000u, 0xBF800000u, 0x00000001u, 0x807FFFFFu, 0x00800000u,
+                     0x7F7FFFFFu, 0x7F800000u, 0xFF800000u, 0x7FC00001u, 0x7F800001u, 0xFFA00000u, 0x12345678u,
+                     0xDEADBEEFu, 0x3EAAAAABu};
+  for (uint32_t b : bits) {
+    const std::string in = fmt::format("{:08X}", b);
+    uint8_t out[4];
+    rex::ppc::FloatToBigEndian(out, std::bit_cast<float>(Opaque(b)));
+    uint32_t got;
+    std::memcpy(&got, out, 4);
+    t.Expect("FloatToBigEndian", in, got, __builtin_bswap32(b));
+    const uint32_t be = __builtin_bswap32(Opaque(b));
+    t.Expect("FloatFromBigEndian", in, std::bit_cast<uint32_t>(rex::ppc::FloatFromBigEndian(&be)), b);
   }
 }
 
@@ -506,6 +525,10 @@ void FmaSingle(Tally& t) {
     const double got = rex::ppc::FmaddsSingle(da, db, dc);
     const std::string in = fmt::format("{:08X} {:08X} {:08X}", std::bit_cast<uint32_t>(a), std::bit_cast<uint32_t>(b),
                                        std::bit_cast<uint32_t>(c));
+    // blur-nx (2026-11-13, M-24): the known-single form (three single inputs) against the tested one, bit for bit
+    // (NaN payloads too: the same instruction on the same operands).
+    t.Expect("FmaddsSingleKnown", in, std::bit_cast<uint64_t>(rex::ppc::FmaddsSingleKnown(da, db, dc)),
+             std::bit_cast<uint64_t>(got));
     if constexpr (sizeof(long double) > 8) {
       const long double exact = (long double)a * (long double)b + (long double)c;
       const float want = float(exact);
@@ -639,6 +662,7 @@ void FormsSelfCheck() {
   Conversions(t);
   Divisions(t);
   FloatCopies(t);
+  FloatBigEndian(t);  // blur-nx (2026-11-13, M-23)
   VectorHelpers(t);
   VecLanes(t);
   VecBatch1(t);

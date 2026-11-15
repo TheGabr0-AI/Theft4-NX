@@ -36,8 +36,13 @@
 //   whose run was then never marked.
 // BLUR_CARD_RUN_ALL_PAGES (compile time): port 74's macros as they were.
 [[gnu::always_inline]] static inline void rex_card_mark_(uint8_t* base, u32 page) {
+  // blur-nx (2026-11-13, #38 / #66's census, PC only): 26 the copies' flushes with a run pending (the 16:05 census
+  // counted every flush, an empty one too), 33 of them on a page Renut reads, 34 of those that wrote the card.
+  REX_NX_CENSUS_IF(page != 0x100000u, 26);
   if (page - 0x9FFFFu <= 0x60000u || page - 0x7EFFFu <= 0x1000u) {
     u8* const card = (u8*)(base + page);
+    REX_NX_CENSUS(33);
+    REX_NX_CENSUS_IF(*card != 0, 34);
     if (*card) *card = 0;
   }
 }

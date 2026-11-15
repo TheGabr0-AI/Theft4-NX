@@ -181,6 +181,17 @@ def main():
     # address, REX_STACK_FWD_VERIFY compares with the real load in the hooked builds). Before the copies, so they take
     # the same form. REX_STACK_FWD_OFF (compile time): the original loads.
     run(tool('stack_forward.py'), '--gen', gen)
+    # blur-nx (2026-11-13, M-23 of docs/cpu-moonshots-50-1113.md): float_loads.py again, now with the any-mode pairs
+    # (CG-13: the helpers are the plain conversions, so their loads and stores go through the vector unit too), and the
+    # plain single loads the steps above made after its first run (single_floats.py turns proven any-mode loads into
+    # plain ones: 10,239 sites were left in the integer form). After ro_constants_cfg.py and dead_ctx_defs.py, before
+    # the copies (so they take the same forms) and store_cards.py (which marks the new stores' cards). renut-ultimate
+    # (2026-11-13): after port 121's stack_forward.py, which then sees the stores as port 121 measured them.
+    run(tool('float_loads.py'), '--gen', gen, '--any-mode')
+    # blur-nx (2026-11-13, docs/cpu-near-exact-50-1113.md, the user's choice of near-exact ideas): the forms a near-exact
+    # switch changes as helpers whose default is the generator's expression (#42: vmaxfp / vminfp as rex::ppc::VMaxFp /
+    # VMinFp, sdk/include/rex/ppc/diet_ops.h). Before the copies, so they take the same forms.
+    run(tool('near_exact.py'), '--gen', gen)
     if not scratch:
         # sasrt-nx (2026-11-12, its calling-convention stages 1-1d; port 121): whole-program liveness with the vector
         # registers, right before the copies are made from this same text (localize_native.py checks the stamp):
@@ -208,7 +219,11 @@ def main():
     # on the whole-program proof that callees return with r1 unchanged. REX_R1_CHECK (PC verify) tests the assumed
     # calls, REX_R1_STRICT reloads after them, REX_R1_LOCAL_OFF is the original code.
     run(tool('r1_preserve.py'), '--gen', gen, '--out', os.path.join(proofs, 'strict'))
-    run(tool('r1_preserve.py'), '--gen', gen, '--out', os.path.join(proofs, 'assumed'), '--indirect-preserve')
+    # blur-nx (2026-11-13, near-exact #9): with BLUR_NX_R1_ASSUME=1 in the environment, the assumed proof also takes a
+    # function as preserving unless its own body fails (r1_preserve.py --near-exact); the strict one stays a proof, so
+    # REX_R1_CHECK (PC) tests every call the assumption covers.
+    run(tool('r1_preserve.py'), '--gen', gen, '--out', os.path.join(proofs, 'assumed'), '--indirect-preserve',
+        *(['--near-exact'] if os.environ.get('BLUR_NX_R1_ASSUME') == '1' else []))
     run(tool('r1_local.py'), '--gen', gen, '--proof-strict', os.path.join(proofs, 'strict', 'r1_preserve.json'),
         '--proof-assumed', os.path.join(proofs, 'assumed', 'r1_preserve.json'),
         '--only-file', os.path.join(APP, 'config', 'r1_local_choice.json'))

@@ -1698,14 +1698,27 @@ namespace plume {
             return;
         t->depthPending = false;
         flushBarriers();
+        // renut-ultimate (2026-11-13, sasrt-nx's finding merging port 45): as resolveUnboundDepth. The texture used and
+        // written now (trackedTargetWait, trackedReadWait: the read's barrier recorded next waits for this decompression);
+        // work since the last fragment wait (leanBarrierSkip); the bound targets' serial dropped (sameTargetsKept: with no
+        // framebuffer to bind again, or rebind false, the GPU has only this view bound, and the next setFramebuffer of the
+        // last bound framebuffer skipped its bind: draws with no targets); the image known decompressed
+        // (preciseDepthResolve).
+        markUsed(t);
+        if (g_deko3dTrace)
+            Deko3DTraceToken("Z");
         dkCmdBufBindRenderTargets(cmd, nullptr, 0, &t->depthPendingView);
+        boundTargetsSerial = 0;
+        workSinceFragmentWait = true;
         dkCmdBufResolveDepthValues(cmd);
+        t->depthUnresolved = false;
         if (rebind) {
             if (framebuffer) {
                 const DkImageView *colors[8];
                 for (uint32_t i = 0; i < framebuffer->colorCount; i++)
                     colors[i] = &framebuffer->colors[i];
                 dkCmdBufBindRenderTargets(cmd, colors, framebuffer->colorCount, framebuffer->hasDepth ? &framebuffer->depth : nullptr);
+                boundTargetsSerial = framebuffer->serial;
             }
             else
                 dkCmdBufBindRenderTargets(cmd, nullptr, 0, nullptr);

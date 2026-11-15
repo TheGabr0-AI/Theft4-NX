@@ -88,6 +88,16 @@ REXCVAR_DECLARE(bool, banjo_cpu_verify);
 // atomic or outside call). Counted and logged only: a hand-written native in front of a callee can make the two forms
 // stop at different points, and another thread can change a counter between the two runs (sasrt-nx's console: 6 of
 // 5.07 million differed, one byte each), so a difference here does not switch the copy off.
+// blur-nx (2026-11-13, #69 of docs/cpu-near-exact-50-1113.md's second wave): the guard's register compare takes a NaN
+// that differs only in its sign bit (a float register, or a vector lane) as the same. The sign of a NaN an arithmetic
+// operation makes is the compiler's choice (a negation folded into a multiply-add or not), so the copy and the generated
+// code can differ there with the same source: the 4 differences of 2026-11-13's guard race (frsqrte of 0, then inf x 0).
+// Counted apart in the [hot] summary. Memory is still compared byte for byte.
+REXCVAR_DEFINE_BOOL(banjo_cpu_verify_nan_sign, true, "Banjo/Enhancements",
+                    "The guard: a register NaN differing only in its sign bit counts as the same (counted apart); "
+                    "false: every bit compared")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+std::atomic<uint64_t> g_guard_nan_sign_only{0};
 REXCVAR_DEFINE_BOOL(banjo_hot_guard_prefix, true, "Banjo/Enhancements",
                     "The guard: when the copy and the original both stop (an atomic or a call outside the copy), compare "
                     "the stores each made before it (counted in the [hot] summary; a difference is logged, not acted on)")
@@ -402,7 +412,22 @@ const PPCCRRegister* Cr(const PPCContext& c, int n) { return &c.cr0 + n; }  // c
 
 // First difference between two contexts (every register but the hook's skip set), or an empty string. a: the copy;
 // b: the original.
+// blur-nx (2026-11-13, #69, banjo_cpu_verify_nan_sign): x and y are the same NaN but for the sign bit.
+bool NanSignOnly64(uint64_t x, uint64_t y) {
+  return (x ^ y) == 0x8000000000000000ull && (x & 0x7FF0000000000000ull) == 0x7FF0000000000000ull &&
+         (x & 0x000FFFFFFFFFFFFFull) != 0;
+}
+bool NanSignOnly128(const PPCVRegister& x, const PPCVRegister& y) {
+  for (int k = 0; k < 4; ++k) {
+    const uint32_t a = x.u32[k], b = y.u32[k];
+    if (a != b && !((a ^ b) == 0x80000000u && (a & 0x7F800000u) == 0x7F800000u && (a & 0x007FFFFFu) != 0))
+      return false;
+  }
+  return true;
+}
+
 std::string CompareRegisters(const PPCContext& a, const PPCContext& b, const RegSkip& skip) {
+  static const bool nan_sign = REXCVAR_GET(banjo_cpu_verify_nan_sign);
   for (int i = 0; i < 32; ++i) {
     if ((skip.gpr >> i) & 1) continue;
     if (Gpr(a, i)->u64 != Gpr(b, i)->u64)
@@ -410,12 +435,21 @@ std::string CompareRegisters(const PPCContext& a, const PPCContext& b, const Reg
   }
   for (int i = 0; i < 32; ++i) {
     if ((skip.fpr >> i) & 1) continue;
-    if (Fpr(a, i)->u64 != Fpr(b, i)->u64)
+    if (Fpr(a, i)->u64 != Fpr(b, i)->u64) {
+      if (nan_sign && NanSignOnly64(Fpr(a, i)->u64, Fpr(b, i)->u64)) {
+        g_guard_nan_sign_only.fetch_add(1, std::memory_order_relaxed);
+        continue;
+      }
       return fmt::format("f{} copy={:#018x} original={:#018x}", i, Fpr(a, i)->u64, Fpr(b, i)->u64);
+    }
   }
   for (int i = 0; i < 128; ++i) {
     if ((skip.vr[i >> 6] >> (i & 63)) & 1) continue;
     if (std::memcmp(Vr(a, i)->u8, Vr(b, i)->u8, 16) != 0) {
+      if (nan_sign && NanSignOnly128(*Vr(a, i), *Vr(b, i))) {
+        g_guard_nan_sign_only.fetch_add(1, std::memory_order_relaxed);
+        continue;
+      }
       const auto* x = Vr(a, i)->u32;
       const auto* y = Vr(b, i)->u32;
       return fmt::format("v{} copy={:08x}{:08x}{:08x}{:08x} original={:08x}{:08x}{:08x}{:08x}", i, x[0], x[1], x[2],
@@ -1192,10 +1226,12 @@ void Report() {
   REXLOG_INFO("[hot] native copies: {} reached, {} on ({} direct, no guard); bulk copies (banjo_cpu_native_bulk {}): {} "
               "of {} reached, {} on; {} calls compared so far, {} not comparable ({} of them stopped in both forms "
               "with the same stores before the stop, {} not in {} passes in a row, {} more not when made again), {} "
-              "differed once and not when repeated, differences: {}{}",
+              "differed once and not when repeated, differences: {} (registers that differed only in a NaN's sign, "
+              "taken as the same: {}){}",
               reached, on, direct, REXCVAR_GET(banjo_cpu_native_bulk) ? "on" : "off", bulk_reached, bulk_total, bulk_on,
               compared, not_comparable, prefix_equal, prefix_differ, kGuardPasses, prefix_not_repeated, not_repeated,
               differences,
+              g_guard_nan_sign_only.load(std::memory_order_relaxed),  // blur-nx (2026-11-13, #69)
               // port 78, its idea 27: a build without the guard's forms compares nothing, whatever the keys say.
               BANJO_HOT_GUARD_FORMS ? "" : " (this build has no guard forms, SASRT_HOT_GUARD_FORMS OFF: nothing compared)");
 #endif  // BANJO_HOT_IN_PLACE

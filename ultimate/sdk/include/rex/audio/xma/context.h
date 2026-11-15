@@ -340,13 +340,34 @@ class XmaContext {
   bool TraceOn();
   void NoteStored(const uint8_t* context_ptr);
 
-  // banjo-nx (2026-10-27, #4 of the CPU-gap table: banjo_xma_frame_cache, xma_context.cpp). The frames given to the codec
-  // since it was last opened, as a node of the shared cache (0: not known, nothing cached until the codec is opened
-  // again), and the cached frames answered since that the codec has not decoded yet (decoded before the next frame
-  // the cache cannot answer).
-  uint64_t cache_node_ = 0;
-  std::vector<uint64_t> cache_pending_;
+  // banjo-nx (2026-10-27, #4 of the CPU-gap table: banjo_xma_frame_cache, xma_context.cpp, DecodeFrame). blur-nx
+  // (2026-11-13, M-02 and M-09 of docs/cpu-moonshots-50-1113.md: cache v2, keyed by (format, previous packet,
+  // packet)): the context's previous frame since its codec was opened (kFresh: none; kUnknown: after an error, until
+  // the codec is opened again, nothing keyed), a copy of its packet with FFmpeg's zero padding (the key's compare and
+  // the catch-up's packet) and its hash, and whether the codec is behind by it (the cache answered it: M-01's
+  // one-frame catch-up decodes it before the next frame the cache cannot answer).
+  enum class CachePrev : uint8_t { kUnknown, kFresh, kKnown };
+  CachePrev cache_prev_ = CachePrev::kUnknown;
+  bool cache_behind_ = false;
+  uint32_t cache_prev_size_ = 0;
+  uint64_t cache_prev_hash_ = 0;
+  std::array<uint8_t, 1 + 4096 + 64> cache_prev_packet_;  // (xma_frame_'s size and AV_INPUT_BUFFER_PADDING_SIZE)
+  void CacheKeepPrev(const uint8_t* data, uint32_t size, uint64_t hash);
+  // blur-nx (2026-11-13, M-05 lazy open, xma_context.cpp PrepareDecoder): the format of the codec (0: none yet, or a
+  // new sound: ResetDecoderState), whether it still has to be opened fresh for it (OpenCodec, which counts the opens
+  // for the 10 s report), and an open that failed in DecodeFrame (ProcessFrame's error_status 4).
+  int codec_rate_ = 0;
+  int codec_channels_ = 0;
+  bool codec_stale_ = false;
+  bool codec_open_failed_ = false;
+  bool OpenCodec();
   bool DecodeFrame(int prepared, int sample_rate, bool stereo);
+  // blur-nx (2026-11-13, M-01's proof: banjo_xma_frame_cache_chain_verify): a second codec decoding every frame of
+  // the context (the full chain), whose samples every frame the first one decodes or the cache answers is compared
+  // with.
+  AVCodecContext* chain_context_ = nullptr;
+  AVFrame* chain_frame_ = nullptr;
+  std::array<uint8_t, kBytesPerFrameChannel * 2> chain_raw_;
 
 };
 

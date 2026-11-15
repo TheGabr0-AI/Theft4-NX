@@ -494,7 +494,7 @@ void WaitForFrameStart() {
   // the game thread waiting, not its work: frame_stats' CPU time (the FPS overlay's, and sasrt_dynamic_cpu_aware's
   // budget, port 52) leaves it out. It had counted it, so a paced game's CPU side was its whole frame.
   renut::frame_stats::OnGameThreadWait(
-      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waiting).count());
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waiting).count(), 2);
 }
 
 bool QueueDrainOn() {

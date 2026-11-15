@@ -81,6 +81,12 @@ REXCVAR_DEFINE_STRING(switch_thread_cores, "", "Threading",
                       "NAME_PREFIX=MASK (bits 0-3 = cores 0-3, within the process's cores; the lowest core preferred). "
                       "Example: \"JQ Worker 3=0xC\". Empty: no change")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// blur-nx (2026-11-13, #60 of Blur's docs/cpu-near-exact-50-1113.md; timing only): see RexSwitchApplyNamedPriority.
+REXCVAR_DEFINE_STRING(switch_yield_backoff_exempt, "", "Threading",
+                      "Named threads that never take switch_yield_backoff's sleep (a comma-separated list of name "
+                      "prefixes, set when a thread takes its name): a frame-chain thread polling for a job keeps "
+                      "yielding instead of sleeping (~1 ms on Horizon). Example: \"Game Master,JQ Worker 0\". Empty: none")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(banjo_system_core_test, false, "Banjo/Debug",
                     "Test of banjo_system_core's layout without a four-core launch: the process's highest core (2 with "
                     "the usual three) is treated as the system core, so the moves, the hooks and the mask wrap run in "
@@ -722,6 +728,7 @@ struct NamedValue {
 };
 std::once_flag g_named_once;
 std::vector<NamedValue> g_named_priority, g_named_cores;
+std::vector<std::string> g_named_exempt;  // blur-nx (2026-11-13, #60): switch_yield_backoff_exempt's prefixes
 std::atomic<uint32_t> g_named_applied{0};
 
 // "PREFIX=VALUE,PREFIX=VALUE": each value read by strtol (0x.. hex); entries outside [lo, hi] are dropped.
@@ -748,6 +755,18 @@ void ParseNamedTables() {
   // An application's priorities (its NPDM: 0x1C-0x3B for the usual one); the audio threads sit at 0x2A-0x2D.
   ParseNamed(REXCVAR_GET(switch_thread_priorities), 0x1C, 0x3B, g_named_priority);
   ParseNamed(REXCVAR_GET(switch_thread_cores), 0x1, 0xF, g_named_cores);
+  // blur-nx (2026-11-13, #60): "PREFIX,PREFIX" (blanks around each trimmed).
+  const std::string exempt = REXCVAR_GET(switch_yield_backoff_exempt);
+  size_t at = 0;
+  while (at < exempt.size()) {
+    size_t end = exempt.find(',', at);
+    if (end == std::string::npos) end = exempt.size();
+    size_t a = at, b = end;
+    while (a < b && exempt[a] == ' ') ++a;
+    while (b > a && exempt[b - 1] == ' ') --b;
+    if (b > a) g_named_exempt.push_back(exempt.substr(a, b - a));
+    at = end + 1;
+  }
 }
 
 const NamedValue* FindNamed(const std::vector<NamedValue>& table, const char* name) {
@@ -759,11 +778,19 @@ const NamedValue* FindNamed(const std::vector<NamedValue>& table, const char* na
 
 extern "C" {
 
+// blur-nx (2026-11-13, #60): the calling thread is exempt from the yield backoff (MaybeYield reads it).
+thread_local bool g_rex_yield_backoff_exempt = false;
+
 int RexSwitchApplyNamedPriority(unsigned handle, const char* name) {
   if (!handle || !name) return -1;
   std::call_once(g_named_once, ParseNamedTables);
+  // blur-nx (2026-11-13, #60): switch_yield_backoff_exempt, for the thread naming itself.
+  if (!g_named_exempt.empty() && handle == threadGetCurHandle()) {
+    for (const std::string& prefix : g_named_exempt)
+      if (std::strncmp(name, prefix.c_str(), prefix.size()) == 0) g_rex_yield_backoff_exempt = true;
+  }
   if (g_named_priority.empty() && g_named_cores.empty()) return -1;
-  int result = -1;
+  int result = -1;  // (the exemption above needs no table of these)
   if (const NamedValue* c = FindNamed(g_named_cores, name)) {
     const u32 mask = u32(c->value) & RexSwitchProcessCoreMask();
     if (mask != 0 && R_SUCCEEDED(svcSetThreadCoreMask(handle, __builtin_ctz(mask), mask)))

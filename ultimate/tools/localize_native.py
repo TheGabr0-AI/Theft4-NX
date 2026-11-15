@@ -174,7 +174,23 @@ def live_out_keep(name):
 BULK_SLOT = 9999  # past PPCContext::host_counters: the guard's countdown is the hook's own (banjo_hot_guest.h)
 HAND = os.path.join(APP, 'src', 'cpu', 'hot', 'hand.txt')
 IMAGE_BASE = 0x82000000
-INDEX_FORMAT = 9  # raise when summarise() changes: the cached index is rebuilt (5: carded vector stores; 6, 7: inline leaves; 8: r1 mirror, 2026-10-23; 9: atomics, sasrt-nx 2026-11-10)
+INDEX_FORMAT = 10  # raise when summarise() changes: the cached index is rebuilt (5: carded vector stores; 6, 7: inline leaves; 8: r1 mirror, 2026-10-23; 9: atomics, sasrt-nx 2026-11-10; 10: promoted fallbacks counted, blur-nx 2026-11-13)
+# blur-nx (2026-11-13, M-25 of docs/cpu-moonshots-50-1113.md and its audit): a promoted indirect call (tools/
+# indirect_calls.py: `if (REX_PROMOTED_IS(ctr, T)) { sub_T(ctx, base); } else { REX_CALL_INDIRECT_FUNC_AT(..); }`) no
+# longer keeps a function out of a closure: its fallback is an open call like any other (the copy's running form
+# hands over every register around it, the logged forms stop there), and its guarded direct call is a call of T,
+# which comes along when T's own tree qualifies. Before, every function with such a site counted as making an indirect
+# call, and the promoted targets were real calls from the copies: of the copies' 623 M promoted calls in the PC
+# census, the targets of 514 M (82.5 %) have trees closed but for promoted fallbacks. A member's reach stays everything
+# when it has a fallback (Reach.own): the hand-over around the call is the same; the call, the target's entry and
+# return and the context round trip go when it is inlined.
+# 2026-11-13, cycle 2's PC guard runs: OFF unless BLUR_LOCALIZE_PROMOTED_MEMBERS=1. With it on, guarded boots hung
+# before boot.pak in 6 of 8 runs (all 203 copies it changed switched off at run time: 2 of 2 booted; a bisect was misled
+# by the hang being random), and the light guard found copies of promoted targets writing back r12 where the original
+# leaves it (sub_82507988, sub_825087A0; harmless by the calling convention, but the guard turns them off). Not
+# verifiable as it stands: parked.
+PROMOTED_MEMBERS = os.environ.get('BLUR_LOCALIZE_PROMOTED_MEMBERS', '0') == '1'
+PROMOTED_SITE = re.compile(r'^\tif \(REX_PROMOTED_IS\(')
 
 REG = re.compile(r'\bctx\.(r\d+|f\d+|v\d+|cr\d|ctr|xer|reserved)\b')
 DEF = re.compile(r'^DEFINE_REX_FUNC\((\w+)\) \{$')
@@ -250,7 +266,36 @@ LOOP_LABEL = re.compile(r'^(loc_[0-9A-F]+):\s*$')
 CTR_DEC = re.compile(r'^\t--(?:ctx\.)?ctr\.u64;$')
 CTR_BACK = re.compile(r'^\tif \((?:ctx\.)?ctr\.u32 != 0\) goto (loc_[0-9A-F]+);$')
 CTR_WRITE = re.compile(r'\b(?:ctx\.)?ctr\.(?:u|s)(?:32|64) = ')
-LOOP_STATS = [0, 0]  # idea 52 prefetches, idea 60 barriers left out
+LOOP_STATS = [0, 0, 0]  # idea 52 prefetches, idea 60 barriers left out, M-19 rules applied
+# blur-nx (2026-11-13, M-19 of docs/cpu-moonshots-50-1113.md and its audit): hand-named prefetches. Each line of
+# app/src/cpu/hot/prefetch_rules.txt, `<function> <label> <statement>`, puts the statement right after that label in
+# the copy's running form (and its logged twin, the same text; not in the original statements' form), written in the
+# generated code's names (ctx.<register> becomes the copy's local, as everywhere). For the node loops whose callee first
+# touches the next node's object cold: its first lines, prefetched one iteration ahead (REX_PREFETCH_GUEST cannot fault;
+# a load the statement makes must be one the guest could make there, e.g. the next entry while one is left). A rule of a
+# function that is copied but no longer has the label stops the tool (the guest code under the rule changed).
+# SASRT_LOCALIZE_PREFETCH=0: none written.
+PREFETCH_RULES_FILE = os.path.join(APP, 'src', 'cpu', 'hot', 'prefetch_rules.txt')
+
+
+def load_prefetch_rules():
+    rules = {}
+    if not os.path.isfile(PREFETCH_RULES_FILE):
+        return rules
+    for number, raw in enumerate(open(PREFETCH_RULES_FILE, encoding='utf-8'), 1):
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        parts = line.split(None, 2)
+        if len(parts) != 3 or not re.fullmatch(r'(?:sub_)?[0-9A-Fa-f]{8}', parts[0]) or \
+                not re.fullmatch(r'loc_[0-9A-F]{8}', parts[1]) or not parts[2].endswith(('}', ';')):
+            sys.exit(f'localize_native: prefetch_rules.txt:{number}: not `<function> <label> <statement>`: {line}')
+        name = parts[0] if parts[0].startswith('sub_') else 'sub_' + parts[0].upper()
+        rules.setdefault(name, {}).setdefault(parts[1], []).append(parts[2])
+    return rules
+
+
+PREFETCH_RULES = load_prefetch_rules() if PREFETCH else {}
 CONST_ARGS = os.environ.get('SASRT_LOCALIZE_CONST_ARGS', '1') != '0'  # port 74, its idea 34 (localize())
 CONST_ARG_FORCED = [0]
 
@@ -429,6 +474,7 @@ def summarise(name, lines):
     callees = []
     unknown = 0
     traps = 0
+    promoted = 0  # blur-nx (2026-11-13, M-25): of `unknown`, the fallbacks of promoted sites
     for l in lines:
         for m in CALL.finditer(l):
             if m.group(1) is None:
@@ -436,6 +482,8 @@ def summarise(name, lines):
                     traps += 1
                 else:
                     unknown += 1
+                    if PROMOTED_SITE.match(l):
+                        promoted += 1
             elif m.group(1) not in callees:
                 callees.append(m.group(1))
     if traps:
@@ -454,7 +502,7 @@ def summarise(name, lines):
                                          (ATOMICS and (ATOMIC_LOAD.match(l) or ATOMIC_CAS.match(l)))):
             special.append('raw guest access')
     return {'regs': regs, 'written': written_registers(regs, text), 'callees': callees, 'unknown': unknown,
-            'traps': traps, 'special': sorted(set(special)), 'lines': len(lines)}
+            'promoted': promoted, 'traps': traps, 'special': sorted(set(special)), 'lines': len(lines)}
 
 
 class Index:
@@ -590,6 +638,38 @@ def skip_literal(regs):
             % (gpr, fpr, vr[0], vr[1], cr, 'true' if ctr else 'false', 'true' if xer else 'false'))
 
 
+def strip_windows_only(text):
+    """blur-nx (2026-11-13, M-28 of docs/cpu-moonshots-50-1113.md): the text without its Windows-only branches (#if
+    defined(_WIN32) / #ifdef _WIN32 up to the matching #else, #elif or #endif; an #else branch is kept, the Switch
+    compiles it). Code the Switch never compiles hooks nothing there. In Blur only blur_write_watch.cpp/.h has such
+    branches naming guest addresses: a PC diagnostic that wraps sub_8216AE98, sub_8216CA28 and sub_8256D6D8 through the
+    indirect-call table (SetFunction) and calls their __imp__ originals, which a copy leaves as they are; it kept those
+    three out of the copies (0.1-0.2 ms a frame)."""
+    out, skip_depth, depth = [], None, 0
+    for line in text.split('\n'):
+        d = re.match(r'\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)', line)
+        if d:
+            kind, rest = d.group(1), d.group(2)
+            if kind in ('if', 'ifdef', 'ifndef'):
+                depth += 1
+                windows = (kind == 'ifdef' and rest.strip() == '_WIN32') or \
+                          (kind == 'if' and re.fullmatch(r'\s*defined\s*\(?\s*_WIN32\s*\)?\s*(//.*)?', rest))
+                if skip_depth is None and windows:
+                    skip_depth = depth
+                    continue
+            elif kind in ('else', 'elif') and skip_depth == depth:
+                skip_depth = None  # the other branch is compiled on the Switch
+                continue
+            elif kind == 'endif':
+                depth -= 1
+                if skip_depth is not None and depth < skip_depth:
+                    skip_depth = None
+                    continue
+        if skip_depth is None:
+            out.append(line)
+    return '\n'.join(out)
+
+
 class Hooks:
     """What an app or SDK hook may replace: every 82xxxxxx address and every identifier their sources' code mentions
     (comments and __imp__ references left out, as in sa2-nx's tool: a comment hooks nothing and __imp__sub_X is the
@@ -621,6 +701,8 @@ class Hooks:
             except OSError:
                 continue
             text = strip_comments(text, toml)
+            if not toml:
+                text = strip_windows_only(text)  # blur-nx (2026-11-13, M-28)
             text = re.sub(r'__imp__\w+', ' ', text)
             self.addresses.update(m.upper() for m in re.findall(r'(?<![0-9A-Fa-f])(82[0-9A-Fa-f]{6})(?![0-9A-Fa-f])', text))
             if not toml:
@@ -847,7 +929,7 @@ def closed_tree(index, hooks, name, limit, memo):
             continue
         f = index.funcs.get(n)
         why = fits(index, hooks, n)
-        if why is None and f['unknown']:
+        if why is None and f['unknown'] - (f.get('promoted', 0) if PROMOTED_MEMBERS else 0):  # M-25
             why = 'it (or %s under it) makes an indirect call' % n if n != name else 'it makes an indirect call'
         if why is not None:
             if n != name and not why.startswith('it (or'):
@@ -1226,6 +1308,12 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
             dead_out.update((name, r) for r in written if not keep_out(r))
         for m in PROMOTED.finditer(text):
             externs.add(m.group(1))
+        if name in PREFETCH_RULES:  # blur-nx (2026-11-13, M-19): the rule's labels must still be there
+            have = {l.strip()[:-1] for l in lines if LABEL.match(l)}
+            gone = sorted(set(PREFETCH_RULES[name]) - have)
+            if gone:
+                sys.exit(f'localize_native: {name}: prefetch_rules.txt names {", ".join(gone)}, which its code no '
+                         f'longer has (the guest code under the rule changed: check the rule)')
         dirty, writes, dirty_end = dirty_sets(name, lines, lambda l: [call_reach(m)[0] for m in CALL.finditer(l)])
         # sasrt-nx (2026-11-12, stage 1; port 121): the guest instruction index of each generated line (reg_liveness.py)
         raw = index.files.get(funcs[name]['file']) or []
@@ -1261,6 +1349,9 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
                         pending = False
                         body.append((l, block))
                         body.append((f'\ts.Hit({block});', block))
+                        for stmt in PREFETCH_RULES.get(name, {}).get(l.strip()[:-1], ()):
+                            body.append(('\t' + REG.sub(lambda m: 'l_' + m.group(1), stmt), block))  # M-19
+                            LOOP_STATS[2] += 1
                         file_lines[number] = block
                         continue
                     if pending:
@@ -1510,7 +1601,8 @@ def survey(index, hooks, reach, names):
         members, left_out = closure_of(index, hooks, name, 6000, 1200)
         opens = sorted(left_out.items())
         print(f'{name}: {f["lines"]} lines, {len(f["regs"])} ctx registers ({len(f["written"])} written), '
-              f'{len(f["callees"])} direct callees, {f["unknown"]} indirect calls or traps'
+              f'{len(f["callees"])} direct callees, {f["unknown"]} indirect calls or traps '
+              f'({f.get("promoted", 0)} of them promoted sites\' fallbacks)'
               f'{"; CANNOT be a copy: " + why if why else ""}'
               f'{"; replaced by an app hook already?" if hooks.replaced(name) else ""}')
         print(f'    closure: {len(members)} functions, {sum(index.funcs[m]["lines"] for m in members)} lines'
@@ -1559,7 +1651,7 @@ def main():
               f'hand-overs) (stage 1, tools/reg_liveness.py; data {"used" if reg_liveness()["sites"] else "NOT available"}); '
               f'{CALL_SKIPPED[3]} scratch vector stores left out of {CALL_SKIPPED[2]} indirect calls (stage 1d)')
         print(f'localize_native: {LOOP_STATS[0]} pointer-chase prefetches (idea 52), {LOOP_STATS[1]} counted loops\' '
-              f'barriers left out (idea 60)')
+              f'barriers left out (idea 60), {LOOP_STATS[2]} hand-named prefetches (M-19, prefetch_rules.txt)')
         print(f'localize_native: {CONST_ARG_FORCED[0]} members with a constant argument forced inline (idea 34)')
         # Port 74 (its idea 39; sasrt-nx's batch 2 audit, finding 2): the shards turn the card runs on only for copies
         # written with them (app/src/cpu/banjo_hot_prelude.h reads this header).

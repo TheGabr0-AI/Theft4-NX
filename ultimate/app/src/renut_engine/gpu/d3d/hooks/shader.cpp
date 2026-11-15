@@ -17,6 +17,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>  // blur-nx (2026-11-13, #13's fix)
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -286,6 +287,37 @@ void PrefetchShaderBehind(u32 shader_va) {
     __builtin_prefetch(d + 64);
     __builtin_prefetch(d + 128);
   }
+}
+
+// blur-nx (2026-11-13, #13's fix, banjo_renut_deferred_narrow; renut-ultimate port 138): g_guest_shaders as the game
+// threads changed it (a narrowed capture of an in-place shader looked in the record registry alone). The render thread's
+// item for the same change is queued first (RegisterGuestShader, the D3DResource_Destroy hooks).
+namespace {
+struct InPlaceShader {
+  RecordKind kind;
+  const ShaderCacheEntry *entry;
+};
+std::shared_mutex g_in_place_mutex;
+std::unordered_map<u32, InPlaceShader> g_in_place;
+}  // namespace
+
+bool InPlaceShaderEntry(u32 shader_va, RecordKind kind, const ShaderCacheEntry **entry) {
+  std::shared_lock lock(g_in_place_mutex);
+  const auto it = g_in_place.find(shader_va);
+  if (it == g_in_place.end() || it->second.kind != kind)
+    return false;
+  *entry = it->second.entry;
+  return true;
+}
+
+void ForgetInPlaceShader(u32 shader_va) {
+  std::unique_lock lock(g_in_place_mutex);
+  g_in_place.erase(shader_va);
+}
+
+void NoteInPlaceShader(u32 shader_va, RecordKind kind, const ShaderCacheEntry *entry) {
+  std::unique_lock lock(g_in_place_mutex);
+  g_in_place[shader_va] = {kind, entry};
 }
 
 ShaderRecord *FindShaderLocked(u32 shader_va, RecordKind kind) {
@@ -716,6 +748,7 @@ void RegisterGuestShader(u32 shader_va, u32 physical_va, bool pixel) {
     shader->export_only = export_only;  // vivapinata-nx (2026-11-03)
     PipelineShaderLoaded(shader->entry);
   });
+  NoteInPlaceShader(shader_va, kind, sort_entry);  // blur-nx (2026-11-13, #13's fix): after the item above is queued
 }
 
 // void XGRegisterVertexShader(D3DVertexShader *pShader, void *pPhysicalPart) [0x826376C8]

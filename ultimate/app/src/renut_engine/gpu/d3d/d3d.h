@@ -283,6 +283,10 @@ constexpr u32 kDeviceOffsetStreamStrides = 0x30E8;      // SetStreamSource, u8[1
 constexpr u32 kDeviceOffsetTextures = 0x30F8;           // SetTexture, [kTextureFetchSlots] (katamari-nx: 0x3108->0x30F8)
 constexpr u32 kDeviceOffsetPixelShader = 0x318C;        // SetPixelShader (katamari-nx: 0x319C->0x318C)
 constexpr u32 kDeviceOffsetVertexShader = 0x3190;       // SetVertexShader (katamari-nx: 0x31A0->0x3190)
+// renut-ultimate (2026-11-14, port 138; blur-nx's #55): CDevice's viewport floats (x, y, width, height), which D3D
+// clamps a clear to (katamari-nx: 0x3170->0x3160; blur-nx's XDK: 0x3218). theft4-nx (U15): GTA IV's too, the offset this
+// tree's clears and viewport reads already use (d3d_native_state.cpp kViewport, hooks/draw.cpp, hooks/state.cpp).
+constexpr u32 kDeviceOffsetViewport = 0x3160;
 // In m_TessellatorPacket, which holds registers 0x2280 on: VGT_HOS_CNTL
 // (tessellation mode in bits 0-1: 0 discrete, 1 continuous, 2 adaptive) and
 // the float VGT_HOS_MAX_TESS_LEVEL / VGT_HOS_MIN_TESS_LEVEL.

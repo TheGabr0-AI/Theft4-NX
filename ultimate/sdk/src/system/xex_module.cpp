@@ -1109,6 +1109,9 @@ bool XexModule::SetupLibraryImports(const std::string_view name,
           if (kernel_export->is_implemented() && kernel_export->variable_ptr) {
             // Write the variable address to guest memory
             *record_slot = kernel_export->variable_ptr;
+            if (runtime::g_variable_import_hook) {  // blur-nx (2026-11-13, M-38)
+              runtime::g_variable_import_hook(base_name, ordinal);
+            }
             REXLOG_DEBUG("Patched variable import {}:{:#x} ({}) -> {:#x}", base_name, ordinal,
                          kernel_export->name, kernel_export->variable_ptr);
           } else {

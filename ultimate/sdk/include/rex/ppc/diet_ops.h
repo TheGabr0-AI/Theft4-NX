@@ -26,6 +26,48 @@ extern "C" volatile unsigned long long g_rex_diet_census[6];
 #else
 #define REX_DIET_CENSUS(k) ((void)0)
 #endif
+// blur-nx (2026-11-13, Blur's docs/cpu-near-exact-50-1113.md): the near-exact ideas' census (PC game code,
+// REX_DIET_CENSUS_ON): how often each rare case that an idea's switch would change happens. Plain lossy counters
+// (app/src/cpu/banjo_codegen_checks.cpp, the "[census] near-exact" line):
+//   0 #1 a signalling NaN at a float copy store (QuietSingleBits)    1 #2 a NaN into a float-to-integer conversion
+//   2 #17 a signed division by zero                                    3 #17 the signed overflow (INT_MIN / -1)
+//   4 #17 an unsigned division by zero                                 5 #41 a float compare with a NaN (unordered)
+//   6 #42 a vector max/min lane where the SSE form and Arm's fmax/fmin differ (a NaN, or +0 against -0)
+//   7 #3 FPSCR writes (mtfsf)   8 #3 ... that change the rounding mode   9 #3 ... that select a mode other than nearest
+//   10 #4 FPSCR reads (mffs)    11 #5 an integer compare that copies XER[SO] = 1    12 #5 an mtxer that sets SO
+//   13 #42 vector max/min executions
+//   16-24 Blur's audio node loop (tools/blur_mix_nx.py): 16 constant gains other than 0 and 1, 17 of them within 1e-7
+//   of 1 (#23), 18 unity gains, 19 ramps, 20 ramps under 1e-6 (#24), 21 constant gains under 2^-16, 22 zero gains,
+//   23 constant gains within 1e-5 of 1, 24 ramps under 2^-16
+//   25 #38 card marks of the generated tree (store_cards.py's REX_CARD), 26 the copies' run marks (banjo_hot_prelude.h)
+//   27 #49 resampling kernel calls (tools/blur_mix_nx.py), 28 of them consuming 256 samples at a ratio other than 1
+//   30 #21 ramps with both ends under 2^-16
+//   31 #43 exp memo hits, 32 its misses (cpu/hot/blur_hand_natives_batch2.h)
+//   33 #66 the copies' run marks on a page Renut reads, 34 of them writing the card (26: the run marks with a run)
+#if defined(REX_DIET_CENSUS_ON) && !defined(__SWITCH__)
+extern "C" volatile unsigned long long g_rex_nx_census[48];
+#define REX_NX_CENSUS(k) (g_rex_nx_census[k] = g_rex_nx_census[k] + 1)
+#define REX_NX_CENSUS_IF(c, k) ((c) ? (void)REX_NX_CENSUS(k) : (void)0)
+#define REX_NX_CENSUS_ON 1
+#else
+#define REX_NX_CENSUS(k) ((void)0)
+#define REX_NX_CENSUS_IF(c, k) ((void)0)
+#endif
+// The switches (Blur's CMake BLUR_NX_*, all OFF by default; OFF is exactly the code before):
+//   REX_NX_SNAN_PASS     #1  a float copy store keeps a signalling NaN's bits (as the Xenon's lfs/stfs pair does)
+//   REX_NX_FCTI_NO_NAN   #2  the float-to-integer conversions without the NaN select (AArch64: fcvtzs gives 0)
+//   REX_NX_DIV_NO_CHECK  #17 the signed divisions without the overflow select (AArch64: sdiv gives INT_MIN)
+//   REX_NX_FCMP_NO_UN    #41 a float compare leaves cr.un 0 (lt/gt/eq are already right for a NaN: all 0)
+//   REX_NX_VMINMAX_FAST  #42 vmaxfp / vminfp as Arm's fmax / fmin (VMaxFp / VMinFp below)
+//   REX_NX_XER_SO_ZERO   #5  integer compares and record forms copy SO = 0 (no overflow-recording form in the code)
+//   REX_NX_RN_ONLY       #3  FPSCR writes leave the rounding mode at round-to-nearest (context.h)
+//   REX_NX_NO_TRAPS      #19 the divide-by-zero traps and twi asserts compiled out (tools/near_exact.py writes their
+//                            test as `REX_NX_TRAPS_ON && (...)`); a hit only logged a warning (the pch's ppc_trap)
+#if defined(REX_NX_NO_TRAPS)
+#define REX_NX_TRAPS_ON 0
+#else
+#define REX_NX_TRAPS_ON 1
+#endif
 // blur-nx (2026-11-12, codegen-ideas-3 CG-13's census): each cold path below also counts the code address it was
 // called from (rex/sys_counters.h CensusDenormalSite): a cold path is exactly a result that one flush mode for all code
 // would change, and the addresses name the game functions (tools/census_sites.py --denormal).
@@ -66,9 +108,13 @@ namespace rex::ppc {
 /// portable version returns INT32_MIN for v <= INT32_MIN: that is exactly the saturating AArch64 fcvtzs (positive
 /// overflow -> INT32_MAX, negative overflow -> INT32_MIN); only NaN (fcvtzs gives 0) needs the select.
 REX_SMALL_HELPER int64_t fctiwz(double v) noexcept {
+  REX_NX_CENSUS_IF(__builtin_isnan(v), 1);
 #if defined(__aarch64__)
   int32_t r;
   asm("fcvtzs %w0, %d1" : "=r"(r) : "w"(v));
+#if defined(REX_NX_FCTI_NO_NAN)
+  return int64_t(r);  // blur-nx (#2): a NaN gives 0, not 0x80000000
+#endif
   return __builtin_isnan(v) ? int64_t(0x80000000U) : int64_t(r);
 #else
   if (__builtin_isnan(v))
@@ -88,9 +134,13 @@ REX_SMALL_HELPER int64_t fctiwz(double v) noexcept {
 /// INT64_MIN for exactly v == 2^63 (its test is `>`); the Xbox 360 and the AArch64 build give INT64_MAX there, and
 /// so does this helper: the one input where it differs from the old x86 code.
 inline int64_t fctidz(double v) noexcept {
+  REX_NX_CENSUS_IF(__builtin_isnan(v), 1);
 #if defined(__aarch64__)
   int64_t r;
   asm("fcvtzs %x0, %d1" : "=r"(r) : "w"(v));
+#if defined(REX_NX_FCTI_NO_NAN)
+  return r;  // blur-nx (#2)
+#endif
   return __builtin_isnan(v) ? INT64_MIN : r;
 #else
   if (__builtin_isnan(v))
@@ -109,8 +159,11 @@ inline int64_t fctidz(double v) noexcept {
 /// every mode, where the 360 and x86 give 0 and 2. `frinti` (to an integral double in the current mode, no inexact
 /// flag) and the saturating `fcvtzs` round as the 360 does: the helper CORRECTS that build.
 REX_SMALL_HELPER int64_t fctid(double v) noexcept {
+  REX_NX_CENSUS_IF(__builtin_isnan(v), 1);
+#if !(defined(REX_NX_FCTI_NO_NAN) && defined(__aarch64__))  // blur-nx (#2): frinti / fcvtzs give 0 for a NaN
   if (__builtin_isnan(v)) [[unlikely]]
     return INT64_MIN;
+#endif
 #if defined(__aarch64__)
   double integral;
   asm("frinti %d0, %d1" : "=w"(integral) : "w"(v));
@@ -128,8 +181,11 @@ REX_SMALL_HELPER int64_t fctid(double v) noexcept {
 /// everything else sign extended). Old: `isnan ? 0x80000000U : v >= INT_MAX ? INT_MAX : simde_mm_cvtsd_si32(v)`;
 /// on x86 this is that expression, on AArch64 the halves are corrected as for fctid.
 inline int64_t fctiw(double v) noexcept {
+  REX_NX_CENSUS_IF(__builtin_isnan(v), 1);
+#if !(defined(REX_NX_FCTI_NO_NAN) && defined(__aarch64__))  // blur-nx (#2)
   if (__builtin_isnan(v)) [[unlikely]]
     return int64_t(0x80000000U);
+#endif
 #if defined(__aarch64__)
   double integral;
   asm("frinti %d0, %d1" : "=w"(integral) : "w"(v));
@@ -150,6 +206,7 @@ inline int64_t fctiw(double v) noexcept {
 /// The C expression needs its guards (division by zero is undefined there) and the compiler keeps them as a branch.
 /// A divisor known at compile time keeps the C expression: the compiler makes a multiplication of it.
 REX_SMALL_HELPER uint32_t divwu(uint32_t n, uint32_t d) noexcept {
+  REX_NX_CENSUS_IF(d == 0, 4);
 #if defined(__aarch64__)
   if (!__builtin_constant_p(d)) {
     uint32_t q;
@@ -160,6 +217,7 @@ REX_SMALL_HELPER uint32_t divwu(uint32_t n, uint32_t d) noexcept {
   return d ? n / d : 0;
 }
 REX_SMALL_HELPER uint64_t divdu(uint64_t n, uint64_t d) noexcept {
+  REX_NX_CENSUS_IF(d == 0, 4);
 #if defined(__aarch64__)
   if (!__builtin_constant_p(d)) {
     uint64_t q;
@@ -171,20 +229,30 @@ REX_SMALL_HELPER uint64_t divdu(uint64_t n, uint64_t d) noexcept {
 }
 /// The result as the zero-extended word the old expression assigned to the 64-bit register.
 REX_SMALL_HELPER uint32_t divw(int32_t n, int32_t d) noexcept {
+  REX_NX_CENSUS_IF(d == 0, 2);
+  REX_NX_CENSUS_IF(n == INT32_MIN && d == -1, 3);
 #if defined(__aarch64__)
   if (!__builtin_constant_p(d)) {
     int32_t q;
     asm("sdiv %w0, %w1, %w2" : "=r"(q) : "r"(n), "r"(d));
+#if defined(REX_NX_DIV_NO_CHECK)
+    return uint32_t(q);  // blur-nx (#17): INT_MIN / -1 gives INT_MIN, not 0
+#endif
     return uint32_t((n == INT32_MIN && d == -1) ? 0 : q);
   }
 #endif
   return uint32_t((d && !(n == INT32_MIN && d == -1)) ? n / d : 0);
 }
 REX_SMALL_HELPER int64_t divd(int64_t n, int64_t d) noexcept {
+  REX_NX_CENSUS_IF(d == 0, 2);
+  REX_NX_CENSUS_IF(n == INT64_MIN && d == -1, 3);
 #if defined(__aarch64__)
   if (!__builtin_constant_p(d)) {
     int64_t q;
     asm("sdiv %x0, %x1, %x2" : "=r"(q) : "r"(n), "r"(d));
+#if defined(REX_NX_DIV_NO_CHECK)
+    return q;  // blur-nx (#17)
+#endif
     return (n == INT64_MIN && d == -1) ? 0 : q;
   }
 #endif
@@ -213,7 +281,60 @@ REX_SMALL_HELPER double SingleToDoublePure(uint32_t bits) noexcept {
 /// that the two conversions quiet a signalling NaN (they set the top fraction bit and keep the rest).
 REX_SMALL_HELPER uint32_t QuietSingleBits(uint32_t bits) noexcept {
   REX_DIET_CENSUS(5);
+  REX_NX_CENSUS_IF((bits & 0x7FFFFFFFu) > 0x7F800000u && (bits & 0x00400000u) == 0, 0);
+#if defined(REX_NX_SNAN_PASS)
+  return bits;  // blur-nx (#1): the signalling NaN's bits kept, as the Xenon's lfs / stfs pair keeps them
+#endif
   return (bits & 0x7FFFFFFFu) > 0x7F800000u ? (bits | 0x00400000u) : bits;
+}
+
+/// blur-nx (2026-11-13, #42 of Blur's docs/cpu-near-exact-50-1113.md): vmaxfp / vminfp. The generator wrote SSE's
+/// max / min (`a > b ? a : b`, a compare and a select on Arm); tools/near_exact.py makes them these. REX_NX_VMINMAX_FAST:
+/// Arm's fmax / fmin (one instruction), which differ only for a NaN lane (a NaN where SSE gives b; the Xenon's VMX
+/// gives a NaN too) or +0 against -0 (the sign Arm and the Xenon give where SSE gives b's).
+#if defined(REX_NX_CENSUS_ON)
+inline void VMinMaxCensus(simde__m128 a, simde__m128 b, bool max) noexcept {
+  REX_NX_CENSUS(13);
+  float x[4], y[4];
+  simde_mm_storeu_ps(x, a);
+  simde_mm_storeu_ps(y, b);
+  for (int i = 0; i < 4; ++i) {
+    const bool nan = __builtin_isnan(x[i]) || __builtin_isnan(y[i]);
+    const float sse = max ? (x[i] > y[i] ? x[i] : y[i]) : (x[i] < y[i] ? x[i] : y[i]);
+    bool zeros = false;
+    if (x[i] == 0.0f && y[i] == 0.0f) {
+      const bool both_neg = __builtin_signbit(x[i]) && __builtin_signbit(y[i]);
+      const bool any_neg = __builtin_signbit(x[i]) || __builtin_signbit(y[i]);
+      zeros = bool(__builtin_signbit(sse)) != (max ? both_neg : any_neg);
+    }
+    if (nan || zeros) {
+      REX_NX_CENSUS(6);
+      return;
+    }
+  }
+}
+#endif
+
+REX_SMALL_HELPER simde__m128 VMaxFp(simde__m128 a, simde__m128 b) noexcept {
+#if defined(REX_NX_CENSUS_ON)
+  VMinMaxCensus(a, b, true);
+#endif
+#if defined(REX_NX_VMINMAX_FAST) && defined(__aarch64__)
+  return simde__m128_from_neon_f32(vmaxq_f32(simde__m128_to_neon_f32(a), simde__m128_to_neon_f32(b)));
+#else
+  return simde_mm_max_ps(a, b);
+#endif
+}
+
+REX_SMALL_HELPER simde__m128 VMinFp(simde__m128 a, simde__m128 b) noexcept {
+#if defined(REX_NX_CENSUS_ON)
+  VMinMaxCensus(a, b, false);
+#endif
+#if defined(REX_NX_VMINMAX_FAST) && defined(__aarch64__)
+  return simde__m128_from_neon_f32(vminq_f32(simde__m128_to_neon_f32(a), simde__m128_to_neon_f32(b)));
+#else
+  return simde_mm_min_ps(a, b);
+#endif
 }
 
 /// sa2-nx round 7 (codegen option fp_moves_modeless): the lfs/stfs conversions with the IEEE result, i.e. the one

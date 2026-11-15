@@ -1387,7 +1387,10 @@ struct ExtentMemo {
   // two or three slots whose words did not change, and the memo's entry (12 KB a device) was a miss at most of them
   // (0.65 % of the recording threads in the c4 console run).
   ExtentMemoEntry last[d3d::kTextureFetchSlots];
-  ExtentMemoEntry entry[256];
+  // blur-nx (2026-11-13, M-32 of docs/cpu-moonshots-50-1113.md): two ways a set (the latest first), where one entry a
+  // set made two textures that share the hash's top byte evict each other: each miss runs GetTextureDataSizes and
+  // GetTextureLevelLayout per mip (0.2 ms a frame of the recording threads' samples in the console profiles).
+  ExtentMemoEntry entry[256][2];
 };
 ExtentMemo g_extent_memos[native::kTouchSlots];
 
@@ -1407,12 +1410,20 @@ inline bool SlotExtentOf(const d3d::TextureFetchConstant &guest, ExtentMemo *mem
     uint64_t h = 0;
     for (u32 i = 0; i < 6; ++i)
       h = (h ^ fetch.dword[i]) * 0x9E3779B97F4A7C15ull;
-    m = &memo->entry[u32(h >> 56)];
-    if (m->valid && SameWords<6>(m->words, fetch.dword)) {
-      out = m->e;
-      *last = *m;
+    ExtentMemoEntry *set = memo->entry[u32(h >> 56)];
+    if (set[0].valid && SameWords<6>(set[0].words, fetch.dword)) {
+      out = set[0].e;
+      *last = set[0];
       return true;
     }
+    if (set[1].valid && SameWords<6>(set[1].words, fetch.dword)) {  // blur-nx (2026-11-13, M-32)
+      std::swap(set[0], set[1]);
+      out = set[0].e;
+      *last = set[0];
+      return true;
+    }
+    set[1] = set[0];  // (the older way leaves; the new entry goes first, below)
+    m = &set[0];
   }
   // TextureGuestExtent's computation (render/textures.cpp), without its render-thread memo.
   u32 base_bytes = 0, mip_bytes = 0;

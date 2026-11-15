@@ -98,6 +98,12 @@ class Export {
     } function_data;
   };
 };
+// blur-nx (2026-11-13, M-38 of Blur's docs/cpu-moonshots-50-1113.md): called by the XEX loader for every variable
+// import it patches (library, ordinal), so a module can start work that only an importing title needs (xboxkrnl's
+// KeTimeStampBundle timer). Set by that module; null: nothing is called.
+using VariableImportHook = void (*)(std::string_view library, uint16_t ordinal);
+extern VariableImportHook g_variable_import_hook;
+
 class ExportResolver {
  public:
   class Table {

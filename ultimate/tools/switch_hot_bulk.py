@@ -238,7 +238,11 @@ def main():
         # (sasrt-nx's 2026-11-10 audit, finding 5: what the list still has after the prune, so a pruned function the
         # profiles now find hot enough comes back.)
         have = {m.group(1).upper() for l in lines for m in [re.match(r'\s*([0-9A-Fa-f]{8})\b', l)] if m}
-        rows = [r for r in rows if r[0][4:].upper() not in have]
+        # blur-nx (2026-11-13): '# out: XXXXXXXX reason' lines keep a function out for good (a copy the guard found
+        # different, or one that must not be copied): the profiles would otherwise add it back at the next refresh.
+        out = {m.group(1).upper() for l in lines for m in [re.match(r'#\s*out:\s*([0-9A-Fa-f]{8})\b', l)] if m}
+        left['kept out by a "# out:" line'] += sum(1 for r in rows if r[0][4:].upper() in out)
+        rows = [r for r in rows if r[0][4:].upper() not in have and r[0][4:].upper() not in out]
     for sub, n, ins, calls in rows:
         lines.append(f'{sub[4:]} {n} console samples, {ins} instructions, {calls} direct callees')
     open(a.write, 'w', encoding='utf-8', newline='\n').write('\n'.join(lines) + '\n')

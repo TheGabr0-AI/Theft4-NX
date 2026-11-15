@@ -915,6 +915,7 @@ void D3DResource_Destroy_hook(u32 resource) {
       ReleaseHostTextureLocked(resource);
       ReleaseGuestShaderLocked(resource);
     });
+    ForgetInPlaceShader(resource);  // blur-nx (2026-11-13, #13's fix): after the item above is queued
     DestroyGuestResource(resource);
     return;
   }
@@ -1772,5 +1773,6 @@ BANJO_RENUT_HOOK_RAW(sub_829D8D40) {
     ReleaseGuestShaderLocked(resource);
     ReleaseGuestDeclarationLocked(resource);
   });
+  ForgetInPlaceShader(resource);  // renut-ultimate port 138 (blur-nx's #13 fix): after the item above is queued
   __imp__sub_829D8D40(ctx, base);
 }

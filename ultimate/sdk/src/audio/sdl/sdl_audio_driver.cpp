@@ -327,7 +327,8 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
             std::fill(driver->burst_.begin() + start, driver->burst_.end(), 0.0f);
           } else if (driver->sdl_device_channels_ == 2) {
             conversion::sequential_6_BE_to_interleaved_2_LE(driver->burst_.data() + start, buffer,
-                                                            channel_samples_, fold, gain);
+                                                            channel_samples_, fold,
+                                                            gain * StereoFrameGain(buffer, channel_samples_));
           } else {
             conversion::sequential_6_BE_to_interleaved_6_LE(driver->burst_.data() + start, buffer,
                                                             channel_samples_, mix, gain);
@@ -386,7 +387,7 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
         switch (driver->sdl_device_channels_) {
           case 2:
             conversion::sequential_6_BE_to_interleaved_2_LE(data, buffer, channel_samples_, fold,
-                                                            gain);
+                                                            gain * StereoFrameGain(buffer, channel_samples_));
             break;
           case 6:
             conversion::sequential_6_BE_to_interleaved_6_LE(data, buffer, channel_samples_, mix,
