@@ -140,7 +140,29 @@ della scheda: stesso salvataggio, stessa stanza, catture ogni 15 s.
 
 **Dalla U12 (2026-11-15; `20-ultimate-base-migration.md` §2.18-§2.19).** `deko3d_shaders.bin` e `pipeline_list.bin` **restano al loro posto** tra le run (il gioco scrive `pipeline_list.bin` e lo rilegge all'avvio successivo): si rinominano solo la NRO precedente, `logs/`, `capturas/` e i toml. Le chiavi che mandano i draw per la via completa (`banjo_renut_diag_draw_log_s`, `gta4_diag_ps_constants`) stanno solo nelle run di viste, mai in quelle di misura. Le run di viste si fanno **da fermi** dalla comparsa della stanza (stessa inquadratura del riferimento PC), con `note.txt`. **Lo stencil si confronta solo con plume D3D12 corretto** (`stencilRef`, U13): prima ogni test di stencil del PC usava ref 0. **Guardia PC delle copie:** una differenza (completa o di prefisso) conta solo se si ripete in tre passaggi di fila; una copia con una differenza di NaN si esclude con le copie che la portano come membro inline.
 
+**Dalla U17 (2026-11-16; `20-ultimate-base-migration.md` §2.24).** Due build non committate dello stesso commit si
+distinguono dallo stamp del log: `tools\ultimate\build_switch.bat` aggiunge `THEFT4_BUILD_LABEL` (`6be295853eed-dirty+u17`);
+una run il cui log non dice `+u17` ha avviato la NRO precedente. La NRO resta `theft4-ultimate.nro` (quella precedente si
+rinomina `theft4-ultimate-u16.nro`), un toml per run `gta4-U17-<run>.toml` copiato come `gta4.toml`, e dopo la run
+`logs/` -> `logs-U17-<run>/`, `capturas/` -> `capturas-U17-<run>/`. Ogni variante cambia **una** leva rispetto ad A (o a G0
+per le prove G); la modalità esclusiva del core 3 (C2) è facoltativa e mai di default. Le catture a raffica:
+`nfsmw_captura_max` conta le **raffiche** (`banjo_captura_rafaga` PNG ciascuna), e l'attesa `nfsmw_captura_cada_s` parte dopo
+la codifica dei PNG. Le patch dei pacchetti si scrivono con `git diff --output=` (un `Out-File` di PowerShell aggiunge BOM e
+CRLF e la patch non si applica più) e si controllano con `git apply --check --reverse`.
+
 **Smoke:** `switch-smoke.nro` della stessa cartella del run fa anche il
 passo 8 (deko3d contro NVK, `13-deko3d-spike.md`, ~1–2 minuti, schermo fermo
 sull'ultima immagine della sonda Vulkan); il risultato sono le righe `gpu
 bench:` di `smoke.log`, da copiare nella cartella del run.
+
+**Dalla U18 (2026-11-16; `20-ultimate-base-migration.md` §2.25).** `gta4_xaudio_supervisor_core3` resta 0 in ogni run (C1/C2
+respinte: audio peggiore; C2 rallenta anche il file system). Le raffiche di catture (`banjo_captura_rafaga`) costano ~4 ms di
+render thread a frame: solo nelle run di viste, mai in quelle di misura. **Nuova partita (prima missione) senza toccare il
+salvataggio:** (1) copiare l'intera `renut/` della scheda sul PC in `out/console-runs/<pacchetto>/save-backup-<data>/` e
+annotare lo SHA-256 di `SGTA412` e di `SGTA412.header`; (2) sulla scheda **rinominare** (non cancellare)
+`renut/B13EBABEBABEBABE` in `B13EBABEBABEBABE.bak`; (3) avviare: senza salvataggio il gioco parte dal filmato iniziale;
+non toccare nulla fino alla fine dei titoli (il PC, 2026-11-16, mette Niko al volante a ~376 s con il percorso giallo sul
+radar), poi annotare in `note.txt` se Niko è in auto o a piedi, se compaiono il radar e l'obiettivo; un salvataggio
+automatico, se arriva, va nella cartella nuova; (4) a fine run rinominare la cartella nuova in
+`B13EBABEBABEBABE.newgame-<run>` e `B13EBABEBABEBABE.bak` di nuovo in `B13EBABEBABEBABE`; (5) ricontrollare gli SHA-256 del
+salvataggio ripristinato contro il punto (1). Nessun file del salvataggio si cancella o si sovrascrive.

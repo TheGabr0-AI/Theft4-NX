@@ -63,6 +63,11 @@ struct HostSurface {
   // the colour surface's write it was last restored from (RestoreDepthFromColorLocked).
   uint64_t write_seq = 0;
   uint64_t restored_from_seq = 0;
+  // theft4-nx (2026-11-15, U16, gta4_renut_depth_restore_stencil_fast): write_seq of this colour surface's last write when
+  // that write was GTA IV's depth-words copy (PS B3D105989610E354) over the whole surface with nothing changing its output
+  // (render/draw.cpp NoteGta4DepthWordsCopy); 0 otherwise. Equal to write_seq: every texel's low byte is 0xFF where its
+  // depth bytes are not all 0, 0x80 where they are.
+  uint64_t gta4_words_copy_seq = 0;
   // sasrt-nx (2026-11-09, sasrt_rt_restore_candidates; port 54): a depth target's colour targets over its EDRAM base and
   // pitch that could be its restore's source, as of the target table's epoch 'sasrt_candidates_epoch' (0: not found yet).
   std::vector<HostSurface *> sasrt_restore_candidates;

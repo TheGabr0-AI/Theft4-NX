@@ -73,6 +73,9 @@ if "%COMMIT%"=="" (
   exit /b 1
 )
 git -C "%ULT%\.." diff --quiet HEAD -- ultimate tools/ultimate || set "COMMIT=%COMMIT%-dirty"
+rem THEFT4_BUILD_LABEL (optional, 2026-11-16, U17): appended to the stamp ("<commit>-dirty+u17"), so two uncommitted
+rem builds of one commit read apart in the log; it recompiles main.cpp alone.
+if not "%THEFT4_BUILD_LABEL%"=="" set "COMMIT=%COMMIT%+%THEFT4_BUILD_LABEL%"
 rem The SDK's version.h holds the configure's time (sdk/CMakeLists.txt, string(TIMESTAMP)), and this script configures
 rem at every build: with SOURCE_DATE_EPOCH, which CMake's TIMESTAMP honours, that time is the commit's, so two builds of
 rem one commit give the same NRO byte for byte (U7: the minute changed it before).

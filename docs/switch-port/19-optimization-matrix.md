@@ -211,3 +211,80 @@ Piano, un gruppo per prova, ognuno con misura prima/dopo:
 3. **CPU / audio (U16)**: rigenerazione con i passaggi di codegen della base (136: float loads a ogni modo, fmadds noti;
    140: store cards per le viste), nativo del biquad `sub_828C2D28` (stato del filtro nei
    registri, stesse operazioni nello stesso ordine), guardia sul PC.
+
+U16 (PC, da provare sulla console): il ripristino dello stencil in due passaggi quando la sorgente è la copia del gioco (atteso ~-20 ms di GPU a frame in cucina), le forme ARM dei passaggi di codegen 136/140, la risoluzione dinamica della base (run D, 540-720 righe). Prossimi: il nativo del biquad del mixer (stato del filtro nei registri, esatto), le funzioni del render thread, i glitch con il salvataggio dell'utente sul PC.
+
+U16 sulla console (doc 20 §2.23): fps = U15-A (cucina 16,5, strada 9,3, filmato 20,0, garage 10,7); audio 95-99 % (U15:
+85-92 %); il ripristino in due passaggi **non è mai partito** (il percorso veloce dei draw di deko3d non segna la copia):
+corretto in U17. Risoluzione dinamica: nessun guadagno, la GPU di cucina e filmato non scala con l'altezza 3D.
+
+| Collo di bottiglia (U16-A) | Misura | Leva U17 | Stato |
+|---|---|---|---|
+| GPU, cucina/filmato | 49-60 ms; copia + ripristino 20-25 ms | ripristino in due passaggi anche su deko3d | nell'albero, console da provare |
+| CPU, strada/garage | core 0-2: ~357 % di richiesta su 300 %; core 3 libero | mixer XAudio sul core 3 (`gta4_xaudio_supervisor_core3` 1/2) | nell'albero (spento), A/B C1/C2 |
+| Mixer | ~105 % di un core in ogni scena | nativi esatti di biquad e DSP | non iniziato |
+| Thread principale | 38-40 %, in attesa di semafori e di un core | `switch_thread_priorities` "Main XThread=0x2E" (kabba536) | da provare |
+| Vetri/fari/ombre intermittenti | differenza solo sui vetri a scena ferma | bisezione G0-G3 (percorso veloce, barriere, salto texture) | da provare |
+
+U17 (doc 20 §2.24, 2026-11-16): NRO `15da0fff…` costruita (1 job, incrementale), pacchetto `out/console-runs/u17` con A,
+C1, C2 (facoltativa), G0-G3; **nessuna misura sulla console ancora**. Leve preparate per U18, dalla base (`bf6ccc1e`, port
+142-147, i "speed-up" di TW2DE-NX) e da TW2DE stesso; i benefici sono quelli misurati da altri giochi, non da GTA IV:
+
+| Leva (U18+) | Dove agisce in GTA IV (U16-A) | Misurato altrove | Rischio | Prova |
+|---|---|---|---|---|
+| Port 145: `stream_redeem`, `keep_unused_targets`, `dynamic_texture_rows`, `native_16bit` | render thread ReNut ~60 % in strada (46 % di calcolo) | TW2: -7 ms di render thread a frame | basso (accesi nella base, guardia PC) | A/B contro U17-A, render thread e fps strada/garage |
+| Port 145: `banjo_async_present` | presentazione | TW2: -2,7 ms a frame; Ryujinx non conclusivo | pacing | `[latency]` swap -> present, A/B |
+| Port 146: pezzi di file da 4 MB, buffer host diretti, mutant senza mutex | streaming, attese | TW2: richiesta FS ~2,3 ms fissi | basso | tempi di caricamento, stutter in guida |
+| Port 144: `spin_hint_yield` | 12 `db16cyc` (XAudio `8216C750`/`82169D90`, D3D `829CFE80`/`829DD928`) | - | latenza audio | audio %, CPU mixer |
+| LTO (`BANJO_SWITCH_LTO`), poi PGO della base (`pgo-inplace/`) | tutto il codice | sa2-nx, katamari, TW2 (non quantificato qui) | memoria del link (16 GB); build ~2 h | build LTO sola, poi ciclo PGO su cucina, strada, garage, filmato |
+| `vec_neon_forms.py` (TW2) | 179 vslw, 2.222 vpermwi/vcsxwfp/vcuxwfp; mixer quasi assente | - | basso (esatto, test qemu) | guardia densa, render guest |
+
+
+**U17 letto (doc 20 §2.25, 2026-11-16; misure Switch).** Ripristino in due passaggi attivo sulla console: GPU cucina
+59,3 -> 39,2 ms (16,6 -> 24,6 fps), filmato 49,0 -> 38,6 ms (20,0 -> 25,1 fps); strada e garage invariati (9,4 / 11,1 fps):
+limite CPU (render thread 44-54 ms). C1/C2 respinte (audio 80,9 / 72 % in strada: il mixer sul core 3 riceve meno CPU; C2
+rallenta anche le letture del SD da 10 a 51 ms). G1 (fast draw spento) costa 7,4 ms di render thread in strada; G2/G3 neutri;
+nessuno dei tre toglie i lampeggiamenti. Le raffiche di catture costano ~4 ms di render thread a frame (G0 contro A).
+
+| Collo di bottiglia (U17-A) | Misura | Leva U18 | Stato |
+|---|---|---|---|
+| Audio | mixer saturo (102-111 % di un core, 94 % sulla CPU), audio 95,5-98,4 % | nativi esatti di router `8216D7E0`, `828C6740`, biquad `828C2D28`, `828C5A58` con guardia bit-exact; **non** un altro core (C1/C2) | da fare (PC prima) |
+| Correttezza CPU | 4 copie native diverse dall'originale sul percorso della nuova partita | fuori da `localized_bulk.txt` (`out/u18-prep/g_bulk_drop.diff`) | preparata, non applicata |
+| Alone/vetri/ombre | alone a due stati solo sulla console (PC stabile a 60 e 30 fps); non fast draw, barriere, texture skip | run di viste V (verifiche del renderer), poi gruppi H1-H4 | da provare |
+| CPU strada/garage | render thread ReNut 56-58 %, render guest 46-47 %, main 37-38 % | port 145 (stream redeem, righe di texture), 146 (I/O), main a 0x2E | gruppi pronti |
+| Render thread ReNut | `FastDrawLocked` 21,9 %, `PushFloatConstants` 6,7 % (U16) | port 145; present asincrono al massimo ~0,5 ms a frame (misura libnx) | gruppo pronto |
+| Codegen | -O3, nessun LTO/PGO | gruppo 144 (rigenerazione), LTO sola, poi PGO | da fare |
+
+**Proposta U18 (non costruita: serve l'autorizzazione).** Due NRO, ciascuna a 1 job, cache DKSH U10, pacchetto con toml
+che cambiano **una** leva per run, tutte a 720p fissi, stesso salvataggio e percorso di U17-A (cucina, strada, filmato, garage),
+catture una ogni 5 s (le raffiche solo nella run di viste).
+
+NRO **U18-1** = U17 + gruppi 142, 143, 145, 146, 147 + `g_bulk_drop` (le chiavi nuove sono a runtime, accese di default nella
+base: i toml le spengono dove serve).
+
+| Run | Rispetto a | Differenza | Misura |
+|---|---|---|---|
+| B0 | U17-A | tutte le chiavi nuove spente (`banjo_renut_stream_redeem`, `banjo_renut_keep_unused_targets`, `banjo_renut_dynamic_texture_rows`, `banjo_deko3d_native_16bit`, `banjo_async_present`, `thread_mutant_release_lockfree` = false, `filesystem_bounce_piece_mb` = 1, `filesystem_bounce_guest_only` = false, `kernel_deferred_overlapped_delay_ms` = 100, `xmp_poll_throttle` = false): resta solo il codice e le 4 copie tolte | uguale a U17-A entro il rumore; audio |
+| B1 | B0 | gruppo 146 acceso (I/O) | `[io]` letture, caricamento del filmato, stutter |
+| B2 | B0 | 145: `stream_redeem` + `dynamic_texture_rows` + `keep_unused_targets` | render thread strada/garage |
+| B3 | B2 | 145: `native_16bit` | GPU, memoria texture, catture (formati) |
+| B4 | B0 | 145: `banjo_async_present` | render thread, `[latency]`, pacing |
+| B5 | B0 | 143 (overlapped 0, `xmp_poll_throttle`) | tempo dall'avvio alla stanza |
+| V | B0 | verifiche del renderer (`banjo_deko3d_push_constants_verify`, `banjo_renut_fast_draw_verify`, `_chain_reuse_verify`, `_texture_slot_skip_verify`, `_store_cards_verify`, `banjo_deko3d_txq_verify`), raffiche, 60 s fermi nel corridoio | log: prima differenza; non è una run di misura |
+| N | - | nuova partita su slot separato (run-protocol "Dalla U18") | la missione parte? |
+
+NRO **U18-2** = la migliore di U18-1 + gruppo 144 (rigenerazione: `spin_hint_yield`, NORMSHORT2): contro la stessa
+configurazione su U18-1. Poi, solo se i lampeggiamenti restano senza nome dopo V: H1-H4 (doc 20 §2.25), un gruppo per run.
+
+**LTO e PGO (progetto, nessuna build).**
+- **LTO da sola prima**: stesso commit, stessi toml, solo `BANJO_SWITCH_LTO=ON` (i 4 file SDK già fuori LTO); si misura la
+  memoria massima del link a 1 job (16 GB di RAM, ~25 GB liberi su C:) e si confronta con la NRO senza LTO dello stesso commit
+  sulle stesse finestre. Confronto valido perché cambia un solo flag.
+- **PGO** (catena della base): NRO strumentata (`BANJO_PGO=generate`), quattro run dal salvataggio con lo stesso percorso:
+  cucina (60 s fermi + giro), strada a piedi e in auto (120 s), filmato intero, garage (60 s); i flussi `pgo/banjo_pgo_<N>.stream`
+  (ogni 2 min) uniti con `tools/pgo_merge.py` in `pgo-inplace/`; NRO `BANJO_PGO=use` contro la NRO LTO (o -O3) dello stesso
+  commit. Costo: due build complete a 1 job (strumentata e finale; ~2 h ciascuna, stima), ~25 minuti di console; la NRO
+  strumentata è più lenta (i suoi fps non sono misure). Riproducibilità: commit fissato, hash dei profili uniti nel manifest,
+  stessi toml; i profili si rifanno a ogni rigenerazione del codice (dopo il 144, prima del PGO).
+- Il guadagno atteso non è stimabile senza misura: oggi la strada è limitata dal render thread e dal mixer, codice in gran
+  parte già copiato a mano o a macchina.

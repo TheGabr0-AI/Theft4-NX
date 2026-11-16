@@ -10098,6 +10098,18 @@ DrawKindStats g_kind_stats[3];
 uint64_t g_merge_same[3] = {}, g_merge_contiguous[3] = {};  // banjo-nx (2026-10-27): NoteDrawMerge's, by kind
 u32 g_last_draw_kind = 2, g_last_draw_fields = 0, g_prev_draw_kind = 3;
 bool g_last_draw_fast = false;
+// theft4-nx (2026-11-16, U17): GTA IV's depth-words copy (PS B3D105989610E354, two draws a frame) stays on the full path
+// (DrawStateLocked) while gta4_renut_depth_restore_stencil_fast is on: only the full path notes it
+// (NoteGta4DepthWordsCopy), and on deko3d every other draw takes FastDrawLocked (console U16: 100.0 % fast), so the
+// restore never saw the copy and took the nine passes (U16-A/P: "0 restores in two passes, 4001 in nine"). The PC's
+// D3D12 has no fast path, which is why the PC took the two passes. As the fur family below, by the pixel shader's hash.
+REXCVAR_DECLARE(bool, gta4_renut_depth_restore_stencil);
+REXCVAR_DECLARE(bool, gta4_renut_depth_restore_stencil_fast);
+inline bool Gta4WordsCopyStaysFull(uint64_t ps_hash) {
+  static const bool on =
+      REXCVAR_GET(gta4_renut_depth_restore_stencil) && REXCVAR_GET(gta4_renut_depth_restore_stencil_fast);
+  return on && ps_hash == 0xB3D105989610E354ull;
+}
 inline u32 DrawKindOf(const Targets &t, const ShaderRecord *ps) {
   return ps ? 2u : (t.color_count == 0 && t.depth ? 0u : 1u);
 }
@@ -10518,7 +10530,7 @@ int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayCon
     if (device_ps) {
       const uint64_t h = device_ps->hash;
       if (h == 0x2F36770769087F99ull || h == 0xC92BA80672FB9774ull || h == 0xB3C10F3D80EF61E2ull ||
-          h == 0xD40EBF0336F89333ull)
+          h == 0xD40EBF0336F89333ull || Gta4WordsCopyStaysFull(h))  // theft4-nx (U17): the depth-words copy
         return FastMiss(kFastSpecial);  // the fur family: shells and skinning stay DrawStateLocked's
     }
   } else if (!f.shaders_fast) {
@@ -11425,7 +11437,7 @@ void StoreFastStateLocked(const DrawCall &call, ShaderRecord *vs, ShaderRecord *
     if (fast && device_ps) {
       const uint64_t h = device_ps->hash;
       fast = !(h == 0x2F36770769087F99ull || h == 0xC92BA80672FB9774ull || h == 0xB3C10F3D80EF61E2ull ||
-               h == 0xD40EBF0336F89333ull);
+               h == 0xD40EBF0336F89333ull || Gta4WordsCopyStaysFull(h));  // theft4-nx (U17): the depth-words copy
     }
     f.shaders_fast = fast;
     f.draw_texture_mask = texture_mask;  // the draw's own (after its depth-only answer)
@@ -12047,6 +12059,27 @@ void SasrtNoteExport(uint64_t sig, uint64_t moved_sig, const MemExportStream *ex
   std::atomic<uint64_t> &skipped = sasrt::gpu_round::g_census_cull_both_skipped;  // a load and a store (one writer)
   skipped.store(skipped.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
   return true;
+}
+
+// theft4-nx (2026-11-15, U16, gta4_renut_depth_restore_stencil_fast): GTA IV's depth-words copy, PS B3D105989610E354
+// (draws 500 and 621 of a frame). Its output (GLSL of the shader): x = (the source texel's w, y, x all 0) ? 0.5 : 1.0,
+// y = src.y, z = src.x, w = src.w. Written to an 8_8_8_8 target, the word's low byte (the stencil the EDRAM restore takes)
+// is 0x80 where the word's depth bytes (y, z, w) are all 0 and 0xFF elsewhere: a function of the restored depth. Noted only
+// when nothing changes that output on the way: one target, all four channels written, no blend (ONE/ZERO), the alpha
+// test always passing, no blend skip, no output trim, gamma or colour exponent bias on the target, no alpha to coverage,
+// and the scissor over the whole surface (the copy draws a whole-screen rectangle).
+constexpr uint64_t kGta4DepthWordsCopyPs = 0xB3D105989610E354ull;
+void NoteGta4DepthWordsCopy(const Targets &targets, const ShaderRecord *ps, const PipelineKey &key, u32 alpha_test_func,
+                            const plume::RenderRect &scissor) {
+  if (!ps || ps->hash != kGta4DepthWordsCopyPs || targets.color_count != 1 || key.color_count != 1)
+    return;
+  HostSurface *c = targets.colors[0];
+  const bool whole = scissor.left <= 0 && scissor.top <= 0 && scissor.right >= int32_t(c->scale.Size(c->width)) &&
+                     scissor.bottom >= int32_t(c->scale.Size(c->height));
+  if ((key.color_mask & 0xF) == 0xF && key.blend_control[0] == 0x00010001u && alpha_test_func == 7 && !key.blend_skip &&
+      (key.output_trim & 0xF) == 0 && ((key.reserved >> 4) & 1u) == 0 && ((key.reserved >> 8) & 0x3Fu) == 0 &&
+      !key.alpha_to_coverage && whole && c->format == plume::RenderFormat::R8G8B8A8_UNORM)
+    c->gta4_words_copy_seq = c->write_seq;
 }
 
 bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayConstants *replay) {
@@ -13359,6 +13392,7 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
       targets.colors[i]->blur_draw_seq = g_surface_write_seq;  // blur-nx (2026-11-10, port 76; its key 216)
       g_blur_color_write_last = g_surface_write_seq;  // blur-nx (2026-11-11, port 76; its key 220)
     }
+  NoteGta4DepthWordsCopy(targets, ps, key, sc.alpha_test_func, viewport.scissor);  // theft4-nx (U16)
   if (targets.depth) {
     const u32 dc = key.depth_control;
     const bool depth_writes = (dc & 2) && (dc & 4);
@@ -14841,6 +14875,67 @@ bool ResolveFixed16Locked(HostSurface *surface, HostTexture *dest, const plume::
 REXCVAR_DEFINE_BOOL(gta4_renut_depth_restore_stencil, true, "GTA4/Renut",
                     "The EDRAM depth restore (sasrt_renut_depth_restore) also restores the stencil from the colour words' "
                     "low byte, one pass a bit (Theft4-NX's old renderer, 6921903); off: the stencil 0 (the base)");
+// theft4-nx (2026-11-15, U16): U15's console GPU profile put the nine passes of the stencil restore at ~12.8 ms a restore
+// (two a frame in the kitchen: 25.6 of 60.9 ms; 1.0 ms on the PC). When the colour words are GTA IV's depth-words copy
+// over the whole surface (HostSurface::gta4_words_copy_seq, NoteGta4DepthWordsCopy), their stencil byte is 0xFF where the
+// word's depth is not 0 and 0x80 where it is: the depth pass writes 0xFF with the depth, and one pass with no pixel
+// shader, the depth test EQUAL at depth 0 (present_vs draws at z 0; the restored depth of a zero word is exactly 0.0),
+// writes 0x80 there. The same stencil as the passes a bit, two passes instead of nine, the second one early-tested.
+REXCVAR_DEFINE_BOOL(gta4_renut_depth_restore_stencil_fast, true, "GTA4/Renut",
+                    "With gta4_renut_depth_restore_stencil: when the restore's colour words are GTA IV's depth-words copy "
+                    "(PS B3D105989610E354 over the whole surface, nothing changing its output), the stencil in two passes "
+                    "(0xFF with the depth, 0x80 where the depth is 0) instead of one a bit; off: always one a bit");
+
+// theft4-nx (U16, gta4_renut_depth_restore_stencil_fast): the restore's second pass in its fast form, per depth format:
+// present_vs's triangle at z 0, no pixel shader, the depth test EQUAL (no depth writes), the stencil 0x80 (REPLACE, write
+// mask 0xFF) where it passes. nullptr when it cannot be made (the restore then takes the passes a bit).
+plume::RenderPipeline *RestoreZeroStencilPipelineLocked(plume::RenderFormat format) {
+  auto &s = State();
+  struct ZeroEntry {
+    plume::RenderFormat format = plume::RenderFormat::UNKNOWN;
+    std::unique_ptr<plume::RenderPipeline> pipeline;
+    bool tried = false;
+  };
+  static ZeroEntry entries[4];
+  for (ZeroEntry &e : entries) {
+    if (e.tried && e.format == format)
+      return e.pipeline.get();
+    if (e.tried || !s.present_vs || !s.utility_layout)
+      continue;
+    e.tried = true;
+    e.format = format;
+    plume::RenderGraphicsPipelineDesc desc;
+    desc.pipelineLayout = s.utility_layout.get();
+    desc.vertexShader = s.present_vs.get();
+    desc.pixelShader = nullptr;
+    desc.primitiveTopology = plume::RenderPrimitiveTopology::TRIANGLE_LIST;
+    desc.cullMode = plume::RenderCullMode::NONE;
+    desc.renderTargetCount = 0;
+    desc.depthTargetFormat = format;
+    desc.depthEnabled = true;
+    desc.depthWriteEnabled = false;
+    desc.depthFunction = plume::RenderComparisonFunction::EQUAL;
+    desc.stencilEnabled = true;
+    desc.stencilReadMask = 0xFF;
+    desc.stencilWriteMask = 0xFF;
+    desc.stencilReference = 0x80;
+    plume::RenderStencilFaceDesc face;
+    face.compareFunction = plume::RenderComparisonFunction::ALWAYS;
+    face.passOp = plume::RenderStencilOp::REPLACE;
+    face.depthFailOp = plume::RenderStencilOp::KEEP;
+    face.failOp = plume::RenderStencilOp::KEEP;
+    desc.stencilFrontFace = face;
+    desc.stencilBackFace = face;
+    e.pipeline = s.device->createGraphicsPipeline(desc);
+    if (e.pipeline)
+      e.pipeline->setName("theft4 depth restore (stencil 0x80 at depth 0)");
+    else
+      RGPU_WARN("[renut] EDRAM depth restore: the depth-0 stencil pipeline (format {}) could not be made: the stencil "
+                "passes a bit", uint32_t(format));
+    return e.pipeline.get();
+  }
+  return nullptr;
+}
 
 // sasrt-nx (2026-10-20): the EDRAM depth restore (see DepthRestoreSourceLocked): the depth of 'depth' from the words 'color'
 // holds over the same EDRAM, its stencil 0 (a game's restore copies a depth whose stencil it cleared).
@@ -14859,9 +14954,19 @@ bool RestoreDepthFromColorLocked(HostSurface *depth, HostSurface *color) {
     plume::RenderFormat format = plume::RenderFormat::UNKNOWN;
     std::unique_ptr<plume::RenderPipeline> pipeline;
   };
-  static Entry pipelines[4];
+  // theft4-nx (U16, gta4_renut_depth_restore_stencil_fast): the fast form's depth pass writes the stencil 0xFF.
+  static const bool restore_stencil_fast = REXCVAR_GET(gta4_renut_depth_restore_stencil) &&
+                                           REXCVAR_GET(gta4_renut_depth_restore_stencil_fast);
+  plume::RenderPipeline *const zero_pipeline =
+      restore_stencil_fast && color->gta4_words_copy_seq != 0 && color->gta4_words_copy_seq == color->write_seq
+          ? RestoreZeroStencilPipelineLocked(depth->format)
+          : nullptr;
+  const bool fast = zero_pipeline != nullptr;
+  static Entry slow_pipelines[4], fast_pipelines[4];
+  Entry *const pipelines = fast ? fast_pipelines : slow_pipelines;
   plume::RenderPipeline *pipeline = nullptr;
-  for (Entry &e : pipelines) {
+  for (Entry *ep = pipelines; ep != pipelines + 4; ++ep) {
+    Entry &e = *ep;
     if (e.pipeline && e.format == depth->format) {
       pipeline = e.pipeline.get();
       break;
@@ -14885,7 +14990,7 @@ bool RestoreDepthFromColorLocked(HostSurface *depth, HostSurface *color) {
         desc.stencilEnabled = true;
         desc.stencilReadMask = 0xFF;
         desc.stencilWriteMask = 0xFF;
-        desc.stencilReference = 0;
+        desc.stencilReference = fast ? 0xFFu : 0u;  // theft4-nx (U16): the fast form's 0xFF (the depth's other pass: 0x80)
         plume::RenderStencilFaceDesc face;
         face.compareFunction = plume::RenderComparisonFunction::ALWAYS;
         face.passOp = plume::RenderStencilOp::REPLACE;
@@ -14897,7 +15002,7 @@ bool RestoreDepthFromColorLocked(HostSurface *depth, HostSurface *color) {
       e.pipeline = s.device->createGraphicsPipeline(desc);
       e.format = depth->format;
       if (e.pipeline)
-        e.pipeline->setName("sasrt depth restore");
+        e.pipeline->setName(fast ? "theft4 depth restore (stencil 0xFF)" : "sasrt depth restore");
       pipeline = e.pipeline.get();
       break;
     }
@@ -14945,7 +15050,25 @@ bool RestoreDepthFromColorLocked(HostSurface *depth, HostSurface *color) {
   // theft4-nx (2026-11-15, gta4_renut_depth_restore_stencil): the stencil from the words, after the depth: one pass a bit
   // (the pixels whose bit is set write it: reference 0xFF, write mask that bit, REPLACE), over the stencil cleared above.
   static const bool restore_stencil = REXCVAR_GET(gta4_renut_depth_restore_stencil);
-  if (restore_stencil) {
+  static uint64_t restores_fast = 0, restores_bits = 0;  // theft4-nx (U16): the log's count of each form
+  if (fast) {
+    // theft4-nx (U16, gta4_renut_depth_restore_stencil_fast): 0x80 where the restored depth is 0 (the zero words), the depth
+    // test EQUAL against present_vs's z 0, no pixel shader: Zcull first forgets the cleared depth it still describes (the
+    // depth pass's depth came from the shader), else it could cull this pass as it would the lights'.
+#if defined(PLUME_DEKO3D)
+    if (IsDeko3D())
+      plume::Deko3DInvalidateZcull(cmd);
+#endif
+    cmd->setPipeline(zero_pipeline);
+    cmd->drawInstanced(3, 1, 0, 0);
+    ++restores_fast;
+  }
+  if (!fast && restore_stencil)
+    ++restores_bits;
+  if ((restores_fast + restores_bits) % 2000 == 1)
+    RGPU_INFO("[renut] EDRAM depth restore's stencil (gta4_renut_depth_restore_stencil_fast): {} restores in two passes "
+              "(GTA IV's depth-words copy), {} in nine (one a bit)", restores_fast, restores_bits);
+  if (restore_stencil && !fast) {
     struct StencilEntry {
       plume::RenderFormat format = plume::RenderFormat::UNKNOWN;
       std::unique_ptr<plume::RenderPipeline> pipelines[8];

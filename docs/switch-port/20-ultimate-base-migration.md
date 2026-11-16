@@ -1356,6 +1356,418 @@ frame.
   composizione `CC0C2F31` 2,2 ms. **Il +26 ms di U14 è il ripristino dello stencil a nove passaggi.**
 
 
+### 2.22 U16: il ripristino dello stencil in due passaggi, la rigenerazione con il codegen della base, la risoluzione dinamica (2026-11-15; PC, console da autorizzare)
+
+**GPU: lo stencil del ripristino in due passaggi (`gta4_renut_depth_restore_stencil_fast`, accesa).** U15-P ha messo i nove
+passaggi a schermo intero del ripristino a ~12,8 ms l'uno (due a frame in cucina). Il copy shader del gioco
+`B3D105989610E354` (draw 500 e 621) scrive nel byte basso della parola `(src.w, src.y, src.x tutti 0) ? 0.5 : 1.0`, cioè
+0x80 dove i tre byte di depth della parola sono 0 e 0xFF altrove: lo stencil è una funzione della depth ripristinata.
+- `NoteGta4DepthWordsCopy` (percorso completo dei draw) segna sulla superficie di colore la scrittura di quella copia solo
+  se niente ne cambia l'uscita: un target, i quattro canali, nessun blend (ONE/ZERO), test alfa sempre, nessun blend skip,
+  nessun trim, gamma o bias del target, nessun alpha to coverage, scissor su tutta la superficie, formato RGBA8; ogni altra
+  scrittura successiva (draw, clear, eredità EDRAM) cambia `write_seq` e il segno non vale più.
+- Quando la sorgente del ripristino è quella copia: il passaggio della depth scrive lo stencil 0xFF; Zcull invalidato
+  (deko3d: non vede la depth scritta dallo shader); un passaggio senza pixel shader con il test di depth EQUAL a z 0
+  (`present_vs`, depth da 0 a 1 su deko3d e D3D12; la depth ripristinata di una parola 0 è esattamente 0,0) scrive 0x80.
+  Lo stesso stencil dei passaggi a bit, due passaggi invece di nove, il secondo scartato in anticipo dalla depth. Altrimenti
+  i passaggi a bit, come in U14.
+
+PC (D3D12, stesso salvataggio, profilo GPU per passaggio): 8.001 ripristini su 8.001 nella forma veloce; l'etichetta della
+copia + ripristino 1,64 -> **0,83 ms** (la copia da sola 0,64), GPU a frame 13,59 -> 12,29 ms; immagini uguali alla forma a
+bit entro il rumore tra due run (differenza media ~1/255, la stessa che separa due run identiche). Atteso sulla console: il
+ripristino da ~12,8 ms a pochi ms, cioè ~20 ms in meno a frame in cucina (GPU 61 -> ~40 ms, se resta il limite).
+
+**CPU: la rigenerazione con i passaggi di codegen dei port 136 e 140** (`post_codegen.py` sull'albero generato di U15, che
+resta in `ultimate/out/generated-u15-backup`): 314 file su 628 cambiati; `float_loads` 19.798 letture float riscritte e,
+nella forma a ogni modo (M-23), 11.410 letture e 8.346 scritture; `near_exact.py` nella sua forma esatta (VMaxFp/VMinFp);
+store card per le viste (`BLUR_CARD_VIEWS_ONLY`, già acceso). Verifica PC: guardia densa delle copie **0 differenze su
+3.126.347 chiamate** (270 copie raggiunte), controlli del codice generato 0, flusso della modalità flush 0 modifiche,
+inoltri dello stack 0, auto-verifica delle forme 44.525/44.525; immagine uguale. Il guadagno è delle forme ARM: si misura
+solo sulla console. (Correzione: `sub_828C7848` è già una copia in place; il profilo la nomina come la funzione generata.)
+
+**Risoluzione dinamica: quella della base** (`banjo_renut_dynamic_resolution`, `render/surfaces.cpp`
+`NoteGpuFrameForDynamicResolution`; sasrt-nx, vivapinata-nx): l'immagine 3D tra un'altezza bassa e alta per modalità su una
+griglia (36 righe: 576 612 648 684 tra 540 e 720), la media mobile del tempo GPU (o del lato CPU quando più lungo:
+`sasrt_dynamic_cpu_aware`), giù dopo 5 s sopra il budget al passo previsto, su di un passo dopo `up_s` s con 1 ms di margine
+e la memoria per i nuovi target; HUD e uscita a 1280x720 (scala bilineare, bicubica con `banjo_renut_upscale_filter 1`);
+ogni cambio nel log. Sul PC agisce solo il deko3d; GTA IV a una scala diversa da 1x è verificato sul PC con
+`renut_resolution 480p` (stanza illuminata come a 720p: ripristino EDRAM, mezzi tile, copia in pixel guest reggono).
+
+**Glitch (diagnosi, nessuna correzione):**
+- il "triangolo luminoso" è il fascio della lampada della cucina: un cuneo bianco dal bordo netto che parte dalla lampadina
+  (catture U15-A); con l'alone (un disco bianco uniforme) condivide i bordi netti dove il gioco sfuma. Ipotesi aperta comune:
+  la sfumatura di questi effetti (particelle "soffici") legge la depth risolta della luce `40079D50` (resolve della depth
+  ripristinata `400007C0`); esclusa: le query di occlusione (§2.20). Serve il salvataggio dell'utente per la cucina sul PC;
+- ombre che lampeggiano: da localizzare con lo stesso salvataggio (le ombre del sole in strada sono uguali al PC, §2.20).
+
+**Prova U16 proposta (non costruita):** un pacchetto, tre run brevi dalla stessa posizione:
+**A** (720p fissi, il toml di U15-A: il codice U16 contro U15-A), **D** (A + risoluzione dinamica 540-720, budget 33,3 ms,
+su dopo 2 s: contro A), **P** (A + profilo GPU per passaggio: il costo del nuovo ripristino); più una copia del salvataggio
+per il PC.
+
+### 2.23 U16 letto sulla console; U17: il collo di bottiglia CPU, i vetri intermittenti, il ripristino veloce mai attivo (2026-11-16; PC, console da autorizzare)
+
+Materiale: `out/console-runs/u16/COPY_TO_SD/switch/theft4-ultimate/{A,D,P}` (NRO `4424ac8a…`, build
+`6be295853eed-dirty`, clock standard 1020/460,8/1331,2 MHz in tutti i blocchi del profilo), salvataggio
+`out/console-runs/u16/save-copy/renut`. Nessuna nota scritta del run. Il percorso dei tre run è lo stesso e si legge dalle
+catture: corridoio e cucina (47-89 s), strada a piedi e in auto (90-180 s), filmato nell'ufficio del taxi (190-245 s),
+garage del taxi (250-300 s). Il log del renderer e il profilo hanno orologi diversi: le finestre sono scelte a mano su
+ciascuno (catture, draw a frame). Strumenti nella cartella di lavoro: `scenes.py` (tabella sotto), `prof.py` (tempo per
+funzione per thread e finestra, simbolizzato con `nm` dell'ELF U16), `cores.py` (CPU per maschera dei core), `cats.py`,
+`regions.py`/`diffimg.py` (catture).
+
+**Per scena (mediane; U16-P solo per il profilo GPU).** CPU dei thread in % di un core.
+
+| Run | Scena | fps | render thread ms | GPU ms | draw/frame | CPU tot % | audio % | mixer | main | render guest | render ReNut | audio 2 | XMA |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| U15-A | cucina (1 finestra) | 16,1 | 13,4 | 61,2 | 625 | 266 | 99,8 | 107 | 35 | 21 | 28 | 31 | 8 |
+| U15-A | strada | 9,0 | 61,2 | 56,7 | 4.351 | 354 | 90,7 | 109 | 37 | 50 | 63 | 15 | 11 |
+| U15-A | filmato | 20,3 | 18,6 | 48,4 | 976 | 276 | 92,0 | 104 | 37 | 28 | 40 | 23 | 10 |
+| U15-A | garage | 9,3 | 53,0 | 57,5 | 3.767 | 348 | 85,2 | 108 | 40 | 42 | 57 | 16 | 11 |
+| U16-A | cucina | 16,5 | 13,2 | 59,5 | 650 | 246 | 100,0 | 94 | 35 | 19 | 24 | 36 | 8 |
+| U16-A | strada | 9,3 | 56,0 | 56,8 | 4.295 | 359 | 95,0 | 108 | 38 | 50 | 62 | 18 | 13 |
+| U16-A | filmato | 20,0 | 17,6 | 49,0 | 922 | 272 | 98,8 | 104 | 38 | 26 | 36 | 24 | 9 |
+| U16-A | garage | 10,7 | 49,2 | 62,9 | 3.946 | 338 | 91,6 | 103 | 40 | 44 | 58 | 18 | 11 |
+| U16-D | cucina | 16,6 | 13,0 | 59,1 | 649 | 241 | 100,0 | 94 | 34 | 19 | 23 | 32 | 8 |
+| U16-D | strada | 9,1 | 56,2 | 55,7 | 4.073 | 355 | 96,4 | 106 | 39 | 50 | 59 | 19 | 12 |
+| U16-D | filmato | 20,1 | 18,2 | 48,7 | 970 | 282 | 99,2 | 104 | 38 | 29 | 39 | 23 | 9 |
+| U16-D | garage | 10,6 | 50,0 | 64,8 | 4.044 | 344 | 95,2 | 105 | 40 | 49 | 61 | 20 | 11 |
+
+Lettura: U16 contro U15-A **fps invariati** in ogni scena (le differenze stanno nel rumore e nei percorsi non identici);
+**audio migliore** (strada 90,7 -> 95,0 %, filmato 92,0 -> 98,8 %, garage 85,2 -> 91,6 %) con la stessa CPU del mixer:
+il guadagno è delle forme di codegen 136/140 (§2.22), non di un thread in più. Nessuna compilazione attesa da un draw.
+
+**Anomalia U16: il ripristino in due passaggi non è mai partito sulla console.** Log di A e P:
+"`0 restores in two passes (GTA IV's depth-words copy), 4001 in nine`" (sul PC, stesso codice: tutti in due). Il profilo P
+attribuisce ancora all'etichetta della copia `B3D105989610E354` **25,6 ms su 60,0** in cucina (U15-P 25,6 su 60,9) e
+**20,6 su 58,0** in strada. **Causa, dimostrata nel codice:** su deko3d quasi ogni draw passa da `FastDrawLocked` (A: 421.257
+veloci, 178 completi, 100,0 %), che aggiorna `write_seq` delle superfici ma non chiama `NoteGta4DepthWordsCopy` (che sta
+solo nel percorso completo `DrawStateLocked`); il segno della copia resta vecchio e il ripristino sceglie i nove passaggi.
+Il D3D12 del PC non ha il percorso veloce (`FastDrawLocked` esce subito se non è deko3d): per questo il PC li prendeva.
+**Correzione U17 (in `render/draw.cpp`, non committata):** con `gta4_renut_depth_restore_stencil_fast` accesa, la copia
+`B3D105989610E354` (due draw a frame) resta sul percorso completo, come già gli shader "fur" (`Gta4WordsCopyStaysFull`
+nelle due liste: il controllo degli shader di `FastDrawLocked` e `shaders_fast` del percorso completo). PC: compila; nessun
+effetto sul PC (nessun percorso veloce), log 8.001/8.001 in due passaggi, 67 fps nel corridoio. Atteso sulla console (da
+misurare): l'etichetta da ~25 ms verso pochi ms in cucina e in strada.
+
+**Dove va il tempo CPU (U16-A).**
+- **Cucina e filmato: limite GPU.** Il thread del gioco aspetta le fence della GPU ~780 ms al secondo (riga "game thread's
+  waits for the renderer": fence 16/s, 778 ms); i core 0-2 non sono pieni (cucina 247 % di richiesta sui core del gioco).
+- **Strada e garage: core 0-2 saturi.** Richiesta dei thread ammessi sui core 0-2: guest (maschera 0x7) 296 % + render
+  thread di ReNut (solo core 1) 61 % = **~357 % su 300 %**; il gioco aspetta le fence solo 30-60 ms al secondo. Il **core 3
+  è concesso al processo (maschera 0xF) ma non usato** (`banjo_system_core = 0`, scelta di U7). Nessun thread del fotogramma
+  è al 100 % (main 38-40 %, render guest ~50 %, render ReNut ~60 %, GPU ~57 ms su un frame di ~107 ms): la catena main ->
+  render guest -> render ReNut -> GPU è in serie e i thread pronti aspettano un core (il profilo non misura il tempo in
+  coda: lo si deduce dalla richiesta oltre la capacità).
+- **Il mixer XAudio (supervisor, entry `0x82169400`, priorità 0x2D) occupa da solo ~105 % di un core** in ogni scena, sopra i
+  thread del gioco (0x3B): router `sub_8216D7E0` 27,6 %, `828C6740` 16,9 %, biquad `828C2D28` 15,4 %, `828C5A58` 11,3 %,
+  `82185E38` 8,0 %, `828C7848` 5,5 % dei suoi campioni. Con il thread "audio 2" (`sub_828A…`, 18-24 %) e l'XMA (9-13 %)
+  l'audio prende ~1,3-1,4 core su 3.
+- **Render thread di ReNut** (core 1, 0x2C), strada: 38 % in attesa di lavoro, 12 % in attesa di uno slot (fence della GPU,
+  `WaitSlotLocked`), 3 % acquisizione dell'immagine, ~46 % di calcolo: `FastDrawLocked` 21,9 %, `PushFloatConstants` 6,7 %,
+  `WholeGeometryTry` 6,6 %, `QueueCapture` 5,1 %, `FillTextures` 4,6 %, `PagesClean` 3,6 %.
+- **Render thread del gioco** (~50 %): `CaptureDelta` 9,7 %, `Push` 4,2 %, `sub_82871130` 3,9 %, `_malloc_r` 3,4 %; attese:
+  semaforo (`sub_829A96E8`) 29 %, `BlockOnFence` 11,5 %.
+- **Thread principale** (~39 %): attese su semaforo 28 %, `KeDelayExecutionThread` 10 %, WaitMultiple 18 %; il 40 % degli
+  stack si ferma nel codice guest (senza catena dei frame).
+- Spin e polling: 4.000-5.800 yield/s e ~1.800 sleep brevi/s (~280 ms/s); i tre worker del job system a ~11 % ciascuno
+  (la cessione di U9 regge).
+
+**Risoluzione fissa contro dinamica (D).** 14 cambi in ~6 minuti, nessuna oscillazione rapida (salita di un passo ogni 2 s).
+In cucina 720 -> 684 -> 540 righe in 5 s, ma **la GPU resta a 59-60 ms a 540**; nel filmato a 540 righe 48,7 ms contro 49,0
+di A: il tempo GPU di queste scene non dipende dall'altezza 3D (ripristino della depth, ombre 1280x1280, passaggi a misura
+fissa). In strada e garage il limite è la CPU e il budget con il lato CPU (89-103 ms) la riporta a 720. Nessun costo CPU
+misurabile (render thread 13,0 contro 13,2 ms, 56,2 contro 56,0). Si tiene spenta finché i passaggi fissi non calano.
+
+**Vetri, fari e ombre intermittenti (dimostrato nelle catture, causa non dimostrata).** Garage, auto e telecamera ferme
+(A, 262-289 s): fra due catture la differenza è **solo** nel parabrezza, nei vetri dei fari (e nei due passeggeri che si
+muovono); il resto è identico al pixel. Lo stesso vetro appare chiaro e riflettente in una cattura, scuro nella successiva.
+Vetri, fari, finestre e ombre campionano texture prodotte nello stesso frame (mappa di riflessione 256x256: 255 draw a
+frame; shadow map 1280x1280: 1.582 draw a frame in strada). Le differenze PC/console in gioco qui sono tutte solo deko3d:
+- `FastDrawLocked` (100 % dei draw sulla console, assente sul PC): riparte dallo stato del draw precedente e rifà solo ciò
+  che i bit di campo dicono cambiato; il caso del ripristino veloce mostra che quello che vive solo nel percorso completo
+  non lo vede (la stessa famiglia del difetto delle ombre di kabba536: stato non ripristinato);
+- `banjo_deko3d_barrier_lean` / `_merge` (cache delle texture non invalidata in certe transizioni, barriere fuse);
+- `banjo_deko3d_texture_skip` (un draw con gli stessi descrittori non rilega le texture).
+Sul PC il salvataggio arriva nello stesso corridoio della console (catture 40-100 s uguali), ma il D3D12 non esegue nessuno
+dei tre percorsi: **il confronto draw per draw non può mostrare la divergenza**, che nasce in codice che il PC non ha (il
+Vulkan del PC si chiude in amdvlk64, §2.13). Il garage del taxi si raggiunge solo dopo il filmato della missione (~4 minuti
+di gioco): sul PC non riprodotto. Procedura proposta sulla console (sotto): bisezione a interruttori, un'auto ferma,
+catture ogni secondo.
+
+**Ottimizzazioni candidate (esame dei riferimenti).** Le 141 righe di `docs/ultimate-fixes.md` della base (`3e6ae026`)
+sono già nel nostro albero (U15). Restano: le sezioni "needs the game's own address" (le query di occlusione: GTA IV non le
+usa, §2.20), "what base ports cost sasrt-nx" (porte 76/215 e 101: -0,4 ms a frame del render thread su sasrt-nx, da
+provare spente se GTA IV non ne ha bisogno) e "off-by-default". Dal port di kabba536 (`gta4nx-switch.patch`): il thread
+XAudio2 sul core 3 ("~85 % di un core tolto ai core 0-2", non rigido: preferisce il core 3 e può migrare), il thread
+principale a 46 sopra gli altri guest ("pronto ma fermo ~24 %"), l'audio host a 43.
+
+| Candidata | Problema | Codice | Beneficio atteso | Rischio | Verifica | Stato |
+|---|---|---|---|---|---|---|
+| Ripristino veloce anche su deko3d | 20-25 ms di GPU a frame nell'etichetta della copia | `render/draw.cpp` (`Gta4WordsCopyStaysFull`) | GPU -10..-20 ms a frame in cucina/strada (da misurare) | basso: due draw a frame sul percorso completo, già PC-verificato in U16 | log "N restores in two passes", profilo GPU, luce e cielo nelle catture | **fatto**, PC compilato |
+| Mixer XAudio sul core 3 | core 0-2 saturi in strada, core 3 libero | `cpu/gta4_xaudio_threads.cpp` (`gta4_xaudio_supervisor_core3`, 0 di default) | fino a ~1 core in più per main/render in strada | audio se il sistema occupa il core 3 (modalità 2); nessun effetto sul codice guest | A/B sulla console: fps strada, audio %, CPU per maschera | **fatto**, spento; ramo Switch non compilato (nessuna build Switch autorizzata) |
+| Thread principale sopra gli altri guest | main pronto ma senza core | nessun codice: `switch_thread_priorities = "Main XThread=0x2E"` | qualche ms del frame in strada | i worker e lo streaming scendono sotto | A/B sulla console | da provare |
+| Nativi esatti del mixer (biquad `828C2D28`, `828C6740`, `828C5A58`) | mixer ~1 core | copie a mano con guardia bit-exact | -20..-40 % del mixer (stima) | correttezza DSP | guardia densa sul PC + ms per blocco sulla console | non iniziato |
+| Porte 76/215 e 101 spente | lavoro del render thread a ogni op | toml | ~0,4 ms a frame (sasrt-nx) | GTA IV potrebbe averne bisogno | catture + render thread | da provare |
+| Risoluzione dinamica | GPU nelle scene GPU-bound | base | nullo oggi (GPU non proporzionale) | - | dopo il ripristino veloce | spenta |
+
+**U17 nell'albero (non committato):** la correzione del ripristino veloce e la chiave del core 3 (spenta). Build PC
+incrementale riuscita (`draw.cpp`, `gta4_xaudio_threads.cpp`), run PC dal salvataggio U16: avvio, corridoio, due passaggi.
+
+**Prova U17 proposta (non costruita):** una build Switch con un job (U16 + le due modifiche), stessa cache DKSH:
+**A** (toml di U16-A: il ripristino veloce contro U16-A), **C1** (A + `gta4_xaudio_supervisor_core3 = 1`), **C2** (A + `= 2`),
+e per i vetri, fermi accanto a un'auto (garage del taxi o un'auto parcheggiata) con una cattura al secondo per 60 s:
+**G0** (A), **G1** (A + `banjo_renut_fast_draw = false`), **G2** (A + `banjo_deko3d_barrier_lean = false` +
+`banjo_deko3d_barrier_merge = false`), **G3** (A + `banjo_deko3d_texture_skip = false`). Il primo G in cui il vetro smette di
+alternarsi localizza la causa; se G1, `banjo_renut_fast_draw_verify = true` dice quale parte dello stato è sbagliata.
+
+### 2.24 U17: la build Switch e il pacchetto A/C/G; TW2DE-NX, i port 142-147 della base, gli altri port (2026-11-16; build sul PC, nessun run su console)
+
+**Build (fatto verificato sul PC, non sulla console).** `tools\ultimate\build_switch.bat everyday` con
+`THEFT4_SWITCH_JOBS=1`, nessun'altra build in corso. Nuova variabile facoltativa `THEFT4_BUILD_LABEL` dello script: aggiunta
+allo stamp (`6be295853eed-dirty+u17`), così il log distingue U17 da U16 (stesso commit, entrambe non committate); ricompila
+solo `main.cpp`. Ninja ha ricompilato 3 file (`main.cpp`, `cpu/gta4_xaudio_threads.cpp`, `render/draw.cpp`) e collegato: il
+resto dell'NRO e `app/generated` sono quelli di U16. Nessun errore; l'unico avviso è quello di sempre (`renut_pch.h:184`,
+attributo su `asm`). Il ramo Switch di `gta4_xaudio_supervisor_core3` (mai compilato prima) compila e collega
+(`__real_svcSetThreadCoreMask` risolto dal `--wrap` dell'SDK). Nell'ELF: lo stamp `+u17`, le chiavi
+`gta4_xaudio_supervisor_core3` e `gta4_renut_depth_restore_stencil_fast`, la riga del log "restores in two passes", la riga
+"XAudio supervisor on core 3"; ogni chiave dei toml del pacchetto esiste come cvar nell'ELF.
+
+| File | Byte | SHA-256 |
+|---|---|---|
+| `out/console-runs/u17/COPY_TO_SD/switch/theft4-ultimate/theft4-ultimate.nro` | 65.177.797 | `15da0fff66b66463c00f547bcebb79d14734211ea27ad8594692f25e1137399e` |
+| `out/console-runs/u17/theft4-ultimate.elf` | 82.188.808 | `6755dbd136997efbb613a1b36ca73cef2ae45385447705b4299de1ffc8c23053` |
+| `.../deko3d_shaders.bin` (cache U10, invariata) | 51.766.560 | `438346a32d17b81a9d2032c782ab6d0a95317e63eb08d7b34587138d78639ae1` |
+
+Il pacchetto (`tools/ultimate/package_switch.py --allow-dirty`, manifest `ultimate-manifests/switch-u17.json`) ha
+`README-U17.txt`, `SHA256SUMS-U17.txt` e `u17-uncommitted.patch` (il diff di `ultimate/` e `tools/ultimate/` contro `6be2958`,
+verificato con `git apply --check --reverse`). L'NRO U16 (`4424ac8a…`, `out/console-runs/u16`) e i suoi run non sono toccati.
+
+**Le varianti (un solo cambiamento ciascuna; toml letti con `tomllib`, chiavi confrontate).** Base comune: il toml di U16-A.
+
+| Toml | Run | Rispetto a | Cambiamento |
+|---|---|---|---|
+| `gta4-U17-A.toml` | A | U16-A | `renut_resolution = "720p"`, `banjo_renut_dynamic_resolution = false` espliciti (già i default: 720p fissi per tutto il confronto); l'NRO U17 |
+| `gta4-U17-C1.toml` | C1 | A | `gta4_xaudio_supervisor_core3 = 1` (il supervisor preferisce il core 3, può migrare) |
+| `gta4-U17-C2.toml` | C2 (facoltativa) | A, C1 | `gta4_xaudio_supervisor_core3 = 2` (solo core 3; modalità esclusiva, mai di default) |
+| `gta4-U17-G0.toml` | G0 | A | catture a raffica: 3 ogni ~2 s, 200 raffiche (`nfsmw_captura_max` conta le raffiche: 600 PNG, almeno 400 s) |
+| `gta4-U17-G1.toml` | G1 | G0 | `banjo_renut_fast_draw = false` |
+| `gta4-U17-G2.toml` | G2 | G0 | `banjo_deko3d_barrier_lean = false`, `banjo_deko3d_barrier_merge = false` (una leva: l'ottimizzazione delle barriere) |
+| `gta4-U17-G3.toml` | G3 | G0 | `banjo_deko3d_texture_skip = false` |
+
+Mixer, DSP, priorità (0x2D, U11) e qualità audio sono gli stessi in ogni variante: C1/C2 cambiano solo il core del
+supervisor. Da leggere nei log: "build 6be295853eed-dirty+u17"; "N restores in two passes" con N > 0 (A: il ripristino
+veloce ora attivo sul deko3d; da misurare il costo dell'etichetta `B3D105989610E354` contro i 20-25 ms di U16, nessuna stima
+presentata come misura); C1/C2: "XAudio supervisor on core 3 … now preferred core 3 mask 0x…".
+
+**Vetri (ipotesi, non dimostrata).** Lo studio di LibertyRecomp (`refs/LibertyRecompAndroid/docs/reflection-rendering-study`)
+documenta che i vetri dei veicoli (`gta_vehicle_vehglass_ps0`, `EnvironmentTex` legato da `sub_8250B190`) e la vernice
+campionano la mappa paraboloide 256x256 (`REFLECTION_MAP_COLOUR/DEPTH`, creata da `sub_822D93E8`) prodotta nello stesso
+frame. Un vetro "chiaro, poi scuro" a scena ferma è compatibile con una lettura di quella mappa prima della scrittura o con
+una cache delle texture non invalidata (`barrier_lean`): G2 è un indiziato forte, ma la causa la dice solo la bisezione.
+
+**TW2DE-NX (`recomp-nx/tw2de_nx`, `e24ac6a`, 2026-11-15; un solo commit di codice "Init #1" più README e la lista delle pipeline
+in testo).** Esaminati: README, `build_switch.py` (893 righe), i tre `.bat`, `app/CMakeLists.txt`, `tools/` (51 file),
+`app/src/pgo_switch.*`, `render/fsr1|fsr3|early_upscale|dynamic_resolution.cpp`, la toolchain.
+
+| Tecnica | Codice TW2DE | Da noi | Stato | Beneficio / costo | Prova |
+|---|---|---|---|---|---|
+| PGO (GCC, `-fprofile-generate/use`) | `build_switch.py --pgo`, `pgo_switch.cpp` (un `.fxpg` a run, `--wrap=__gcov_init`), `pgo_unpack.py`, `pgo_functions.py` (id delle funzioni statiche fra cartelle) | la base ha già la sua catena: `BANJO_PGO=generate/use`, flussi `pgo/banjo_pgo_<N>.stream` ogni 2 min, `tools/pgo_merge.py`, `build_switch_release.bat`, profilo `pgo-inplace/` per le copie in place | **presente, mai usato per GTA IV** | non stimabile senza misura (dipende dalla copertura); costo: build strumentata completa (~2 h a 1 job), run rappresentativi, build release completa | NRO strumentato: cucina, strada, garage, filmato; release contro U17-A, stesse finestre |
+| LTO + `-fipa-pta` | `TW2DE_LTO`, `-flto=auto` | `BANJO_SWITCH_LTO`, `BANJO_SWITCH_IPA_PTA` (spenti); 4 file SDK fuori LTO | **presente, spento** | rischio memoria al link (16 GB, ~9 GB liberi): da provare prima da sola | build LTO senza profilo, memoria massima del link, poi A/B |
+| `-O3`, flag ARM64 | `-O3`, `-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft`, `-mearly-ra=none -mno-outline-atomics` | **identici** (letti in `build.ninja`) | presente | - | - |
+| Codegen "batched" (file da ~1 MB) | `--batched`, `one_function_per_file=false` | il nostro generato è già in 159 file `renut_recomp.N.cpp` | presente | - | - |
+| `msr_fences.py` (fence `dmb ish` attorno a `mfmsr/mtmsrd`) | `tools/msr_fences.py` | il generatore 0.10 della base non emette fence lì (solo commenti) | equivalente presente | - | - |
+| `pch_no_volatile.py` + `loop_barriers.py` (+6 % fps in TW2) | `post_codegen_switch.py` | applicati da `post_codegen.py` (sa2-nx) | presente | - | - |
+| `vec_neon_forms.py` (vslw, vupkd3d128 0/4, vpermwi128, vcsxwfp scalati; esatti, provati con qemu) | `tools/vec_neon_forms.py`, `sdk/tests/vec_neon_forms_test.cpp` | NORMSHORT2 arriva col port 144; vslw 179 siti, vupkd3d128 16, vpermwi/vcsxwfp/vcuxwfp 2.222; nel mixer solo `828C5A58` (3 vslw, 1 vupkd3d) | **trasferibile** (il resto dopo il 144) | piccolo (stima, non misurato); costo medio: porto + test qemu + guardia | guardia densa sul PC, ms del render guest sulla console |
+| Shader DKSH anticipati | pre-passaggio sulla console al primo avvio, `pipeline_list.txt` da unire fra giocatori; host shader con uam PC nel romfs | cache DKSH offline (`deko3d_shaders.bin`, U6-U10) + 33 host shader nell'NRO; unione dei run con `gta4_dksh_cache.py --console-merge` | presente (più avanti) | - | - |
+| FSR 1 (EASU+RCAS), Lanczos-2, upscale precoce (UI a risoluzione d'uscita) | `fsr1.cpp`, `early_upscale.cpp`, `lanczos2_ps.glsl` | base: bilineare/bicubico (`banjo_renut_upscale_filter`) | adattabile | oggi nullo: la GPU di GTA IV non scala con l'altezza 3D (U16-D) | dopo che i passaggi fissi calano: D con FSR1 contro bicubico |
+| FSR 3.1 (temporale) | `fsr3.cpp` (1.152 righe), vettori di moto del gioco | GTA IV non ha un target di vettori di moto noto | **incompatibile** senza vettori sintetici | costo alto | - |
+| Risoluzione dinamica | `dynamic_resolution.cpp` (budget 30,9 ms) | quella della base (U16-D) | presente | - | - |
+| Thread | profiler e watchdog sui core 0-2 | nulla di nuovo per il core 3 | - | - | - |
+
+**La base è andata avanti (`bf6ccc1e`, 2026-11-16): port 142-147, i "speed-up" di TW2DE accesi, le sue correzioni spente.**
+Le righe 142-147 di `docs/ultimate-fixes.md` lette per intero (`git show origin/main:` nel clone, il cui checkout resta
+`8de5d51a`). Non sono nel nostro albero (U15 ha preso fino a 141); **non portati in U17** (le varianti U17 restano
+pulite). Rilevanza per GTA IV (dal codice generato e dai profili U16, da misurare):
+- **145 renderer** (acceso): `banjo_renut_stream_redeem` (TW2 -7 ms di render thread a frame), `keep_unused_targets` 250 ms,
+  `dynamic_texture_rows`, `native_16bit` (deko3d), `banjo_async_present` (da confrontare sulla console). Il nostro render
+  thread ReNut in strada è al 46 % di calcolo (`FastDrawLocked` 21,9 %, `WholeGeometryTry` 6,6 %, `FillTextures` 4,6 %).
+- **146 runtime**: `thread_mutant_release_lockfree`, `filesystem_bounce_piece_mb` 4 (ogni pezzo ~2,3 ms fissi sulla console:
+  lo streaming di GTA IV legge molto), `filesystem_bounce_guest_only`.
+- **144 codegen**: `spin_hint_yield` (GTA IV ha 12 `db16cyc`: in `sub_8216C750` e `sub_82169D90` dell'XAudio, `sub_829CFE80`
+  (8 in fila) e `sub_829DD928` del D3D) e NORMSHORT2 in NEON (8 siti). Serve una rigenerazione (`post_codegen.py`) e la
+  guardia.
+- **143 kernel**: niente attesa di 100 ms prima di ogni chiamata overlapped differita (salvataggi, enumerazioni).
+- **142**: la chiave `kernel_timestamp_timer_on_import` tolta (era spenta).
+- **147**: test delle istruzioni PowerPC (NRO di test), nessun effetto sul gioco.
+
+**Gli altri port in `refs/` (scansione per parole chiave di sorgenti e documenti, `refs_scan.py`; lettura completa solo dove
+indicato).** I port di Chansey (katamari, rr6, sa2, nfsmw, bejeweled3, torchlight, renut-nx, mgr-nx-deko, masseffect-nx)
+arrivano nel nostro albero attraverso la base, che li ha già fusi (ultimate-fixes 1-147): nessun duplicato da prendere.
+Nuovi per noi: **LibertyRecompAndroid** (GTA IV su PC/Android; studio dei riflessi letto: la mappa paraboloide, sopra; i
+documenti su streaming, collisioni, handle UAF non letti per intero), **gta4-kabba536** (già in §2.23: XAudio2 sul core 3,
+main a 46). `unleashed-*` e `UnleashedRecomp`: renderer nativo D3D12/Vulkan per PC; la scansione non vi trova PGO, LTO né
+codice di core o Switch (solo la scansione, non una lettura). Non letti per intero: `masseffect-nx`, `mgr-nx-deko`,
+`unleashed-*` e il resto di LibertyRecomp: restano da leggere (aperto).
+
+**Prossimo ciclo (U18), in ordine, dopo i run U17** (le misure U17 sono il riferimento):
+1. Leggere A, C1/C2, G0-G3. Se G localizza il vetro: correzione mirata e una prova sola.
+2. Port 142-147 con `ult_port_sync.py` (le tre parti di app/sdk/tools), rigenerazione (144), guardia densa sul PC, build
+   Switch a 1 job, A/B sulla console contro U17-A (render thread, fps strada/garage, `[latency]` per l'async present).
+3. Se C1 aiuta senza peggiorare l'audio: renderla default per GTA IV; poi il main thread a 0x2E (kabba536) come A/B.
+4. Build LTO da sola (memoria del link a 1 job), poi il ciclo PGO della base con profili di cucina, strada, garage e
+   filmato (`pgo-inplace/`).
+5. Nativi esatti del mixer (biquad `828C2D28`, `828C6740`, `828C5A58`) con la guardia bit-exact; `vec_neon_forms` dopo il 144.
+
+### 2.25 U17 letto sulla console; C1/C2 spiegati; lampeggiamenti localizzati fuori da G1-G3; nuova partita sul PC; port 142-147 divisi per gruppi (2026-11-16; console letta, PC provato, nessuna build Switch)
+
+**Materiale e attribuzione (fatti).** `out/console-runs/u17/COPY_TO_SD/switch/theft4-ultimate/{A,C1,C2,G0,G1,G2,G3}` (log,
+`logs/rex/rex_profile.log`, catture; ordine dei run dalla crescita di `pipeline_list.bin` e dagli orari: A, C1, C2, G0, G1,
+G2, G3). Ogni log dice `build 6be295853eed-dirty+u17`; NRO sulla scheda ancora `15da0fff…`; clock 1020/460,8 MHz in ogni
+blocco del profilo. La leva di ogni run si legge nel suo log: C1 "now preferred core 3 mask 0xF", C2 "mask 0x8, running on
+core 3"; G1 0 draw veloci su 370.863 (G0 99,9 %); G2 `sasrt_gpu_lean_barrier_skip` 0 (G0 4.189) e `readback_barrier_merge` 0
+(G0 252); G3 0 texture saltate (G0 276.499). G0 differisce da A **solo** per le catture (toml confrontati: raffiche di 3 ogni
+~2 s al posto di una ogni 5 s). Strumenti nella cartella di lavoro: `u17_scenes.py` (scene per draw a frame, profilo allineato
+al log del renderer sugli fps), `u17_io.py` (letture lente), `flicker.py` (differenze dentro una raffica), `u17_threads.py`.
+
+**Per scena (misure Switch, mediane; il profilo e il log del renderer hanno orologi separati, allineati sugli fps).** CPU dei
+thread in % di un core; "audio" = blocchi mescolati / chiesti. Le scene sono riconosciute dai draw a frame, i percorsi non
+sono identici fra i run (G0 a 240-279 s guida, non è fermo accanto all'auto).
+
+| Run | Scena | fps | p10 | render thread ms | GPU ms | draw/frame | CPU tot % | audio % | mixer | main | render guest | render ReNut |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| U16-A | cucina | 16,6 | 16,5 | 13,1 | 59,3 | 652 | 244 | 100,0 | 94 | 34 | 35 | 23 |
+| U16-A | strada | 8,9 | 7,6 | 57,8 | 56,4 | 4.605 | 353 | 94,4 | 109 | 38 | 50 | 59 |
+| U16-A | filmato | 20,0 | 19,8 | 17,8 | 49,0 | 938 | 333 | 94,2 | 105 | 40 | 38 | 52 |
+| U16-A | garage | 10,7 | 9,5 | 49,1 | 63,7 | 3.961 | 336 | 90,9 | 103 | 38 | 45 | 59 |
+| **U17-A** | cucina | **24,6** | 23,2 | 14,0 | **39,2** | 673 | 320 | 98,4 | 102 | 59 | 35 | 38 |
+| U17-A | strada | 9,4 | 7,8 | 53,9 | **35,8** | 4.747 | 350 | 98,0 | 106 | 38 | 47 | 58 |
+| U17-A | filmato | **25,1** | 24,6 | 17,3 | **38,6** | 897 | 321 | 96,9 | 102 | 47 | 37 | 48 |
+| U17-A | garage | 11,1 | 8,9 | 43,7 | **40,0** | 3.140 | 367 | 95,5 | 111 | 37 | 46 | 56 |
+| U17-C1 | cucina | 26,0 | 25,7 | 12,8 | 37,6 | 650 | 306 | 95,8 | 98 | 56 | 35 | 36 |
+| U17-C1 | strada | 10,9 | 10,3 | 55,4 | 46,9 | 4.688 | 376 | **80,9** | **90** | 46 | 58 | 71 |
+| U17-C1 | filmato | 24,4 | 23,3 | 16,8 | 40,2 | 878 | 308 | 88,9 | 98 | 48 | 34 | 42 |
+| U17-C1 | garage | 12,2 | 10,9 | 47,8 | 46,2 | 3.689 | 377 | **78,2** | **92** | 45 | 54 | 65 |
+| U17-C2 | cucina (2 finestre) | 33,2 | 26,4 | 10,3 | 24,3 | 517 | - | - | - | - | - | - |
+| U17-C2 | strada | 14,4 | 11,8 | 44,9 | 47,9 | 3.626 | (profilo non valido) | **72,0** | - | - | - | - |
+| U17-C2 | filmato | caricamento di **86 s**, 1 finestra, poi altri **34 s** senza immagine | | | | | | | | | | |
+| U17-C2 | garage | 14,1 | 8,6 | 42,6 | 46,5 | 3.579 | - | - | - | - | - | - |
+| U17-G0 | cucina | 24,8 | 23,7 | 14,4 | 37,7 | 640 | 308 | 99,4 | 102 | 56 | 34 | 40 |
+| U17-G0 | strada | 9,1 | 7,6 | 58,0 | 37,9 | 4.481 | 365 | 95,6 | 111 | 40 | 47 | 59 |
+| U17-G0 | filmato | 26,0 | 23,8 | 16,6 | 33,6 | 786 | 344 | 93,5 | 105 | 40 | 39 | 55 |
+| U17-G1 | cucina | 22,5 | 21,4 | **18,1** | 39,0 | 685 | 245 | 99,9 | 70 | 36 | 34 | 39 |
+| U17-G1 | strada | **8,2** | 7,2 | **65,4** | 38,0 | 4.255 | 368 | 96,5 | 112 | 37 | 46 | 66 |
+| U17-G1 | garage | 9,9 | 8,5 | 57,9 | 41,6 | 3.646 | 361 | 94,6 | 109 | 35 | 48 | 71 |
+| U17-G2 | strada | 8,9 | 7,7 | 58,3 | 36,5 | 4.540 | 367 | 95,0 | 111 | 38 | 50 | 60 |
+| U17-G2 | garage | 9,6 | 8,9 | 52,7 | 40,8 | 3.936 | - | - | - | - | - | - |
+| U17-G3 | cucina | 24,7 | 22,3 | 14,5 | 38,0 | 652 | 308 | 99,5 | 101 | 53 | 34 | 40 |
+| U17-G3 | strada | 9,4 | 8,4 | 53,7 | 40,0 | 4.134 | 362 | 95,4 | 111 | 39 | 46 | 59 |
+| U17-G3 | garage | 9,9 | 8,6 | 47,9 | 40,4 | 3.700 | 356 | 92,8 | 108 | 39 | 42 | 55 |
+
+Audio sull'intera run (dai 60 s): A 97,2 % (peggiori 10 s 93,2), C1 84,2 (76,5), C2 77,3 (66,7), G0 96,0, G1 95,7, G2 95,3,
+G3 96,1; U16-A 95,8. Nessuna compilazione attesa da un draw in nessun run (A: 23 compilazioni uam in background).
+
+**Il ripristino in due passaggi funziona sulla console (fatto).** Tutti i run: "`8001 restores in two passes (GTA IV's
+depth-words copy), 0 in nine`" (A; U16-A: 0 e 4.001). Effetto misurato: GPU per frame **59,3 -> 39,2 ms in cucina** (fps 16,6 ->
+24,6, +48 %), 49,0 -> 38,6 nel filmato (20,0 -> 25,1, +25 %), 56,4 -> 35,8 in strada, 63,7 -> 40,0 in garage. In strada e garage
+gli fps non cambiano (9,4 / 11,1 contro 8,9 / 10,7): lì il limite è la CPU (render thread 44-54 ms, core 0-2 saturi), non la
+GPU. Luce e cielo nelle catture come U16.
+
+**C1 e C2: causa (dimostrata dai log, il meccanismo del sistema è un'ipotesi).**
+- Il "supervisor" spostato è il **mixer XAudio stesso** (`0x82169400`, priorità 0x2D): in A usa 102-111 % di un core (oltre
+  100 % = il blocco del profilo dura un po' più di 10 s), cioè è **saturo**: 94 % del tempo sulla CPU, tutto calcolo DSP
+  (router `8216D7E0` 28,9 %, `828C6740` 15,7 %, biquad `828C2D28` 14,6 %, `828C5A58` 11,4 %, `82185E38` 8,7 %); le attese di
+  rotazione (`db16cyc` in `8216C750`) sono 0,3 %.
+- **C1** (preferisce il core 3, maschera 0xF): il mixer riceve **90-92 %** invece di 106-111 in strada e garage; l'audio scende a
+  **80,9 % / 78,2 %** (A 98,0 / 95,5): la voce "robotica" è il gioco che non produce l'audio in tempo. Gli fps salgono
+  (strada 9,4 -> 10,9, garage 11,1 -> 12,2) perché i core 0-2 restano più liberi: guadagno pagato con l'audio. Il core 3 non è
+  libero: la base ha misurato (banjo-nx, 2026-10-27, `threading_switch.cpp`) che **il sistema ne usa circa metà**; il mixer,
+  preferendolo, ci resta anche quando il sistema glielo toglie (la migrazione non è immediata).
+- **C2** (solo core 3): stessa perdita, più grave (audio 72 % in strada, 77,3 % sulla run). In più un thread a 0x2D che vuole
+  un core intero su un core condiviso col sistema **affama i servizi del sistema sul core 3**. Misure: le letture dal SD del
+  gioco (`[io] SLOW`) passano da mediana 10 ms a **51 ms** (p90 17 -> 107, massimo 220 -> 727 ms; 3,6 -> 16,9 s in tutto;
+  ~16 -> **2,5 MB/s**), solo in C2 (C1 10 ms); il caricamento del filmato dura **86 s** più 34 s senza immagine (A: nessuna
+  finestra di caricamento oltre 10 s); il report del nostro profilo, che si scrive sul SD, arriva ~2,9 volte in ritardo (15
+  blocchi in 432 s; per questo C2 mostra "CPU 1002 %", un artefatto: i tick dei thread vengono letti dopo l'attesa, il tempo
+  del blocco prima). Le regressioni riferite (NPC che spariscono = modelli `componentpeds.img` letti 4,3 s in tutto contro 0,2;
+  cielo parzialmente nero; "It's your call" prolungato; caricamenti lenti; UltraHand non interagibile) sono coerenti con
+  **file system e overlay del sistema, che girano sul core 3, rallentati dal mixer**: questo meccanismo è un'ipotesi (non
+  vediamo le priorità dei servizi), le misure di I/O sono un fatto.
+- **Decisione:** C1 e C2 non si usano più (nessun vantaggio senza perdita audio); la chiave resta a 0 (spenta) di default.
+  Nessun cambiamento a DSP, qualità o priorità. La strada per liberare i core 0-2 è un mixer più economico (nativi esatti),
+  non un altro core.
+
+**G0-G3 e i lampeggiamenti.**
+- Costo delle catture (G0 contro A, stesso percorso fino al filmato): cucina uguale (24,8 / 24,6 fps), strada 9,1 contro 9,4 fps
+  con render thread 58,0 contro 53,9 ms: **le raffiche costano ~4 ms di render thread a frame** in strada. G0 non è un
+  riferimento di prestazioni.
+- **G1** (`banjo_renut_fast_draw` off): render thread +7,4 ms in strada (65,4 contro 58,0), fps 8,2 contro 9,1, cucina 22,5
+  contro 24,8: il percorso veloce vale ~11 % in strada. Nessun miglioramento visivo (utente). Resta acceso.
+- **G2** (barriere lean/merge off) e **G3** (texture skip off): prestazioni uguali a G0 (strada 8,9 / 9,4 fps, GPU 36,5 /
+  40,0 ms); nessun miglioramento visivo (utente). Per G3 lo conferma la misura sotto.
+- **Alone della lampada: misurato.** Zona della lampada del corridoio-cucina (pixel 545-615 x 40-85), Niko e telecamera fermi:
+  sulla console la luminanza salta fra **due valori discreti, 60,8 e 78,8, da una cattura all'altra della stessa raffica**
+  (G0 37-69 s; G3 identico, `texture_skip` spento). Sul **PC** (D3D12, stesso salvataggio copiato, stessa stanza, raffiche
+  uguali) la stessa zona **non alterna mai**, né a 60+ fps né con `frame_cap = 30` (valori continui 30-37, nessun doppio stato):
+  non è il gioco e non è il frame rate, è un percorso che solo la console esegue, diverso da fast draw (utente), barriere e
+  texture skip. Due stati che si alternano = qualcosa con due copie per frame in volo (anelli di upload, buffer di costanti a
+  frame alterni, una risorsa riusata dal frame precedente). Ombre in strada e vetri: stessa famiglia probabile, non misurata
+  (nessuna finestra ferma utile in G0-G3: in G0 a 240-279 s si guida).
+- **Prossima prova (isolata, nessuna correzione speculativa):** una run di viste **V** (A + le verifiche del renderer che
+  confrontano il modello con i dati del gioco e scrivono nel log la prima differenza: `banjo_deko3d_push_constants_verify`,
+  `banjo_renut_fast_draw_verify`, `banjo_renut_chain_reuse_verify`, `banjo_renut_texture_slot_skip_verify`,
+  `banjo_renut_store_cards_verify`, `banjo_deko3d_txq_verify`), 60 s fermi nel corridoio con raffiche; poi, se il log non
+  nomina nulla, una bisezione per gruppi solo-deko3d: **H1** hand-over (`banjo_deko3d_depth_handover`, `_color_handover`,
+  `_scanout_handover` off), **H2** `banjo_deko3d_push_constants` off, **H3** `sasrt_gpu_skip_inert_draws`,
+  `sasrt_gpu_precise_depth_resolve`, `sasrt_gpu_depth_restore_whole_clear` off, **H4** `banjo_deko3d_zcull`, `_early_z`,
+  `_depth_compression` off. Un gruppo per run, stessa inquadratura.
+
+**Prima missione dopo il filmato iniziale (segnalazione, non riprodotta).** Sul **PC** (stessa build del renderer, D3D12),
+cartella utente **vuota** in `scratchpad` (il salvataggio vero non è toccato), nessun input: 560 s; il filmato iniziale
+(nave, molo, titoli con Roman alla guida) finisce e a 376 s **Niko è al volante, HUD e radar con il percorso giallo della
+missione**: la missione parte. Sulla console non provata. Da questo run, un fatto nuovo: la guardia delle copie native del PC
+trova **4 copie diverse dall'originale** su un percorso che i run dal salvataggio non fanno: `82221530` (un byte scritto
+`d4` contro `d7` in `0x82BD1A13`: il byte basso di un float, una differenza di arrotondamento, non un NaN), `8290F508`,
+`8290F050`, `8290E808` (lane 0 di un vettore: `7fc00001` contro `ffffffff` e il contrario, un payload di NaN), ciascuna tre
+passaggi di fila. Sul PC la guardia le spegne; **sulla console le copie sono "in place", senza guardia**: girano. Che
+causino il blocco della missione non è dimostrato (`82221530` ha 216 campioni nei profili della console: gira anche nelle
+partite caricate). Correzione preparata (stessa regola di U10, §2.16): le quattro fuori da `localized_bulk.txt`
+(`out/u18-prep/g_bulk_drop.diff`, verificata con `git apply --check`; serve la rigenerazione delle copie). Procedura per la
+console in `run-protocol.md` ("Dalla U18": slot separato, copia di sicurezza).
+
+**Port 142-147 della base (letti nel codice: `git diff 3e6ae026..c84f7c33` e `c84f7c33..bf6ccc1e` del clone, `origin/main`
+ancora `bf6ccc1e` dopo un fetch).** Divisi in gruppi che toccano file disgiunti (ognuno `git apply --check` pulito sul
+nostro albero U17; solo i documenti della base vanno uniti a mano): `out/u18-prep/g142_code.diff`, `g143_kernel.diff`,
+`g144_codegen.diff`, `g145_render.diff`, `g146_runtime.diff`, `g147_tests.diff`, `g_docs.diff`.
+
+| Gruppo | Codice | Dipendenze | GTA IV: cosa tocca (dai nostri log) | Beneficio atteso | Rischio | Prova |
+|---|---|---|---|---|---|---|
+| 142 | toglie la chiave `kernel_timestamp_timer_on_import` (spenta da 139): timer creato all'avvio come prima | nessuna | nessun effetto (chiave spenta) | igiene | nullo | build |
+| 143 | `kernel_deferred_overlapped_delay_ms` 0 con `kernel_overlapped_reset_event`; `xmp_poll_throttle`; spenti: `kernel_u64_args_whole`, `xam_swap_disc_signal`, `kernel_scatter_read_offset_zero`; fuso orario dell'host (`xconfig_host_time_zone`, spento) | nessuna | 2 `XamContentCreate` al caricamento del salvataggio | ~0,2 s al caricamento (100 ms a chiamata overlapped) | basso (la base l'ha provato su più giochi) | tempo dall'avvio alla stanza; salvataggio |
+| 144 | `spin_hint_yield` (le `db16cyc` chiamano `rex_spin_hint`), forma NEON NORMSHORT2; molte chiavi di esattezza spente | **rigenerazione** (`post_codegen.py`), guardia densa | 12 `db16cyc` (XAudio `8216C750`, `82169D90`; D3D `829CFE80`, `829DD928`): nel mixer 0,3 % dei campioni | piccolo sul mixer; da misurare nei thread D3D | medio (rigenerazione) | guardia densa sul PC, poi console |
+| 145 | `stream_redeem`, `keep_unused_targets`, `dynamic_texture_rows`, `native_16bit` (deko3d), `banjo_async_present`; `fetch_filters` spento | nessuna (plume, `--wrap=nwindowDequeueBuffer`) | target creati: 33 in tutta la run (G0), quindi `keep_unused_targets` quasi nullo; present: coda + dequeue **~0,5 ms a frame** (U17-A strada, profilo libnx) | render thread: async present al massimo ~0,5 ms a frame (misura); stream redeem da misurare (TW2: -7 ms) | async present: in Ryujinx picchi di latenza (la base lo dice da provare sulla console) | A/B sulla console; `[latency]` |
+| 146 | `thread_mutant_release_lockfree`, `filesystem_bounce_piece_mb` 4, `filesystem_bounce_guest_only`; `crt_xmemcpy_as_memmove` spento | nessuna | letture grandi (`common.rpf` 17 MB in 228 ms) a pezzi da 1 MB | caricamenti, streaming | basso | tempi `[io]`, caricamento del filmato |
+| 147 | test PowerPC (`tools/ppc_tests`, NRO di test) | nessuna | nessun effetto sul gioco | strumento | nullo | - |
+
+`banjo_renut_fetch_filters` (spento in 145) è da provare a parte: è la correzione di TW2DE per i filtri dati dalle istruzioni
+di fetch (FINAL FANTASY XIII: "raggi a gradini al posto di sfumati") e i bordi netti di alone e fascio della lampada sono la
+stessa famiglia di sintomo (ipotesi).
+
+**TW2DE-NX e PGO (complemento di §2.24).** La base ha preso da `vec_neon_forms.py` solo NORMSHORT2 (144) e già prima
+VUPKD3D_COLOR; restano `REX_SLLV31` (vslw), `REX_PERMWI` (vpermwi), `REX_CVT/_SCALED/CVTU_SCALED` (vcsxwfp, vcuxwfp): i 2.222
+siti contati in §2.24, nel mixer solo `828C5A58`. PGO: la catena della base (`BANJO_PGO=generate|use`, `tools/pgo_merge.py`,
+`build_switch_release.bat`) non è mai stata usata per GTA IV; il piano (dopo il gruppo 144, che cambia il codice generato) è in
+`19-optimization-matrix.md`.
+
+**`refs/` (complemento).** LibertyRecomp, `docs/GTA4_COLLISION_VPKUWUS_ALIASING_FIX.md` letto: un `vpkuwus` con destinazione
+uguale a una sorgente tradotto lane per lane faceva cadere attraverso le strade. **Già corretto da noi** (`build_vpkuwus` e
+`build_vpkuhus` passano per `v_temp`, rr6-nx 2026-11-02). Controllo esteso a tutti i builder vettoriali (scrittura della
+destinazione lane per lane mentre si leggono le sorgenti): l'unico caso non sicuro è `vpkd3d128` NORMSHORT4 con vD = vB
+(`vector.cpp`, il ciclo scrive `u16[(3-i)+2*shift]` e legge `s32[3-i]`), ma GTA IV non lo usa (6 `vpkd3d128` nel codice
+generato: tipi 2, 3 e 5): difetto latente dell'SDK, da correggere quando lo si tocca.
+
+**Prossimo ciclo (U18), proposto, nessuna build Switch senza autorizzazione:** in `19-optimization-matrix.md`.
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si
@@ -1394,3 +1806,8 @@ frame.
 | U13 | 2026-11-15 | (questo commit) | Console V-light (NRO `3ae9d456…`): ingressi del passaggio ambientale `97AC30BA…` uguali al PC (costanti, texture, G-buffer). **Causa: il ripristino EDRAM della base lascia lo stencil 0, il gioco ci mette 0xFF**: l'ambientale (EQUAL 1) fallisce, le luci (NOTEQUAL 0xFF) coprono tutta la sagoma; regressione della migrazione rispetto a `6921903`. Sul PC due errori si compensavano (plume D3D12 con ref dello stencil sempre 0). Correzione: stencil ripristinato bit per bit (`gta4_renut_depth_restore_stencil`, accesa) + ref D3D12; PC: senza la correzione la stanza è nera come sulla console, con la correzione uguale al riferimento. Console da provare (`u14`). §2.19 |
 | U14 | 2026-11-15 | (questo commit) | Console (NRO `59481f7d…`): **luce ambientale corretta** con il ripristino dello stencil (§2.19); glitch rimasti: alone della lampada (disco bianco a bordo netto, a tratti assente; query di occlusione escluse) e ombre. Prima finestra a 650 draw: 16 fps, **GPU 61,5 ms** (U13 35,5), render thread 13,7 ms; PC: la correzione costa +19 % di GPU. Audio 91,4 % (meno contesa a fps più bassi, non codice). §2.20 |
 | U15 | 2026-11-15 | (questo commit) | I port 129-141 della base (`3e6ae026`, `ult_port_sync.py`; 1 conflitto, 3 file a mano; CG-13 spento; `BASE_COMMIT` -> `3e6ae026`). PC: cache XMA 6,5 -> 92 %, guardia 0 differenze. Console (NRO `063dcbb7…`): prestazioni e audio invariati, **thread XMA ~30 -> ~10 % di un core**; profilo GPU per passaggio: il ripristino dello stencil costa ~12,8 ms a ripristino (25,6 ms dei 60,9 in cucina). §2.21 |
+| U16 | 2026-11-15 | (con U17, console) | Ripristino dello stencil in due passaggi per la copia del gioco (PC: 1,64 -> 0,83 ms, immagini uguali); rigenerazione con i passaggi di codegen 136/140 (guardia 0 differenze su 3,13 M chiamate); risoluzione dinamica della base pronta (toml D). Build Switch da autorizzare. §2.22 |
+| U16, console | 2026-11-16 | (con U17, console) | Console (NRO `4424ac8a…`, A/D/P): fps uguali a U15-A in ogni scena, audio migliore (strada 90,7 -> 95,0 %, filmato 92,0 -> 98,8 %); **il ripristino in due passaggi non è mai partito** (0 su 4.001: `FastDrawLocked` non segna la copia); risoluzione dinamica senza effetto (GPU non proporzionale all'altezza 3D). §2.23 |
+| U17 | 2026-11-16 | (vedi U17, console) | Analisi CPU: strada con core 0-2 saturi (~357 % su 300 %), mixer ~105 % di un core, core 3 libero; vetri e fari che si alternano a scena ferma (catture). Nell'albero: copia del gioco sul percorso completo (ripristino veloce su deko3d), `gta4_xaudio_supervisor_core3` (spenta). PC compilato; console da autorizzare. §2.23 |
+| U17, build | 2026-11-16 | (vedi U17, console) | Build Switch a 1 job (incrementale: 3 file), NRO `15da0fff…` (`6be295853eed-dirty+u17`, `THEFT4_BUILD_LABEL`), pacchetto `u17` con A, C1, C2 (facoltativa), G0-G3, cache U10. TW2DE-NX esaminato: PGO, LTO, -O3, batched già presenti nella base; trasferibili `vec_neon_forms` e (via la base) i port 142-147 di oggi. Console da eseguire. §2.24 |
+| U17, console | 2026-11-16 | (questo commit) | Console (NRO `15da0fff…`, A/C1/C2/G0-G3): **ripristino in due passaggi attivo** (8.001 su 8.001), GPU cucina 59,3 -> 39,2 ms, **cucina 16,6 -> 24,6 fps**, filmato 20,0 -> 25,1; strada e garage invariati (CPU). **C1/C2 respinte**: il mixer sul core 3 riceve meno CPU (audio 80,9 / 72 % in strada); C2 affama anche il file system (letture SD 10 -> 51 ms, filmato caricato in 86 s). G1-G3 non tolgono i lampeggiamenti; l'alone alterna due stati solo sulla console (PC stabile anche a 30 fps). PC, nuova partita: la prima missione parte; 4 copie native diverse dall'originale trovate dalla guardia (correzione preparata). Port 142-147 divisi in gruppi applicabili. §2.25 |
