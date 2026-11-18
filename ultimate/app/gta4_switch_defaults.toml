@@ -25,6 +25,24 @@ banjo_system_core = 0
 banjo_hot_guard_calls = 0
 banjo_hot_guard_period = 0
 
+# U18 MAX (2026-11-17, docs/switch-port/20 section 2.27): the settings every console run since U11 set in its toml,
+# now built in. GTA IV's XAudio threads at 0x2D, the time-critical priority the game asks for (U11 X1; U17's
+# measurements all had it): the mixer gets its core's time before the game's 0x3B threads.
+gta4_xaudio_thread_priority = 45
+# The base's port 155 (blur-nx's menu backdrop) scales a target's colour by its exponent bias as well as its alpha. Not
+# for GTA IV yet: its HDR targets have bias -1 and the PC (D3D12, no bias rule at all) draws GTA IV right; the rule
+# would also need a shader package and DKSH cache made again. halo3's alpha rule stays as before (halo3_renut_target_
+# gamma_bias, the base's default; U9 C2: no visible difference in the room with it off).
+blur_renut_target_bias_rgb = false
+# U18 MAX-B (2026-11-18, docs/switch-port/20 section 2.28): dishonored-nx's 7e3 clamp (port 106) off for GTA IV. On the
+# console it made the kitchen lamp's light a flat bright disc with a hard edge that switched on and off from one frame to
+# the next (U18 MAX-A run L: the lamp's area 70-93 luma within one 240 ms burst); with it off (run L3) the same area
+# held 110.3-110.4 over 16 captures in 16 s and the lamp looks as on the PC, whose D3D12 path never had the clamp (the
+# reference of every lighting fix since U12). The clamp's pipelines are stable (no draw had it in one frame and not the
+# next: every one of the 223 clamped pipelines exists only with it), so the disc came from the clamp acting on the
+# light's own output values, not from a key that flapped. Only GTA IV's toml: the other games keep the base's default.
+dishonored_renut_clamp_7e3 = false
+
 # The base's Switch choices for its renderer (katamari_switch_defaults.toml), game-agnostic: the display-synchronised
 # frame limiter. The frame rate cap itself (frame_cap) is the player's option, gta4.toml.
 banjo_display_sync = true

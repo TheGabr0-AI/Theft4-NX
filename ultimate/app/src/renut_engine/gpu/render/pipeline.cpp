@@ -429,8 +429,13 @@ std::unique_ptr<plume::RenderPipeline> Build(const PipelineKey &key, const Pipel
   // their colour exponent biases, 925 (920 / 921 in halo3-nx).
   if (key.pixel_shader && ((key.reserved >> 4) & 0xFu))
     spec[spec_count++] = plume::RenderSpecConstant(924, (key.reserved >> 4) & 0xFu);
-  if (key.pixel_shader && (key.reserved >> 8))
+  if (key.pixel_shader && (key.reserved >> 8)) {
     spec[spec_count++] = plume::RenderSpecConstant(925, key.reserved >> 8);
+    // blur-nx (2026-11-17, blur_renut_target_bias_rgb): the colour scaled by the bias too (shader_common.h, constant 927).
+    // One value for the whole run, so not in the key: a variant is keyed by the values of the constants it declares.
+    if (banjo::renut_gpu::TargetBiasRgbOn())
+      spec[spec_count++] = plume::RenderSpecConstant(927, 1);
+  }
   // banjo-nx (banjo_gpu_output_trim): the colour channels the pixel shader leaves 0.
   if (key.output_trim) {
     spec[spec_count++] = plume::RenderSpecConstant(901, key.output_trim);

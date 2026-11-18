@@ -74,6 +74,13 @@ REXCVAR_DEFINE_BOOL(input_rumble, true, "Input",
 namespace rex::input {
 
 namespace {
+// blur-nx (2026-11-17, the Renut audit's #27, exact): the device list of a controller call kept per thread, so a call
+// copies into a vector that already has room instead of making one (GetState, SetState and the others, several times
+// a frame). DevicesForUser clears it first; none of these calls makes another while it holds the list.
+std::vector<DeviceId>& UserDeviceScratch() {
+  thread_local std::vector<DeviceId> ids;
+  return ids;
+}
 
 // Synthetic devices are parked past every physical ordinal so they cannot push
 // a real pad off guest user 0. SlotAssignment routes them by their synthetic
@@ -274,7 +281,9 @@ const std::vector<ScriptedPress>& InputScript() {
     const std::string text = REXCVAR_GET(input_script);
     size_t at = 0;
     while (at < text.size()) {
-      size_t end = text.find(',', at);
+      // Port 176 (from rehatched-nx, its commit 19bf40fc): ';' and spaces separate presses too (the cvar layer keeps a
+      // command-line string only up to its first comma, so a comma list scripted one press there).
+      size_t end = text.find_first_of(",; ", at);
       if (end == std::string::npos) end = text.size();
       const std::string item = text.substr(at, end - at);
       at = end + 1;
@@ -445,7 +454,7 @@ X_RESULT InputSystem::GetCapabilities(uint32_t user_index, uint32_t flags,
 
   std::lock_guard<std::recursive_mutex> devices_lock(devices_mutex_);  // sasrt-nx (2026-11-08): devices_mutex_
   RefreshDevices();
-  std::vector<DeviceId> ids;
+  std::vector<DeviceId>& ids = UserDeviceScratch();  // blur-nx (2026-11-17, audit #27)
   assignment_->DevicesForUser(user_index, ids);
   if (ids.empty()) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
@@ -498,7 +507,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
 
   std::lock_guard<std::recursive_mutex> devices_lock(devices_mutex_);  // sasrt-nx (2026-11-08): devices_mutex_
   RefreshDevices();
-  std::vector<DeviceId> ids;
+  std::vector<DeviceId>& ids = UserDeviceScratch();  // blur-nx (2026-11-17, audit #27)
   assignment_->DevicesForUser(user_index, ids);
 
   X_INPUT_STATE merged = {};
@@ -539,7 +548,7 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
 
   std::lock_guard<std::recursive_mutex> devices_lock(devices_mutex_);  // sasrt-nx (2026-11-08): devices_mutex_
   RefreshDevices();
-  std::vector<DeviceId> ids;
+  std::vector<DeviceId>& ids = UserDeviceScratch();  // blur-nx (2026-11-17, audit #27)
   assignment_->DevicesForUser(user_index, ids);
 
   // Every pad on this user belongs to the same player, so all of them buzz.
@@ -612,7 +621,7 @@ X_RESULT InputSystem::GetKeystroke(uint32_t user_index, uint32_t flags,
 
   std::lock_guard<std::recursive_mutex> devices_lock(devices_mutex_);  // sasrt-nx (2026-11-08): devices_mutex_
   RefreshDevices();
-  std::vector<DeviceId> ids;
+  std::vector<DeviceId>& ids = UserDeviceScratch();  // blur-nx (2026-11-17, audit #27)
   assignment_->DevicesForUser(user_index, ids);
 
   bool any_connected = false;

@@ -39,6 +39,19 @@ REXCVAR_DEFINE_INT32(banjo_stall_watch_seconds, 1, "Nuts&Bolts/Profiler",
     "logs/rex/banjo_profiler.log, and count frames over 100 ms (0 = off).")
     .range(0, 60)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// blur-nx (2026-11-14, the boot black screen; profiler/switch_stall_watch.h).
+REXCVAR_DEFINE_BOOL(banjo_stall_watch_waits, true, "Nuts&Bolts/Profiler",
+    "[Switch] With the stall watchdog: each dump lists the guest threads blocked in a wait, on what and for how long, "
+    "and whether that object was set after the wait began (each blocking wait and each set or release is noted).")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// renut-ultimate (2026-11-17, port 153): 0 in the base (Blur: 30). A race or a level can go 30 s without a file read,
+// and each dump pauses every game thread in turn and writes to the SD card: a diagnostic for a boot that hangs while
+// frames still come, set in the toml of the game being looked at.
+REXCVAR_DEFINE_INT32(banjo_stall_watch_quiet_seconds, 0, "Nuts&Bolts/Profiler",
+    "[Switch] With the stall watchdog: dump when no file has been read for this many seconds, even while frames still "
+    "come (two dumps at most until reads resume; 0 = off). A file named stall_dump in logs/rex/ also dumps (on demand).")
+    .range(0, 3600)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 namespace banjo::profiler {
 namespace {
@@ -94,7 +107,7 @@ void RecordDraw(double ms) { Store(Series::kDraw, ms); }
 void RecordLimiterWait(double ms) {
   Store(Series::kLimiterWait, ms);
   if (ms > 0.0)
-    renut::frame_stats::OnGameThreadWait(ms);
+    renut::frame_stats::OnGameThreadWait(ms, 3);  // blur-nx (2026-11-18): its own source (had been counted a fence)
 }
 void SetGpuFrameMs(double ms) { Store(Series::kGpuFrame, ms); }
 void SetRenderThreadMs(double ms) { Store(Series::kRenderThread, ms); }
@@ -108,8 +121,21 @@ void RecordHostPresent() {
   g_lastPresent = now;
 }
 
+// blur-nx (2026-11-18): when a Present hook last gave a boundary (FrameBoundaryAtSwap stands aside for a second).
+static std::atomic<int64_t> g_presentBoundaryNs{0};
+void FrameBoundaryAtSwap() {
+  const int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+  const int64_t present = g_presentBoundaryNs.load(std::memory_order_relaxed);
+  if (present != 0 && now - present < 1'000'000'000)
+    return;
+  FrameBoundary();
+  g_presentBoundaryNs.store(0, std::memory_order_relaxed);  // FrameBoundary marked it as a Present's: not one
+}
+
 void FrameBoundary() {
   const auto now = Clock::now();
+  g_presentBoundaryNs.store(std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count(),
+                            std::memory_order_relaxed);
   if (g_lastFrame != Clock::time_point{}) {
     Store(Series::kApplication, std::chrono::duration<double, std::milli>(now - g_lastFrame).count());
   }
@@ -157,7 +183,9 @@ void Start() {
   os::switch_cpu_profiler::SetSlowFrameThreshold(
       static_cast<uint32_t>(REXCVAR_GET(banjo_slow_frame_profile_ms)));
   os::switch_cpu_profiler::Start(REXCVAR_GET(banjo_cpu_profiler));
-  os::switch_stall_watch::Start(static_cast<double>(REXCVAR_GET(banjo_stall_watch_seconds)));
+  os::switch_stall_watch::Start(static_cast<double>(REXCVAR_GET(banjo_stall_watch_seconds)),
+                                static_cast<double>(REXCVAR_GET(banjo_stall_watch_quiet_seconds)),
+                                REXCVAR_GET(banjo_stall_watch_waits));
 #endif
 }
 

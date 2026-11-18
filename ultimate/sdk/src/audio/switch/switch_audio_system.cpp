@@ -44,6 +44,13 @@ REXCVAR_DEFINE_BOOL(audio_switch_pump_pairs, false, "Audio",
                     "engine renders the second right after the first, its voices' and effects' state still in the "
                     "caches. One more frame of latency (5.3 ms); the game's audio parameters take effect at 10.7 ms "
                     "steps; read when the audio is opened");
+// blur-nx (2026-11-16, the 15 ms batch, #196): M-43 widened: 1-4 frames back to back per pump tick (0: as
+// audio_switch_pump_pairs says). The engine renders the later frames of a tick with its voices' and effects' state still
+// in the caches; each frame of a tick past the first adds 5.3 ms of latency, and the game's audio parameters take effect
+// at the tick's steps. The same frames, rendered sooner or later: exact output.
+REXCVAR_DEFINE_INT32(audio_switch_pump_frames, 0, "Audio",
+                     "With audio_switch_pump: frames asked back to back per tick, 1-4 (0: audio_switch_pump_pairs "
+                     "decides, 2 or 1); read when the audio is opened");
 REXCVAR_DEFINE_INT32(audio_switch_frames_in_queue, 10, "Audio",
                      "With audio_switch_pump: game frames kept queued before audout "
                      "(cushion; 10 = 53 ms, 6 up to build 105). A longer queue lets the game wait without cutting the "
@@ -236,9 +243,14 @@ bool SwitchAudioSystem::StartOutput() {
   auto output = std::make_unique<Output>();
   output->pump = REXCVAR_GET(audio_switch_pump);
   output->frames_per_tick = REXCVAR_GET(audio_switch_pump_pairs) ? 2 : 1;  // blur-nx (2026-11-13, M-43)
+  if (const int32_t n = REXCVAR_GET(audio_switch_pump_frames); n >= 1) {  // blur-nx (2026-11-16, #196)
+    output->frames_per_tick = uint32_t(n > 4 ? 4 : n);
+  }
   output->frames_in_queue = static_cast<size_t>(std::clamp(REXCVAR_GET(audio_switch_frames_in_queue), 2, 32));
   REXLOG_INFO("SwitchAudioSystem: 187.5 Hz pump {}{}, {} frames queued", output->pump ? "active" : "off",
-              output->frames_per_tick == 2 ? " (two frames every 10.7 ms: audio_switch_pump_pairs)" : "",
+              output->frames_per_tick == 2   ? " (two frames every 10.7 ms: audio_switch_pump_pairs)"
+              : output->frames_per_tick > 2 ? " (frames back to back per tick: audio_switch_pump_frames)"
+                                            : "",
               output->frames_in_queue);
 
   Result rc = audoutInitialize();
@@ -378,6 +390,21 @@ void SwitchAudioSystem::FillAndAppend(size_t buffer_index) {
     RexSwitchPerfAdd(26, pcm_nonzero ? 1 : 0);
     RexSwitchPerfAdd(27, 1);
   }
+  // blur-nx (2026-11-12, diagnostic): audout's own count of the samples it has played, beside the buffers appended
+  // (counter 27). Blur's console races appended ~12 % more 1,024-sample buffers than 48 kHz plays (52.9 a second
+  // against 46.9; the menus at 60 fps 47.1): either the device releases some buffers without playing them, or the
+  // count is wrong. Counter 57: samples played in the interval (the output thread is the only caller).
+  // renut-ultimate (2026-11-17, port 153): asked every 16th buffer (about 12 times a second), not at every one: an IPC
+  // request to audout each time, in every game. The count is audout's running total, so the sum is the same.
+  static uint32_t played_ask = 0;
+  if ((++played_ask & 15) == 0) {
+    static u64 last_played = 0;
+    u64 played = 0;
+    if (R_SUCCEEDED(audoutGetAudioOutPlayedSampleCount(&played))) {
+      if (last_played && played >= last_played) RexSwitchPerfAdd(57, played - last_played);
+      last_played = played;
+    }
+  }
   if (R_FAILED(rc)) {
     REXLOG_ERROR("SwitchAudioSystem: audoutAppendAudioOutBuffer failed: 0x{:08X}", rc);
   }
@@ -440,7 +467,9 @@ void SwitchAudioSystem::OutputThreadMain() {
     Result rc = audoutWaitPlayFinish(&released, &released_count, timeout_ns);
     // libnx hands back one released buffer per call; drain the rest so none is
     // left out of the rotation.
+    uint32_t released_in_wake = 0;  // blur-nx (2026-11-12, diagnostic): counter 58, below
     while (R_SUCCEEDED(rc) && released && released_count) {
+      ++released_in_wake;
       const ptrdiff_t index = released - output.buffers.data();
       if (index >= 0 && index < ptrdiff_t(kBufferCount)) {
         FillAndAppend(size_t(index));
@@ -449,6 +478,8 @@ void SwitchAudioSystem::OutputThreadMain() {
       released_count = 0;
       rc = audoutGetReleasedAudioOutBuffer(&released, &released_count);
     }
+    // blur-nx (2026-11-12, diagnostic): a wake that found every buffer released: the device had nothing left to play.
+    if (released_in_wake >= kBufferCount) RexSwitchPerfAdd(58, 1);
   }
 }
 

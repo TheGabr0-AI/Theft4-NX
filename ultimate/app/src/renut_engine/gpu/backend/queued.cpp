@@ -2,6 +2,7 @@
  * @file    gpu/backend/queued.cpp
  */
 #include "renut_engine/gpu/backend/queued.h"
+#include "renut_engine/gpu/host_batch.h"  // blur-nx (2026-11-18, the Renut host batch)
 
 #include <algorithm>
 #include <atomic>
@@ -31,6 +32,8 @@
 #include "renut_engine/gpu/backend/render_thread.h"
 #include "renut_engine/gpu/banjo_renut_tuning.h"
 #include "renut_engine/gpu/line_compare.h"
+
+REXCVAR_DECLARE(bool, blur_renut_flush_fast_local);  // blur-nx (2026-11-17): defined in guest/command_buffers.cpp
 
 // banjo-nx (2026-10-20, from sa2-nx): see SnapshotKind below.
 REXCVAR_DEFINE_BOOL(banjo_renut_snapshot_deltas, true, "Banjo/Enhancements",
@@ -335,6 +338,13 @@ std::unordered_map<u32, DeferredDraw> g_deferred;
 // (FlushDeferredVertices: every hook calls it first). A Begin*Vertices draw is flushed by the next hook of its device,
 // on the thread that made it, which sees the count in program order.
 std::atomic<size_t> g_deferred_count{0};
+// blur-nx (2026-11-17, the 24-hour run; blur_renut_flush_fast_local): the same count per device, hashed (a collision
+// only sends a hook through the locks), so one device's hooks are not sent through the chain's lock and the deferred
+// map's by another device's Begin*Vertices draw. Changed under g_deferred_mutex with the map; read without it by the
+// thread that flushes its own device, as the count above.
+constexpr u32 kDeferredSlots = 64;
+std::atomic<u32> g_deferred_by_device[kDeferredSlots];
+inline std::atomic<u32> &DeferredOf(u32 device_va) { return g_deferred_by_device[(device_va * 2654435761u) >> 26]; }
 // blur-nx (2026-11-13, #52's census): FlushDeferredVertices' copies, for the snapshot report.
 std::atomic<uint64_t> g_deferred_vertex_bytes{0}, g_deferred_vertex_draws{0};
 
@@ -1089,6 +1099,18 @@ void PrefetchDeltaLines(u32 device_va) {
 }
 
 void QueueDraw(u32 device_va, const DrawCall &call, u32 up_vertex_bytes, u32 up_index_bytes) {
+  // blur-nx (2026-11-18, the census's #29): the immediate draws and their queueing time on the game threads.
+  struct HbScope {
+    bool on;
+    uint64_t t0;
+    ~HbScope() {
+      if (on) {
+        ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kImmediateDraws);
+        ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kImmediateTicks, ::renut::gpu::host_batch::Ticks() - t0);
+      }
+    }
+  } hb_scope{::renut::gpu::host_batch::CensusOn(),
+             ::renut::gpu::host_batch::CensusOn() ? ::renut::gpu::host_batch::Ticks() : 0};
   NoteDrawer(device_va);  // blur-nx (2026-11-13, M-31's census)
   const bool deltas = DeltasOn();  // bangaio-nx (2026-10-29, ARM): its static's guard read once, not three times
   if (deltas && DeltaPrefetchOn())
@@ -1141,6 +1163,7 @@ void QueueDeferredDraw(u32 device_va, const DrawCall &call, const u8 *scratch, u
           // replaced it; its delta never reaches the render thread, so the chain rebases.
           g_capture_pool.Give(it->second.capture);
           g_deferred.erase(it);
+          DeferredOf(device_va).fetch_sub(1, std::memory_order_acq_rel);  // blur-nx (2026-11-17)
           g_deferred_count.store(g_deferred.size(), std::memory_order_release);
           g_delta.device.store(nullptr, std::memory_order_relaxed);
         }
@@ -1149,6 +1172,8 @@ void QueueDeferredDraw(u32 device_va, const DrawCall &call, const u8 *scratch, u
       if (!capture)
         return;
       std::lock_guard lock(g_deferred_mutex);
+      if (!g_deferred.count(device_va))
+        DeferredOf(device_va).fetch_add(1, std::memory_order_acq_rel);  // blur-nx (2026-11-17)
       g_deferred[device_va] = {capture, scratch, bytes};
       g_deferred_count.store(g_deferred.size(), std::memory_order_release);
       g_delta.deferred_device = device_va;  // blur-nx (2026-11-13, #51): cleared when FlushDeferredVertices queues it
@@ -1173,6 +1198,8 @@ void QueueDeferredDraw(u32 device_va, const DrawCall &call, const u8 *scratch, u
     return;
   }
   std::lock_guard lock(g_deferred_mutex);
+  if (!g_deferred.count(device_va))
+    DeferredOf(device_va).fetch_add(1, std::memory_order_acq_rel);  // blur-nx (2026-11-17)
   DeferredDraw &slot = g_deferred[device_va];
   g_capture_pool.Give(slot.capture);  // one not flushed (the original replaced it the same way)
   slot = {capture, scratch, bytes};
@@ -1181,8 +1208,12 @@ void QueueDeferredDraw(u32 device_va, const DrawCall &call, const u8 *scratch, u
 
 void FlushDeferredVertices(u32 device_va) {
   FlushRecordedVertices(device_va);
-  if (HookFastPathsOn() && g_deferred_count.load(std::memory_order_acquire) == 0)
-    return;  // banjo-nx (2026-10-20, from sa2-nx): none waiting, no lock
+  // banjo-nx (2026-10-20, from sa2-nx): none waiting, no lock. blur-nx (2026-11-17, blur_renut_flush_fast_local): none of
+  // this device's (the find below looks for nothing else).
+  static const bool local = REXCVAR_GET(blur_renut_flush_fast_local);
+  if (HookFastPathsOn() && (local ? DeferredOf(device_va).load(std::memory_order_acquire) == 0
+                                  : g_deferred_count.load(std::memory_order_acquire) == 0))
+    return;
   // banjo-nx (2026-10-20, from futari-nx, banjo_renut_deferred_chain): a chain draw is queued under the chain's lock
   // (taken before the deferred map's, as QueueDeferredDraw takes them), so no draw of the chain is made or queued between.
   std::unique_lock<std::mutex> chain;
@@ -1196,6 +1227,7 @@ void FlushDeferredVertices(u32 device_va) {
       return;
     deferred = std::move(it->second);
     g_deferred.erase(it);
+    DeferredOf(device_va).fetch_sub(1, std::memory_order_acq_rel);  // blur-nx (2026-11-17)
     g_deferred_count.store(g_deferred.size(), std::memory_order_release);
   }
   deferred.capture->vertices.assign(deferred.scratch, deferred.scratch + deferred.bytes);

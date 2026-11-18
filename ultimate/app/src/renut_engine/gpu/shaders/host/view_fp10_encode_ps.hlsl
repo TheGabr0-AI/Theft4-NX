@@ -2,7 +2,8 @@
 // a 2_10_10_10_FLOAT surface with a colour exponent bias and resolves the same EDRAM through a 2_10_10_10 surface: on the
 // console that reads the 7e3 floats' bits as 10-bit unorm, which makes a log-like curve for the display out of the float
 // format. Here the views are separate host targets, the float one RGBA16F, so its values are encoded as the console would
-// have stored them. g_Push.param0 is 2^bias (a host target holds the shader's output, without the bias). The pixel plus
+// have stored them. g_Push.param0 is 2^bias (a host target holds the shader's output, without the bias); 1 with
+// blur_renut_target_bias_rgb (blur-nx, 2026-11-17: the target holds the biased colour, as the EDRAM does). The pixel plus
 // g_Push.translate is the source texel; present_vs draws the fullscreen triangle.
 #include "utility.hlsli"
 

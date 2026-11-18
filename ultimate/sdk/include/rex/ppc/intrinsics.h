@@ -299,6 +299,55 @@ inline simde__m128i simde_mm_vctuxs(simde__m128 src1) {
 #endif
 }
 
+#if defined(REX_VSHIFT_PER_BYTE)
+// renut-ultimate (2026-11-16, port 144; tw2de_nx's of 2026-11-01; CMake TW2DE_VSHIFT_PER_BYTE, off by default at the
+// user's word): vsl / vsr shift the 128-bit vector left / right by bits, each byte of the result by the count in the
+// low 3 bits of the same byte of b, taking the bits it needs from the neighbouring byte: vsl: r[i] = (a[i] << s[i]) |
+// (a[i+1] >> (8 - s[i])), vsr: r[i] = (a[i] >> s[i]) | (a[i-1] << (8 - s[i])) (PowerPC byte order, a[16] = a[-1] = 0).
+// That is what the hardware does (Xenia's instruction tests, recorded on it: 453 of 475 vsl cases with counts that
+// differ between bytes failed when one count was used for all). The ISA asks for the same count in every byte; then
+// this is the plain 128-bit shift, as the forms below. In the host layout PowerPC byte i is byte 15 - i, so the
+// neighbour a[i+1] is the host byte below. On AArch64 five NEON instructions each (the vsl below goes through memory).
+inline simde__m128i simde_mm_vsl(simde__m128i a, simde__m128i b) {
+  const simde__m128i prev = simde_mm_slli_si128(a, 1);  // host byte h: a[h - 1]
+#if defined(__aarch64__) || defined(_M_ARM64)
+  const int8x16_t s = vreinterpretq_s8_u8(vandq_u8(simde__m128i_to_neon_u8(b), vdupq_n_u8(7)));
+  const uint8x16_t r = vorrq_u8(vshlq_u8(simde__m128i_to_neon_u8(a), s),
+                                vshlq_u8(simde__m128i_to_neon_u8(prev), vsubq_s8(s, vdupq_n_s8(8))));
+  return simde__m128i_from_neon_u8(r);
+#else
+  alignas(16) uint8_t va[16], vp[16], vb[16], vr[16];
+  simde_mm_store_si128((simde__m128i*)va, a);
+  simde_mm_store_si128((simde__m128i*)vp, prev);
+  simde_mm_store_si128((simde__m128i*)vb, b);
+  for (int h = 0; h < 16; ++h) {
+    const int s = vb[h] & 7;
+    vr[h] = uint8_t((va[h] << s) | (s ? (vp[h] >> (8 - s)) : 0));
+  }
+  return simde_mm_load_si128((simde__m128i*)vr);
+#endif
+}
+
+inline simde__m128i simde_mm_vsr(simde__m128i a, simde__m128i b) {
+  const simde__m128i next = simde_mm_srli_si128(a, 1);  // host byte h: a[h + 1]
+#if defined(__aarch64__) || defined(_M_ARM64)
+  const int8x16_t s = vreinterpretq_s8_u8(vandq_u8(simde__m128i_to_neon_u8(b), vdupq_n_u8(7)));
+  const uint8x16_t r = vorrq_u8(vshlq_u8(simde__m128i_to_neon_u8(a), vnegq_s8(s)),
+                                vshlq_u8(simde__m128i_to_neon_u8(next), vsubq_s8(vdupq_n_s8(8), s)));
+  return simde__m128i_from_neon_u8(r);
+#else
+  alignas(16) uint8_t va[16], vn[16], vb[16], vr[16];
+  simde_mm_store_si128((simde__m128i*)va, a);
+  simde_mm_store_si128((simde__m128i*)vn, next);
+  simde_mm_store_si128((simde__m128i*)vb, b);
+  for (int h = 0; h < 16; ++h) {
+    const int s = vb[h] & 7;
+    vr[h] = uint8_t((va[h] >> s) | (s ? (vn[h] << (8 - s)) : 0));
+  }
+  return simde_mm_load_si128((simde__m128i*)vr);
+#endif
+}
+#else  // !REX_VSHIFT_PER_BYTE: one count for the whole vector, as before
 // Vector Shift Right
 inline simde__m128i simde_mm_vsr(simde__m128i a, simde__m128i b) {
   b = simde_mm_srli_epi64(simde_mm_slli_epi64(b, 61), 61);
@@ -352,6 +401,7 @@ inline simde__m128i simde_mm_vsl(simde__m128i a, simde__m128i b) {
 #error "Unsupported architecture for simde_mm_vsl (only x86_64 and ARM64 supported)"
 #endif
 }
+#endif  // REX_VSHIFT_PER_BYTE
 
 // Vector Shift Left by Octet - shift entire vector left by bytes in bits [121:124] of vB
 // In PPC big-endian byte 15 is at LSB position, which in x86 LE is at index 0

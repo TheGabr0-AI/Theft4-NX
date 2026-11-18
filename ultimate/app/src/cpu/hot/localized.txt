@@ -2,3 +2,6 @@
 # docs/hand-and-machine-optimising-guide.md section 2). A line is "<address> [options] <what>". From U10 (2026-11-14):
 # the console profiles U9-G0 and U8-B (docs/switch-port/20, section 2.16).
 8216DBB0 XAudio ramped channel mix (hand-written native, hand.txt); mixer thread, G0 26.3 %
+828C6740 GTA IV reverb (hand-written native, hand.txt: gta4_reverb_native.inc); mixer thread, U18-1 B0 15.5 %
+828C5A58 GTA IV look-ahead limiter (hand-written native, hand.txt: gta4_limiter_native.inc); mixer thread, U18-1 B0 12.1 %
+828C2D28 GTA IV audio filter, two biquad pairs (hand-written native, hand.txt: gta4_biquad_native.inc); mixer thread, U18 MAX-A street 16.3 % of a core

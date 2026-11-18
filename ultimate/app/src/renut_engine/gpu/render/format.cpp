@@ -9,7 +9,25 @@
 
 #include <cstring>
 
+#include <rex/cvar.h>
+
+// renut-ultimate (2026-11-16, port 145; tw2de_nx's tw2de_deko3d_native_formats of 2026-10-25, ON at the user's word:
+// "port the speed ups as on by default").
+REXCVAR_DEFINE_BOOL(banjo_deko3d_native_16bit, true, "Banjo/Renut",
+                    "tw2de_nx (exact): the game's unsigned 5:6:5, 1:5:5:5 and 4:4:4:4 textures in the GPU's own 16-bit "
+                    "formats (deko3d RGB565, RGB5A1, RGBA4: the same bit layout), the guest's words copied. false: "
+                    "expanded on the CPU to RGBA8 at upload, twice the memory and the GPU's reads, as before. deko3d only")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 namespace renut::gpu {
+
+namespace {
+// Port 145: banjo_deko3d_native_16bit, read once.
+bool Native16Bit() {
+  static const bool on = IsDeko3D() && REXCVAR_GET(banjo_deko3d_native_16bit);
+  return on;
+}
+}  // namespace
 
 // sasrt-nx (2026-11-11, port 75; its formats batch, row 38 and the diagnostic): the 32-bit float formats the Xenos
 // cannot filter (renut_float32_point_filter), and the formats' names for renut_diag_formats' lines.
@@ -226,12 +244,14 @@ TextureFormatInfo GetTextureFormatInfo(GpuTextureFormat format, bool is_signed) 
   case T::Fmt8_8_8_8_A:
   case T::Fmt8_8_8_8_As16_16_16_16:
     return plain(is_signed ? F::R8G8B8A8_SNORM : F::R8G8B8A8_UNORM, 4);
+  // renut-ultimate (2026-11-16, port 145; tw2de_nx's, banjo_deko3d_native_16bit): the unsigned ones as the GPU's own
+  // formats, the guest's words copied (the signed ones as before: the expansion makes them unsigned too).
   case T::Fmt1_5_5_5:
-    return expand(F::R8G8B8A8_UNORM, C::R5G5B5A1, 2, 4);
+    return Native16Bit() && !is_signed ? plain(F::R5G5B5A1_UNORM, 2) : expand(F::R8G8B8A8_UNORM, C::R5G5B5A1, 2, 4);
   case T::Fmt5_6_5:
-    return expand(F::R8G8B8A8_UNORM, C::R5G6B5, 2, 4);
+    return Native16Bit() && !is_signed ? plain(F::R5G6B5_UNORM, 2) : expand(F::R8G8B8A8_UNORM, C::R5G6B5, 2, 4);
   case T::Fmt4_4_4_4:
-    return expand(F::R8G8B8A8_UNORM, C::R4G4B4A4, 2, 4);
+    return Native16Bit() && !is_signed ? plain(F::R4G4B4A4_UNORM, 2) : expand(F::R8G8B8A8_UNORM, C::R4G4B4A4, 2, 4);
   // sasrt-nx (2026-11-11, port 75; its formats batch, rows 6, 8, 10, 74, 93: renut_format_10bit_exact): 2_10_10_10
   // copied as it is into 10:10:10:2 (X in bits 0-9 is the host's R, as the expansion below read it); the
   // _AS_16_16_16_16 form (filtered at 16 bits on the console) keeps 16.
@@ -438,19 +458,36 @@ void DecodeBlockRow(TexelConversion conversion, const uint8_t *src, uint8_t *dst
   }
 }
 
+// Port 164 (from fnxf_xiii, its note of 2026-11-06): eight bytes at a time (the texture uploads' untile swaps every
+// byte of a DXT level 8in16, one byte pair at a time before); the same bytes in the same places, the tail as before.
+// src and dst may be the same.
 void SwapEndian(u32 endian, const void *src, void *dst, size_t bytes) {
   const auto *s = static_cast<const uint8_t *>(src);
   auto *d = static_cast<uint8_t *>(dst);
+  size_t i = 0;
   switch (endian & 3) {
   case 1:  // 8in16
-    for (size_t i = 0; i + 1 < bytes; i += 2) {
+    for (; i + 8 <= bytes; i += 8) {
+      uint64_t v;
+      std::memcpy(&v, s + i, 8);
+      v = ((v & 0x00FF00FF00FF00FFull) << 8) | ((v >> 8) & 0x00FF00FF00FF00FFull);
+      std::memcpy(d + i, &v, 8);
+    }
+    for (; i + 1 < bytes; i += 2) {
       const uint8_t a = s[i], b = s[i + 1];
       d[i] = b;
       d[i + 1] = a;
     }
     break;
   case 2:  // 8in32
-    for (size_t i = 0; i + 3 < bytes; i += 4) {
+    for (; i + 8 <= bytes; i += 8) {
+      uint64_t v;
+      std::memcpy(&v, s + i, 8);
+      v = __builtin_bswap64(v);
+      v = (v >> 32) | (v << 32);  // each 32-bit word swapped in place
+      std::memcpy(d + i, &v, 8);
+    }
+    for (; i + 3 < bytes; i += 4) {
       uint32_t v;
       std::memcpy(&v, s + i, 4);
       v = __builtin_bswap32(v);
@@ -458,7 +495,13 @@ void SwapEndian(u32 endian, const void *src, void *dst, size_t bytes) {
     }
     break;
   case 3:  // 16in32
-    for (size_t i = 0; i + 3 < bytes; i += 4) {
+    for (; i + 8 <= bytes; i += 8) {
+      uint64_t v;
+      std::memcpy(&v, s + i, 8);
+      v = ((v & 0x0000FFFF0000FFFFull) << 16) | ((v >> 16) & 0x0000FFFF0000FFFFull);
+      std::memcpy(d + i, &v, 8);
+    }
+    for (; i + 3 < bytes; i += 4) {
       uint32_t v;
       std::memcpy(&v, s + i, 4);
       v = (v >> 16) | (v << 16);

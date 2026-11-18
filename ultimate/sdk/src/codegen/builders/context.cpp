@@ -39,6 +39,18 @@ const RecompilerConfig& BuilderContext::config() const {
   return emitCtx.config;
 }
 
+// renut-ultimate (2026-11-16, port 144; tw2de_nx's): exact_fp, exact_fp_functions, exact_fp_log, fp_origin_log.
+bool BuilderContext::exact_fp() const {
+  const auto& c = config();
+  return c.exactFp || (!c.exactFpFunctions.empty() && c.exactFpFunctions.count(fn.base()) != 0);
+}
+bool BuilderContext::exact_fp_log() const {
+  return config().exactFpLog && !exact_fp();
+}
+bool BuilderContext::fp_origin_log() const {
+  return config().fpOriginLog;
+}
+
 const FunctionGraph& BuilderContext::graph() const {
   return emitCtx.graph;
 }

@@ -47,4 +47,23 @@ namespace rex::ppc {
 #endif
 }
 
+// blur-nx (2026-11-17, #231 of docs/cpu-codegen-universal-30-1116.md): a guest double loaded big-endian into the vector
+// unit, `ldr d; rev64 v.8b` instead of `ldr x; rev x; fmov d, x` (the 5-cycle move between the register files). Only
+// the bits move (no floating-point operation, so no NaN is quieted). tools/float_loads.py --doubles writes it where the
+// loaded register's next use is double arithmetic; checked against the integer form by banjo_forms_selfcheck.cpp.
+[[gnu::always_inline]] inline double DoubleFromBigEndian(const void* p) noexcept {
+#if defined(__aarch64__) || defined(_M_ARM64)
+  double d;
+  std::memcpy(&d, p, 8);                                                                  // ldr d
+  return vget_lane_f64(vreinterpret_f64_u8(vrev64_u8(vreinterpret_u8_f64(vdup_n_f64(d)))), 0);  // rev64
+#else
+  uint64_t u;
+  std::memcpy(&u, p, 8);
+  u = __builtin_bswap64(u);
+  double d;
+  std::memcpy(&d, &u, 8);
+  return d;
+#endif
+}
+
 }  // namespace rex::ppc

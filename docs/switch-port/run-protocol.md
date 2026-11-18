@@ -166,3 +166,27 @@ radar), poi annotare in `note.txt` se Niko è in auto o a piedi, se compaiono il
 automatico, se arriva, va nella cartella nuova; (4) a fine run rinominare la cartella nuova in
 `B13EBABEBABEBABE.newgame-<run>` e `B13EBABEBABEBABE.bak` di nuovo in `B13EBABEBABEBABE`; (5) ricontrollare gli SHA-256 del
 salvataggio ripristinato contro il punto (1). Nessun file del salvataggio si cancella o si sovrascrive.
+
+**Dalla U18 MAX (2026-11-17; `20-ultimate-base-migration.md` §2.27, richiesta dell'utente).** Al massimo 2-3 sessioni su
+console in tutto: MAX-A con ogni ottimizzazione accesa (una sessione: A misura, L lampeggiamenti con raffiche, P profilo GPU,
+L2/L3 facoltative di 2 minuti sul disco della lampada); MAX-B solo per una regressione o un problema concreto visto in
+MAX-A; MAX-C solo se indispensabile. Niente run per singolo port. Un problema di una sola funzione si spegne nel toml con la
+sua chiave (elenco nel README del pacchetto) prima di pensare a una NRO nuova.
+
+**Dalla U18 MAX-B (2026-11-18; `20-ultimate-base-migration.md` §2.28).**
+- **Dopo una rigenerazione la build PC non si riconfigura.** `tools/ultimate/build_pc.bat` lancia `cmake -S ... -B ...` a
+  ogni chiamata: la configurazione riscrive `rex/version.h` (ora della configurazione), `rexglue.exe` si ricollega e il
+  passo del generatore rilancia `post_codegen` sull'albero già elaborato, che non è idempotente (MAX-B: 182 file diversi
+  dal manifest). Dopo `regenerate.ps1` si compila con `tools\ultimate\env.bat` + `cmake --build ultimate\app\out\pc -j 2`
+  e si confronta `ultimate/app/generated` con il manifest (`outputs.sha256`) prima di qualsiasi prova; se il passo del
+  generatore è comunque da rifare (dipendenze di ninja scadute dopo la rigenerazione), si mette da parte
+  `generated/codegen.stamp` (rinominandolo) così il codegen riscrive da zero e `post_codegen` gira su codice nuovo. La
+  build Switch non ha questo passo (`SOURCE_DATE_EPOCH` fissa `version.h`).
+- **Chiavi booleane sul PC:** dalla riga di comando `--chiave=false` e `--no-chiave` non hanno effetto (`cvar::Init`,
+  CLI11; `=true`, interi e stringhe sì). Per spegnere una chiave sul PC: un `renut.toml` accanto a `renut.exe` con la sola
+  chiave, rinominato (non cancellato) dopo la run. Il log dice lo stato di ogni nativo a mano ("hand-written native of
+  ...: ON/off"): controllarlo sempre.
+- **Ordine della sessione MAX-B:** L per prima (compila una volta le varianti nuove delle pipeline col clamp 7e3 spento,
+  in background), poi A (misura con la cache già calda, come MAX-A), poi V0.
+- **Memoria:** la build PC a 4 job è stata interrotta per memoria (203/414, 15,9 GB di RAM); a 2 job è passata. Una
+  sola build o rigenerazione alla volta, la build Switch a 1 job.

@@ -195,6 +195,48 @@ struct RecompilerConfig {
   bool vmxExpteRange = false;
   bool vmxCmpbNan = false;
   bool vmxDotOverflowQnan = false;
+  // renut-ultimate (2026-11-16, port 144; tw2de_nx's fixes, found with Xenia's hardware-recorded instruction tests).
+  // Each its own key, all off by default (the user: "make sure its off by default"): the generated code is what it was.
+  //   vcmpbfp_cr6_exact      vcmpbfp.: CR6 is only "eq" (every element within its bounds); the mask test also set "lt"
+  //                          when every element was out of bounds (the hardware gives CR6 = 0 there).
+  //   vupkd3d_exact          vupkd3d128: NORMPACKED64 (4:20:20:20) from the guest's low doubleword with its 3.0 / 1.0
+  //                          biases (it read the high one, dropped the bias and shifted an int32 by more than 31); the
+  //                          most negative field a quiet NaN in NORMSHORT2, NORMSHORT4 and NORMPACKED32's y and z too,
+  //                          as Xenia's x64 unpack (from nx-mod/rexglue-sdk-nx).
+  //   fpscr_moves_exact      mtfsf's field mask in the PowerPC's order (FM 0x80 is field 0, FPSCR 0xF0000000: it was
+  //                          reversed, so `mtfsf 1` did not set the rounding mode), mffs's upper word 0xFFF80000, and
+  //                          builders for mtfsfi, mtfsb0, mtfsb1 and mcrfs (REX_UNIMPLEMENTED traps without).
+  //   extra_instructions     builders for the instructions with none (builders/extra.cpp, instruction_dispatch.cpp:
+  //                          vaddcuw ... vpkpx, lmw, ldbrx, stdbrx, rotld, mcrxr, mfvscr, mtvscr, isync, icbi, mtmsr,
+  //                          lvsl128 / lvsr128, the LRU-hint vector loads and stores, and every OE form).
+  bool vcmpbfpCr6Exact = false;
+  bool vupkd3dExact = false;
+  bool fpscrMovesExact = false;
+  bool extraInstructions = false;
+  // renut-ultimate (2026-11-16, port 144; tw2de_nx's, ON by default at the user's word: "port the speed ups as on by
+  // default"): spin_hint_yield: the Xenon's spin-wait hints (db16cyc, or r1,r1,r1) call rex_spin_hint
+  // (rex/ppc/context.h), which yields the core (the base's MaybeYield, with its backoff); they were nothing. false in
+  // the game's codegen toml: nothing, as before.
+  bool spinHintYield = true;
+  // renut-ultimate (2026-11-16, port 144; tw2de_nx's, off by default): the console's own results where the host's
+  // differ (rex/ppc/vmx_est360.h). vmx_360_estimates: vrefp, vrsqrtefp, vexptefp, vlogefp, fres and frsqrte from
+  // the hardware's tables (Xenia's and xenia-edge's; the default is the exact division, square root, polynomial and
+  // log2f; port 72's NEON estimates replace those, not these). vmx_dot_360: vmsum3fp128 / vmsum4fp128 with the
+  // console's rounding (float64 sums truncated to single), slower than the float32 dot product.
+  bool vmx360Estimates = false;
+  bool vmxDot360 = false;
+  // renut-ultimate (2026-11-16, port 144; tw2de_nx's of 2026-11-01, off by default): exact_fp: the FPU and vector float
+  // results the Xbox 360 gives where the host's differ (rex/ppc/fpu_exact.h: the NaN of the first NaN operand in the
+  // 360's order, quieted, QNaN 0x7FF8... for an invalid operation, the single-precision instructions with a double
+  // denormal operand). A game's code with valid inputs never sees a difference; each helper adds a test of the result.
+  // exact_fp_functions = [addr, ...]: exact_fp in these functions only. exact_fp_log (diagnostic): the host's result
+  // kept, and every instruction exact_fp would change reported once with its function (the line to copy into
+  // exact_fp_functions). fp_origin_log (diagnostic): every float instruction that makes a NaN or an infinity out of
+  // finite operands reported, with the guest's callers (sdk/src/core/ppc_exact_log.cpp).
+  bool exactFp = false;
+  std::unordered_set<uint32_t> exactFpFunctions;
+  bool exactFpLog = false;
+  bool fpOriginLog = false;
   std::unordered_set<uint32_t> lrKeepReturns;
   bool ctrAsLocalVariable = false;
   bool xerAsLocalVariable = false;

@@ -12,9 +12,13 @@
 #include <vector>
 
 #include <rex/chrono/clock.h>
+#include <rex/cvar.h>
+#include <rex/memory/utils.h>
 #include <rex/stream.h>
+#include <rex/system/thread_state.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/util/string_utils.h>  // For TranslateAnsiStringAddress
+#include <rex/system/wait_registry.h>
 #include <rex/system/xobject.h>
 // #include <rex/kernel/xboxkrnl/private.h>  // TODO: JIT only
 #include <rex/system/xenumerator.h>
@@ -29,6 +33,38 @@
 #include <rex/sys_counters.h>
 
 #include "global_lock_spin.h"
+
+// Port 166 (from fnxf_xiii): a wait with an absolute timeout (a guest system time) waits until that time; it timed out
+// at once before (0 ms). A fix, so off by default here.
+REXCVAR_DEFINE_BOOL(banjo_wait_absolute_timeouts, false, "Kernel",
+                    "A guest wait with an absolute timeout waits until that time by the guest clock (off: it times out "
+                    "at once, as before)");
+
+// Port 167 (from fnxf_xiii, its notes of 2026-10-22 and 10-25): wait_registry.h WaitGuestCallers.
+void rex::system::waitreg::WaitGuestCallers(uint32_t out[5]) {
+  for (int i = 0; i < 5; ++i)
+    out[i] = 0;
+  auto* thread = rex::system::XThread::GetCurrentThread();
+  auto* ts = rex::runtime::ThreadState::Get();
+  if (!thread || !ts || !ts->context() || !thread->is_guest_thread())
+    return;
+  out[0] = uint32_t(ts->context()->lr);
+  // The guest stack's back chain: each frame's word 0 is the caller's r1, and a function that calls saves its LR at
+  // -8 from that. Only inside the thread's own stack (KTHREAD stack_limit..stack_base): the outermost frame's back
+  // chain points at the stack's top, past which nothing is mapped (fnxf_xiii read guest 0x70300000 there and faulted).
+  auto* kt = thread->guest_object<rex::system::X_KTHREAD>();
+  const uint32_t stack_high = kt ? uint32_t(kt->stack_base) : 0, stack_low = kt ? uint32_t(kt->stack_limit) : 0;
+  auto in_stack = [&](uint32_t a) { return stack_low && a >= stack_low && a + 4 <= stack_high; };
+  auto* mem = rex::system::kernel_state()->memory();
+  uint32_t frame = ts->context()->r1.u32;
+  for (int i = 1; i < 5 && in_stack(frame); ++i) {
+    const uint32_t prev = rex::memory::load_and_swap<uint32_t>(mem->TranslateVirtual(frame));
+    if (prev <= frame || !in_stack(prev - 8))
+      break;
+    out[i] = rex::memory::load_and_swap<uint32_t>(mem->TranslateVirtual(prev - 8));
+    frame = prev;
+  }
+}
 
 namespace rex::system {
 
@@ -184,6 +220,14 @@ void XObject::SetAttributes(uint32_t obj_attributes_ptr) {
 uint32_t XObject::TimeoutTicksToMs(int64_t timeout_ticks) {
   if (timeout_ticks > 0) {
     // Absolute time, based on January 1, 1601.
+    if (REXCVAR_GET(banjo_wait_absolute_timeouts)) {
+      // Port 166 (from fnxf_xiii): the time left until then by the guest system clock (0 when it has passed).
+      const int64_t now = static_cast<int64_t>(rex::chrono::Clock::QueryGuestSystemTime());
+      if (timeout_ticks <= now)
+        return 0;
+      const uint64_t ms = static_cast<uint64_t>(timeout_ticks - now) / 10000;
+      return ms >= 0xFFFFFFFEull ? 0xFFFFFFFEu : static_cast<uint32_t>(ms);
+    }
     // TODO(benvanik): convert time to relative time.
     assert_always();
     return 0;
@@ -210,7 +254,11 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t a
                                 : std::chrono::milliseconds::max();
 
   XThread::CheckTitleTermination();
+  // blur-nx (2026-11-14, rex/system/wait_registry.h): the stall dumps' record of a blocked wait (polls are not marked).
+  waitreg::Begin(handles_.empty() ? 0u : uint32_t(handles_[0]), uint32_t(type_), 1, waitreg::kWaitOne,
+                 opt_timeout ? int64_t(timeout_ms.count()) : -1);
   auto result = rex::thread::Wait(wait_handle, alertable ? true : false, timeout_ms);
+  waitreg::End();
   XThread::CheckTitleTermination();
   // blur-nx (2026-11-13, #57 / #34's census, PC): polls, and their timeouts.
   const bool poll = timeout_ms.count() == 0;
@@ -242,9 +290,15 @@ X_STATUS XObject::SignalAndWait(XObject* signal_object, XObject* wait_object, ui
                                       TimeoutTicksToMs(*opt_timeout)))
                                 : std::chrono::milliseconds::max();
 
+  // blur-nx (2026-11-14, rex/system/wait_registry.h): the stall dumps' record of a blocked wait (polls are not marked).
+  waitreg::NoteSignalOf(signal_object,
+                        signal_object->type() == Type::Event ? uint32_t(waitreg::kSet) : uint32_t(waitreg::kRelease));
+  waitreg::Begin(wait_object->handles_.empty() ? 0u : uint32_t(wait_object->handles_[0]), uint32_t(wait_object->type_), 1,
+                 waitreg::kSignalAndWait, opt_timeout ? int64_t(timeout_ms.count()) : -1);
   auto result =
       rex::thread::SignalAndWait(signal_object->GetWaitHandle(), wait_object->GetWaitHandle(),
                                  alertable ? true : false, timeout_ms);
+  waitreg::End();
   switch (result) {
     case rex::thread::WaitResult::kSuccess:
       wait_object->WaitCallback();
@@ -286,9 +340,14 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects, uint32_t wait_
                                 : std::chrono::milliseconds::max();
 
   XThread::CheckTitleTermination();
+  // blur-nx (2026-11-14, rex/system/wait_registry.h): the stall dumps' record of a blocked wait (polls are not marked).
+  waitreg::Begin(count == 0 || objects[0]->handles_.empty() ? 0u : uint32_t(objects[0]->handles_[0]),
+                 count == 0 ? 0u : uint32_t(objects[0]->type_), count, wait_type ? waitreg::kWaitAny : waitreg::kWaitAll,
+                 opt_timeout ? int64_t(timeout_ms.count()) : -1);
   if (wait_type) {
     auto result =
         rex::thread::WaitAny(wait_handles, count, alertable ? true : false, timeout_ms);
+    waitreg::End();
     XThread::CheckTitleTermination();
     switch (result.first) {
       case rex::thread::WaitResult::kSuccess:
@@ -310,6 +369,7 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects, uint32_t wait_
   } else {
     auto result =
         rex::thread::WaitAll(wait_handles, count, alertable ? true : false, timeout_ms);
+    waitreg::End();
     XThread::CheckTitleTermination();
     switch (result) {
       case rex::thread::WaitResult::kSuccess:

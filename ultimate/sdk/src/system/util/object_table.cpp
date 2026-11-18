@@ -32,6 +32,12 @@ REXCVAR_DEFINE_BOOL(kernel_handle_lookup_own_lock, true, "Kernel",
                     "finding the global region taken). false: the global critical region, as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(kernel_handle_lookup_spin, true, "Kernel",
+                    "blur-nx (the Renut audit's #9, exact): a handle lookup finding the handle table's own lock taken "
+                    "(kernel_handle_lookup_own_lock) tries it global_lock_spin times more, a CPU yield between tries, "
+                    "before it blocks in the kernel, as the global region's lookups did. false: it blocks at once")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 namespace rex::system::util {
 
 ObjectTable::ObjectTable() {}
@@ -321,7 +327,20 @@ XObject* ObjectTable::LookupObject(X_HANDLE handle, bool already_locked) {
     table_lock = std::unique_lock<std::mutex>(table_mutex_, std::try_to_lock);
     if (!table_lock.owns_lock()) {
       REX_SYS_COUNT(rex::syscount::kObjBlocked, 1);
-      table_lock.lock();
+      // blur-nx (2026-11-17, the Renut audit's #9, kernel_handle_lookup_spin): the bounded spin the global region's
+      // lookups had (global_lock_spin tries, a CPU yield between them) before the kernel wait: the lock is held for
+      // a few loads and a retain, and Horizon's mutex hands a released lock to the waiter it wakes (Blur's race: 296
+      // of 14,193 lookups a second found it taken).
+      static const bool spin = REXCVAR_GET(kernel_handle_lookup_spin);
+      bool got = false;
+      if (spin) {
+        for (int32_t i = REXCVAR_GET(global_lock_spin); i > 0 && !got; --i) {
+          CpuRelax();
+          got = table_lock.try_lock();
+        }
+      }
+      if (!got)
+        table_lock.lock();
     }
   } else if (!already_locked) {
     region = AcquireGlobalSpin(global_critical_region_.mutex(), rex::syscount::kObjBlocked);

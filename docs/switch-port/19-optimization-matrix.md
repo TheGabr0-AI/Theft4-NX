@@ -288,3 +288,91 @@ configurazione su U18-1. Poi, solo se i lampeggiamenti restano senza nome dopo V
   stessi toml; i profili si rifanno a ogni rigenerazione del codice (dopo il 144, prima del PGO).
 - Il guadagno atteso non è stimabile senza misura: oggi la strada è limitata dal render thread e dal mixer, codice in gran
   parte già copiato a mano o a macchina.
+
+**U18-1 costruita (doc 20 §2.26, 2026-11-16; build sul PC, nessun run su console).** NRO `315669d3…` (stamp
+`168baa62b651-dirty+u18-1`) = U17 + port 142, 143, 145, 146 + le quattro copie native tolte (il 147 dipende dal 144: va con U18-2); pacchetto
+`out/console-runs/u18-1` con B0-B4, B5 (facoltativa, dopo B0), V (viste), N (nuova partita). U18-2 (gruppo 144), LTO, PGO
+e mixer non iniziati.
+
+## 8. U18 MAX (2026-11-17): una build con tutto il trasferibile, al massimo 2-3 sessioni su console
+
+Richiesta dell'utente: niente più run isolate; **MAX-A** = tutte le ottimizzazioni trasferibili e compatibili accese
+insieme, una sessione (cucina, strada, filmato, garage); MAX-B solo per una regressione concreta; MAX-C solo se
+indispensabile. U18-1 letta (doc 20 §2.27): i port 142-146 non cambiano nulla di misurabile e non peggiorano nulla.
+
+| Tecnica | Fonte | MAX-A | Prova sul PC | Rollback senza ricostruire |
+|---|---|---|---|---|
+| Percorso veloce: bias/gamma dei target nel numero dello stato (alone intermittente) | Theft4-NX (V di U18-1) | acceso | non eseguibile sul PC (solo deko3d) | nessuna chiave (correzione) |
+| Nativo del riverbero `828C6740` (15,5 % del mixer) | Theft4-NX | `gta4_hand_reverb` | guardia: 4.026 confronti, 0 differenze | `gta4_hand_reverb = false` |
+| Nativo del limiter `828C5A58` (12,1 % del mixer) | Theft4-NX | `gta4_hand_limiter` | contatori + modello esatto (240.000 finestre, 0 differenze) | `gta4_hand_limiter = false` |
+| Cache per sito delle chiamate indirette (CG-08), 14.161 siti | base 150 + correzione di `indirect_calls.py` per GTA IV | acceso (solo Switch) | - (il PC usa il percorso del censimento) | no (compile time: `REX_SITE_CACHE_OFF`) |
+| CAS relaxed + fence divise | base 150 | acceso | guardia 0 differenze | `blur_guest_cas_relaxed`, `blur_guest_fences_split` |
+| Double nell'unità vettoriale (154 load), barriere dei cicli contati | base 150 | acceso | guardia 0 differenze | no (rigenerazione) |
+| `spin_hint_yield` (12 siti), NORMSHORT2 NEON | base 144 | acceso | guardia 0 differenze | no (rigenerazione) |
+| Strumenti di test PowerPC | base 147 | (fuori dall'NRO) | - | - |
+| Lavoro CPU di Renut (binds senza lock, memo, set-words, pool) | base 148 | acceso; GTA IV non registra command buffer | build | chiavi `blur_renut_*` |
+| Hand-over della griglia dei campioni | base 149 | acceso (esatto) | build | - |
+| Allocatore dei blocchi piccoli, 32 MB | base 151 | acceso (solo Switch) | - | `blur_small_alloc_mb = 0` |
+| APC senza lock, registro delle attese, strumenti, frame allo Swap | base 152-154, 156 | acceso | build | - |
+| Colore scalato per il bias dei target | base 155 (1) | **spento per GTA IV** | il PC è giusto senza | - |
+| Resolve della griglia nella firma | base 155 (2-3) | acceso | build | - |
+| 6 copie macchina nuove (2 tolte dalla guardia, 1 non verificabile sul PC) | profili U18-1 | acceso | guardia 0 differenze sulle 6 | no |
+| Port 143, 145, 146 (incl. 16 bit nativo, async present) | base | acceso (default) | U18-1 B1-B5 senza regressioni | chiavi della base |
+| Priorità XAudio 0x2D | U11 | nella NRO | - | `gta4_xaudio_thread_priority = -1` |
+
+Esclusi: C1/C2, prefetch del mix, `audio_switch_pump_pairs`/`_frames` (latenza), `BLUR_FPCR_ONE_MODE` (non esatto),
+`thread_event_spin`, `BLUR_LOCALIZE_ABI_TRUST`, LTO e PGO (vedi sotto). Fast draw resta acceso (ora corretto).
+
+**LTO e PGO dopo MAX-A.** La LTO è una build intera in una cartella propria con un picco di memoria al link non misurato
+(16 GB, 1 job): va fatta su una base già verificata, non insieme a 20 cambi. La PGO vuole una sessione con l'NRO
+strumentata (il percorso di MAX-A, ~25 minuti): se MAX-A è buona, MAX-B può essere quella sessione di addestramento
+più l'eventuale correzione, e MAX-C la build PGO + LTO.
+
+**Il prossimo nel mixer:** `828C2D28` (biquad in cascata, 14,1 %): stato e coefficienti nei registri (stima 4-5 % del
+thread). **Il prossimo nella grafica:** il disco della lampada (solo console; candidati in doc 20 §2.27) e il profilo GPU
+della run P.
+
+## 9. U18 MAX-B (2026-11-18): MAX-A letta, la seconda sessione
+
+MAX-A sulla console (doc 20 §2.28): audio risolto (mixer 5,12 -> 4,37 ms per blocco, consegna 100 %), strada invariata
+(9,3 fps, core 0-2 saturi), disco della lampada causato dal clamp 7e3 (L3), nessuna chiave del percorso veloce diversa (P).
+La strada resta il limite: la CPU dei core 0-2 (mixer ~95 % di un core, render thread dell'host ~60 % sul core 1, thread di
+rendering del gioco ~45 %, main ~40 %, audio RAGE ~28 %, decompressione LZX ~14 %, XMA ~11 %, worker ~30 %).
+
+| Tecnica | Fonte | MAX-B | Prova sul PC | Rollback senza ricostruire |
+|---|---|---|---|---|
+| Clamp 7e3 spento per GTA IV (il disco della lampada) | MAX-A L3 | `gta4_switch_defaults.toml` | il PC non l'ha mai avuto | `dishonored_renut_clamp_7e3 = true` |
+| Barriera delle texture lette dai vertex shader (luci esterne che lampeggiano: ipotesi) | base 161 (fnxf_xiii) | acceso per GTA IV | solo deko3d | `banjo_deko3d_vertex_texture_barrier = false` (run V0) |
+| Nativo del filtro audio `828C2D28` (16,3 % di un core in strada): stato e coefficienti in locali | Theft4-NX | `gta4_hand_biquad` | guardia (vedi doc 20 §2.28) | `gta4_hand_biquad = false` |
+| Batch dell'host di Blur (render thread ~16 % più veloce per draw su Blur) | base 177 | acceso (default) | verify PC | chiavi `blur_renut_*` della base |
+| Contabilità del frame dopo il present | base 161 | acceso | build | `banjo_renut_bookkeeping_after_present = false` |
+| Submit progressivo, untile su 2 thread, barriere delle copie, log di deko3d su thread | base 161, 164, 171 | acceso (default) | build | chiavi della base |
+| Memo delle superfici con base EDRAM, uam più veloce e senza perdite | base 161, 162 | acceso (correzioni) | build | - |
+| Indirizzo delle store card calcolato una volta | base 160 | acceso (post-codegen) | guardia | no (rigenerazione) |
+| Ripresa delle sottomissioni GPFIFO rifiutate (crash di Blur ai caricamenti) | base 157 | acceso | solo Switch | - |
+| Menu di gioco (A+B+X+Y+L+R), registrazione -O0, strumenti | base 158, 177-180 | come la base | build | - |
+| Texture park | base 168/181 | spento (default della base) | - | - |
+| EDRAM carry, crop dello scaler, altre correzioni di fnxf_xiii/rehatched | base 159, 163, 166, 169, 170, 172, 174, 179 | spenti (default) | - | - |
+
+Verifiche sul PC (doc 20 §2.28): guardia densa 0 differenze su 1,39 M chiamate (due run), il filtro 4.667 confronti
+con le istruzioni originali; il blocco nativo esegue ogni passata del ciclo (770.213 su 770.213, run di conteggio); con la
+chiave spenta (toml) la copia, 0 differenze; il test di sovrapposizione esatto su 2 M casi. La build PC rielaborava il
+codice generato (`post_codegen` non idempotente su un albero già elaborato): rigenerato da zero e controllato contro il
+manifest prima di ogni prova.
+
+Esclusi: un nativo del decoder LZX `829B2600` (14 % di un core in strada, foglia intera di 272 istruzioni: il prossimo
+candidato, da scrivere come nativo esatto e da verificare con la guardia sulle uscite), il router `8216D7E0` (mix XAudio
+già nativo, limitato dalla memoria), ogni riduzione dei sottopassi della fisica (cambierebbe il gioco).
+
+**LTO.** Il PC ha 15,9 GB di RAM (9,4 liberi a riposo) e 12 GB liberi su C:. La LTO della base mette in GIMPLE il codice
+ricompilato (ELF da 85 MB senza LTO) e lo ottimizza al link (`-flto=N -flto-partition=balanced`): la WPA tiene in memoria
+l'intero programma, stimata oltre 8-10 GB per un binario di questa taglia, più i file temporanei dei LTRANS. Rischio
+concreto di esaurire la RAM e il disco C: con N >= 2. Fattibile solo con `-flto=1`, la cartella temporanea su D: (158 GB
+liberi), nient'altro in esecuzione, dopo che MAX-B è verificata; non avviata in questo ciclo.
+
+**PGO.** Il flusso è pronto nella base (`BANJO_PGO=generate`, `tools/pgo_merge.py`, `BANJO_PGO=use`, una cartella per
+forma: `pgo-inplace/` con le copie in place). Serve una NRO strumentata degli STESSI sorgenti di MAX-B e una sessione con
+il percorso rappresentativo (cucina ferma, strada a piedi e in auto, filmato, garage), così il profilo copre anche le copie
+macchina e i nativi del mixer. Nessun profilo di altri giochi: `pgo/` della base è di Katamari. Con il limite di 2-3
+sessioni: la NRO strumentata può accompagnare MAX-B nella stessa sessione (una run in più dopo A/L), e la terza sessione
+(MAX-C) prova PGO + LTO.

@@ -28,10 +28,30 @@
 #endif
 
 #include <rex/assert.h>
+#include <rex/cvar.h>
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <rex/platform/env.h>
 #include <rex/string.h>
+
+#if defined(__SWITCH__)
+#include "guest_memory_switch.h"  // port 146: RexGmBase / RexGmSize, the guest window
+#endif
+
+// renut-ultimate (2026-11-16, port 146; tw2de_nx's of 2026-10-26/27, the speed-up ON by default at the user's word): the Switch's
+// reads and writes through a host buffer (PosixFileHandle below). ON at the user's word ("port the speed ups as on by default").
+REXCVAR_DEFINE_INT32(filesystem_bounce_piece_mb, 4, "Filesystem",
+                     "tw2de_nx: the Switch's file reads and writes go through a host buffer in pieces of this many MB "
+                     "(1-16; 4 by default, 1 as before). Each piece is a request to the file system service (about 2.3 ms of fixed "
+                     "cost on the console, tw2de_nx): 1 MB pieces cut a large read's speed by about a seventh, 4 MB "
+                     "(masseffect_io_chunk_mb's size, which the reads are split into anyway) by none. Each reading thread "
+                     "keeps a buffer of this size")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(filesystem_bounce_guest_only, true, "Filesystem",
+                    "tw2de_nx: only a buffer in the guest's memory goes through the host buffer (the file system refuses "
+                    "guest memory as a transfer buffer); a host buffer (the read cache's, the renderer's) is read and "
+                    "written directly, one copy less. false = every buffer through it, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 #include <dirent.h>
 #include <ftw.h>
@@ -254,14 +274,37 @@ class PosixFileHandle : public FileHandle {
    * (about 5 ms for those 23 MB on the A57), the same results as one pread / pwrite (a short piece ends the transfer
    * with what was moved, an error before the first byte is an error).
    */
-  static constexpr size_t kPiece = size_t(1) << 20;
+  // Port 146: filesystem_bounce_piece_mb (1 MB by default, as before), filesystem_bounce_guest_only (off).
+  static size_t PieceBytes() {
+    static const size_t piece = size_t(std::clamp(REXCVAR_GET(filesystem_bounce_piece_mb), 1, 16)) << 20;
+    return piece;
+  }
   static uint8_t* Bounce() {
     static thread_local std::unique_ptr<uint8_t[]> bounce;
-    if (!bounce) bounce = std::make_unique<uint8_t[]>(kPiece);
+    if (!bounce) bounce = std::make_unique<uint8_t[]>(PieceBytes());
     return bounce.get();
+  }
+  // Whether [p, p + n) is a host buffer the file system may take directly (filesystem_bounce_guest_only).
+  static bool DirectOk(const void* p, size_t n) {
+    static const bool guest_only = REXCVAR_GET(filesystem_bounce_guest_only);
+    if (!guest_only || !n)
+      return false;
+    const uint8_t* base = RexGmBase();
+    const uint8_t* q = static_cast<const uint8_t*>(p);
+    return base && !(q + n > base && q < base + RexGmSize());
   }
   bool Read(size_t file_offset, void* buffer, size_t buffer_length,
             size_t* out_bytes_read) override {
+    if (DirectOk(buffer, buffer_length)) {  // port 146
+      const ssize_t got = pread(handle_, buffer, buffer_length, off_t(file_offset));
+      if (got < 0) {
+        *out_bytes_read = 0;
+        return false;
+      }
+      *out_bytes_read = size_t(got);
+      return true;
+    }
+    const size_t kPiece = PieceBytes();
     uint8_t* const bounce = Bounce();
     auto* out = static_cast<uint8_t*>(buffer);
     size_t total = 0;
@@ -284,6 +327,16 @@ class PosixFileHandle : public FileHandle {
   }
   bool Write(size_t file_offset, const void* buffer, size_t buffer_length,
              size_t* out_bytes_written) override {
+    if (DirectOk(buffer, buffer_length)) {  // port 146
+      const ssize_t put = pwrite(handle_, buffer, buffer_length, off_t(file_offset));
+      if (put < 0) {
+        *out_bytes_written = 0;
+        return false;
+      }
+      *out_bytes_written = size_t(put);
+      return true;
+    }
+    const size_t kPiece = PieceBytes();
     uint8_t* const bounce = Bounce();
     const auto* in = static_cast<const uint8_t*>(buffer);
     size_t total = 0;

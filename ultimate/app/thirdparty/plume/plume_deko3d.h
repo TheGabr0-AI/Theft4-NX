@@ -605,10 +605,26 @@ namespace plume {
         uint32_t boundRestart = 1;
         uint64_t statTexRuns = 0, statTexSkips = 0;  // banjo-nx (2026-10-27): into Deko3DStats at end()
         void emitBarrier(DkBarrier mode, uint32_t invalidate);
-        void flushBarriers() {
+        void flushBarriersRaw() {
             if (pendingBarrier)
                 emitBarrier(pendingBarrierMode, pendingBarrierInvalidate);
         }
+        // Port 161 (from fnxf_xiii, its note of 2026-10-30; Deko3DOptions::copyRunBarriers): a run of buffer copies
+        // needs no barrier between its copies. deko3d's buffer copy is the copy engine's LaunchDma with
+        // TransferType::NonPipelined (deko3d source/maxwell/gpu_transfer.cpp), so one copy of a channel finishes before
+        // the next starts, whatever they read and write; and a Full barrier is two gpfifo entries, which is what the
+        // channel runs out of (fnxf_xiii: 2020 entries at a kickoff that timed out, 675 copy-kernel draws each fenced
+        // before and after; port 157 handles such a refusal after the fact). So once a Full barrier has run
+        // (copyRunFenced: nothing but buffer copies since it), a barrier recorded before another buffer copy stays
+        // pending, as a Full, and is emitted before the next command the copy engine does not run: every other
+        // command calls flushBarriers. Without a Full first nothing is held back.
+        bool copyRunFenced = false;
+        uint32_t sampleMaskSet = 0xFFFFFFFFu;  // port 166: the mask last recorded (none yet in this list)
+        void flushBarriers() {
+            flushBarriersRaw();
+            copyRunFenced = false;
+        }
+        void beforeBufferCopy();  // plume_deko3d_commands.cpp
         void invalidateZcullAfterCopy(const Deko3DTexture *dst);
         // sasrt-nx (2026-11-08, Deko3DOptions::preciseDepthResolve): the draw about to be recorded may write the bound
         // compressed depth target: it is dirty (decompressed before it is read or leaves the bind point).
@@ -720,6 +736,15 @@ namespace plume {
         };
         std::vector<CachedBlock> targetCache;
         uint64_t targetCacheBytes = 0;
+        // blur-nx (2026-11-18, for 1 % lows, every port; Deko3DSetImageSpareChunk): a thread that makes the image heap's
+        // next shared chunk ahead, so a texture that finds no room takes a ready chunk instead of making a 32 MB block
+        // where it is (20-38 ms on Blur's console, 4-5 times a race, on the thread creating the texture with heapMutex
+        // held). wantSpareLocked (heapMutex held) asks for one when no shared chunk is empty; heapMutex, then spareMutex.
+        std::mutex spareMutex;
+        std::condition_variable spareWake, spareDone;
+        bool spareWanted = false, spareMaking = false, spareStop = false, spareStarted = false, spareRunning = false;
+        void wantSpareLocked();
+        void spareWorker();
         void cacheTargetBlockLocked(DkMemBlock block, uint32_t size);
         DkMemBlock takeCachedTargetBlockLocked(uint32_t size, uint32_t &blockSize);
         uint64_t releaseTargetCacheLocked();
@@ -838,6 +863,7 @@ namespace plume {
 
         // internal
         DkMemBlock makeBlock(uint32_t size, uint32_t flags, const char *what);
+        DkMemBlock makeBlockUntimed(uint32_t size, uint32_t flags, const char *what);  // blur-nx (2026-11-18): makeBlock's body
         void destroyBlock(DkMemBlock block);
         // PLUME_DEKO3D_GUARDS (debug builds): every block's storage has guard bytes after it, checked here.
         void checkGuards();
@@ -909,6 +935,9 @@ namespace plume {
     // 0x0DF RasterizerEnable 0, then 1 again: plume's pipelines all rasterize): its vertex shader runs and exports, no
     // primitive reaches clipping, setup or the scissor.
     void Deko3DDiscardNextDraw(RenderCommandList *commandList);
+    // Port 166 (from fnxf_xiii): the samples the next draws write (dkCmdBufSetSampleMask, 16 bits), recorded only when it
+    // changes (Deko3DCommandList::sampleMaskSet; 0xFFFF: every sample).
+    void Deko3DSetSampleMask(RenderCommandList *commandList, uint32_t mask);
     // sasrt-nx (2026-11-08, sasrt_gpu_export_list_topology; the fourth GPU round): the next draw recorded with this
     // DkPrimitive instead of its pipeline's (with the rasterizer off: only which vertices the vertex shader runs for).
     void Deko3DSetNextPrimitive(RenderCommandList *commandList, uint32_t primitive);
@@ -1010,6 +1039,11 @@ namespace plume {
     // sasrt-nx (2026-11-09 night; port 58): an image goes to the smallest free range it fits among the image heap's
     // shared chunks (the first that fit before, chunk by chunk): fewer holes, and chunks that empty go back to the region.
     void Deko3DSetImageBestFit(bool on);
+    // blur-nx (2026-11-18, for 1 % lows, every port): the image heap keeps one empty shared chunk ready, made on a thread
+    // of its own (the uam thread's core and priority) when an image takes the last empty one; the texture that would
+    // have made a chunk (a 32 MB block, 20-38 ms on the console, the heap's lock held) finds room. Not while the heap's
+    // room is short; the governor's Deko3DReleaseEmptyImageChunks gives the spare back too. On by default.
+    void Deko3DSetImageSpareChunk(bool on);
     // sasrt-nx (2026-11-09; port 58): render and depth targets of 1 MB and more in a chunk of their own (on by default),
     // so a target the renderer retires (a resolution change's set, an idle scale's) gives its memory back to the GPU
     // region at once, for buffers too, instead of a hole in a shared image chunk that only images can use; and the
@@ -1133,6 +1167,11 @@ namespace plume {
         // waits for the work before it but keeps the texture cache: only a read after a write needs it invalidated,
         // and that read's own transition does it.
         bool leanBarriers = false;
+        // Port 161 (from fnxf_xiii): no barrier between back-to-back buffer copies after a Full one (beforeBufferCopy).
+        bool copyRunBarriers = false;
+        // Port 165 (from fnxf_xiii, its notes of 2026-10-25 and 10-29): the display refreshes each swapchain image is
+        // held for with vsync on (1-4; 2 paces a 30 fps game evenly from the display itself).
+        uint32_t swapInterval = 1;
         // sasrt-nx (2026-10-30): a multisampled pipeline gets the standard sample positions for its sample count
         // (dkMultisampleStateSetLocations with none given, as nouveau's gm200_validate_sample_locations). deko3d's
         // dkMultisampleStateDefaults puts every sample at the pixel's centre and dkCmdBufBindMultisampleState always

@@ -5,6 +5,7 @@
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
+#include <condition_variable>
 #include <mutex>
 #include <string_view>
 #include <unordered_map>
@@ -25,6 +26,23 @@
 
 // sasrt-nx (2026-11-08, the GPU round after the move to the ultimate base): defined on every platform so the tomls read
 // the same; only the deko3d back end counts.
+// Port 165 (from fnxf_xiii, its notes of 2026-10-25 and 10-29): plume_deko3d.h Deko3DOptions::swapInterval.
+REXCVAR_DEFINE_INT32(banjo_deko3d_swap_interval, 1, "Banjo/Enhancements",
+                     "deko3d: the display refreshes each image is held for with vsync on, 1-4 (fnxf_xiii's frame "
+                     "interval: 2 shows a 30 fps game evenly at 60 Hz, paced by the display itself). 1: as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Port 161 (from fnxf_xiii, its note of 2026-11-05): see DiagLogWriter.
+REXCVAR_DEFINE_BOOL(banjo_deko3d_log_writer, true, "Banjo/Enhancements",
+                    "deko3d.log's progress lines (memory blocks, compile threads, swapchain) written and flushed by a "
+                    "thread of their own instead of the thread that said them (failures still at once). false: every "
+                    "line written and flushed where it is said, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Port 161 (from fnxf_xiii, its note of 2026-10-30): plume_deko3d.h beforeBufferCopy.
+REXCVAR_DEFINE_BOOL(banjo_deko3d_copy_run_barriers, true, "Banjo/Enhancements",
+                    "deko3d: no barrier between back-to-back buffer copies once a full one has run (the copy engine "
+                    "runs them one at a time; each full barrier is 2 GPU submission entries). false: a barrier before "
+                    "every copy, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(sasrt_deko3d_diag_trace, false, "SASRT/Diagnostics",
                     "deko3d renderer, a measurement (the second GPU round of 2026-11-08): every 600th frame's command "
                     "stream logged as tokens ([deko3d trace] lines: barriers with their causes, draws, dispatches, target "
@@ -462,6 +480,82 @@ std::unique_ptr<plume::RenderShader> CreateGameShader(plume::RenderDevice *devic
   return shader;
 }
 
+// Port 161 (from fnxf_xiii, its note of 2026-11-05; banjo_deko3d_log_writer): deko3d.log's writer. The back end's
+// progress lines (its memory blocks, the compile threads, the swapchain, the first presents) are queued and written and
+// flushed by a thread of their own: each line was a write and a flush of the card on the thread that said it, the
+// render thread's for the "memory block" lines of an area's new buffers (fnxf_xiii: 16 ms of such writes in one
+// frame). Any other line (a failure, a guard, a fence that does not signal) is written and flushed at once on its own
+// thread, after the queued ones, so a crash right after it still has it in the file.
+class DiagLogWriter {
+ public:
+  static DiagLogWriter &Instance() {
+    static DiagLogWriter w;
+    return w;
+  }
+  void Open(FILE *file) { file_ = file; }
+  void Queue(const char *line) {
+    bool start = false;
+    {
+      std::lock_guard lock(queue_mutex_);
+      queue_.emplace_back(line);
+      start = !started_;
+      started_ = true;
+    }
+    if (start)
+      banjo::renut_gpu::StartLongLivedThread([] { Instance().Loop(); }, 32 * 1024);
+    cv_.notify_one();
+  }
+  void WriteNow(const char *line) {
+    std::vector<std::string> lines;
+    {
+      std::lock_guard lock(queue_mutex_);
+      lines.swap(queue_);
+    }
+    std::lock_guard lock(file_mutex_);
+    if (!file_)
+      return;
+    for (const std::string &l : lines)
+      std::fprintf(file_, "%s\n", l.c_str());
+    std::fprintf(file_, "%s\n", line);
+    std::fflush(file_);
+  }
+
+ private:
+  void Loop() {
+    for (;;) {
+      std::vector<std::string> lines;
+      {
+        std::unique_lock lock(queue_mutex_);
+        cv_.wait(lock, [this] { return !queue_.empty(); });
+        lines.swap(queue_);
+      }
+      std::lock_guard lock(file_mutex_);
+      if (!file_)
+        continue;
+      for (const std::string &l : lines)
+        std::fprintf(file_, "%s\n", l.c_str());
+      std::fflush(file_);
+    }
+  }
+  std::mutex queue_mutex_, file_mutex_;
+  std::condition_variable cv_;
+  std::vector<std::string> queue_;
+  bool started_ = false;
+  FILE *file_ = nullptr;
+};
+
+bool Deko3DProgressLine(const char *message) {
+  static constexpr const char *kProgress[] = {
+      "device: creating", "image heap:", "buffer arena:", "device ready:", "memory block:", "blocks:", "uam thread:",
+      "uam: compile", "uam: run-time variant", "uam background thread:", "uam queue:", "shader code: block",
+      "trace ", "self-test", "swapchain:", "present ", "nvservices: a GPU submission",
+  };
+  for (const char *prefix : kProgress)
+    if (std::strncmp(message, prefix, std::strlen(prefix)) == 0)
+      return true;
+  return false;
+}
+
 void InstallShaderCache() {
   // The back end's messages into this log (plume writes them to stderr otherwise), and into deko3d.log next to the NRO,
   // flushed at each line: the log's buffer is lost when the process dies. katamari-nx (2026-11-02): not with
@@ -470,8 +564,17 @@ void InstallShaderCache() {
                           ? nullptr
                           : std::fopen(NextToExecutable("deko3d.log").string().c_str(), "w");
   static std::mutex diag_mutex;
+  static const bool writer = REXCVAR_GET(banjo_deko3d_log_writer);  // port 161
+  DiagLogWriter::Instance().Open(diag);
   plume::SetDeko3DLogCallback([](const char *message) {
     REXLOG_INFO("[deko3d] {}", message);
+    if (writer) {  // port 161: see DiagLogWriter
+      if (Deko3DProgressLine(message))
+        DiagLogWriter::Instance().Queue(message);
+      else
+        DiagLogWriter::Instance().WriteNow(message);
+      return;
+    }
     std::lock_guard<std::mutex> lock(diag_mutex);
     if (diag) {
       std::fprintf(diag, "%s\n", message);
@@ -489,6 +592,8 @@ void InstallShaderCache() {
   options.uamFlags = Deko3DUamFlags();
   options.mergeBarriers = Deko3DBarrierMergeOn();  // banjo-nx (2026-10-19, GPU)
   options.leanBarriers = Deko3DBarrierLeanOn();
+  options.copyRunBarriers = REXCVAR_GET(banjo_deko3d_copy_run_barriers);  // port 161 (from fnxf_xiii)
+  options.swapInterval = uint32_t(std::clamp<int32_t>(REXCVAR_GET(banjo_deko3d_swap_interval), 1, 4));  // port 165
   options.asyncVariants = Deko3DAsyncVariantsOn();  // banjo-nx (2026-10-21)
   // The uam thread on the background compile core, below the game's threads (2026-10-18).
   options.compileCore = Deko3DCompileCore();

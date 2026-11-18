@@ -20,6 +20,7 @@
 #include "renut_engine/dlc_install.h"
 #include "profiler/profiler.h"
 #include "profiler/profiler_overlay.h"
+#include "game_menu.h"  // blur-nx (2026-11-18): the game menu (A+B+X+Y+L+R, F8)
 #include "me/me_native_system.h"
 // banjo-nx (2026-10-16): Renut's Direct3D-level renderer, the boot choice banjo_renderer = "renut"
 // (app/src/renut_engine/gpu, tools/renut_gpu_import.py, docs/renut-renderer-port.md).
@@ -34,6 +35,9 @@
 #endif
 namespace katamari::stage_diag {
 void Start();  // src/cpu/katamari_stage_diag.cpp
+}
+namespace blur::small_alloc {
+void Enable();  // blur-nx (2026-11-17, #220; renut-ultimate port 151): src/blur_small_alloc.cpp, after setup
 }
 #include "native/nfsmw_nativo_captura.h"
 #if !REX_PLATFORM_SWITCH
@@ -106,6 +110,9 @@ public:
     //     rex::cvar::LoadConfig("renut.toml");
     // }
 
+    // blur-nx (2026-11-18): the game menu's fonts (the console's own shared font) in the SDK drawer's atlas.
+    void OnConfigureFonts(ImFontAtlas* atlas) override { blur::AddGameMenuFonts(atlas); }
+
     void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
 #if BANJO_RENUT_RENDERER
         // katamari-nx (2026-11-01): the app's dialogs draw with the ImGui inside this executable, whose context only
@@ -122,6 +129,10 @@ public:
         // CPU/GPU profiler window ported from UnleashedRecomp (F5 / banjo_show_profiler).
         profiler_dialog_ = std::make_unique<ProfilerOverlayDialog>(drawer);
         drawer->AddDialog(profiler_dialog_.get());
+        // blur-nx (2026-11-18, the user's request): the game menu. Attached for good (its constructor adds it), it
+        // asks for no ImGui frame while closed (WantsFrame), so the drawer builds none for it then.
+        game_menu_ = std::make_unique<blur::GameMenuDialog>(drawer, config_path(), [this] { return runtime(); },
+                                                            [this] { return immediate_drawer(); });
 #if !REX_PLATFORM_SWITCH
         path_wizard_ = new PathSetupWizard(drawer);
         drawer->AddDialog(path_wizard_);
@@ -215,6 +226,9 @@ public:
         // main.cpp alone: the repository's commit, "-dirty" with uncommitted changes in ultimate/ or tools/ultimate/).
         REXLOG_INFO("theft4-nx: GTA IV on the Ultimate Base, build {} ({})", THEFT4_BUILD_COMMIT, THEFT4_BUILD_NAME);
 #endif
+        // blur-nx (2026-11-17, #220; renut-ultimate port 151): the small-block arena, blur_small_alloc_mb (32 MB by
+        // default, Blur's size; 0 in a game's toml turns it off). Before the DLC install, as Blur has it.
+        blur::small_alloc::Enable();
         // katamari-nx (2026-10-31): DLC packages in the "dlc" folder next to the NRO / exe installed before the game
         // starts (reNut upstream's installer, renut_engine/dlc_install.cpp, as banjo-nx does).
         renut::dlc::InstallPackages(runtime());
@@ -342,4 +356,5 @@ private:
 #endif
     std::unique_ptr<FpsOverlayDialog> fps_dialog_;
     std::unique_ptr<ProfilerOverlayDialog> profiler_dialog_;
+    std::unique_ptr<blur::GameMenuDialog> game_menu_;  // blur-nx (2026-11-18)
 };

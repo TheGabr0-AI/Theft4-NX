@@ -68,6 +68,9 @@ public:
         rex::RemoveSink(renut::log::Input, sink_);
     }
 
+    // blur-nx (2026-11-18, #27): only while the log shows.
+    bool WantsFrame() const override { return visible_; }
+
     void OnDraw(ImGuiIO& io) override {
         if (!visible_) return;
         if (!AppImGuiReady()) return;  // renut-ultimate (port 66)

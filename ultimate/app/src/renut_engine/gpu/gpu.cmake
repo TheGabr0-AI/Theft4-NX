@@ -268,6 +268,7 @@ function(renut_gpu_setup TARGET)
         ${RENUT_GPU_DIR}/overlay/overlay_ui.cpp
         # Draws, targets, textures, shaders and formats.
         ${RENUT_GPU_DIR}/render/draw.cpp
+        ${RENUT_GPU_DIR}/render/fetch_filters.cpp  # renut-ultimate (2026-11-16, port 145): tw2de_nx's
         ${RENUT_GPU_DIR}/render/format.cpp
         ${RENUT_GPU_DIR}/render/graphics_options.cpp
         ${RENUT_GPU_DIR}/render/pipeline.cpp

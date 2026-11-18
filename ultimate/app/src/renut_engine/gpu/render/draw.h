@@ -413,6 +413,9 @@ bool ReadRenderTargetLocked(const u8 *device_state, u32 source, u32 &width, u32 
 
 // What Swap scans out for the guest front buffer texture, or an empty image.
 PresentImage FrontBufferImageLocked(u32 texture_va);
+// Port 169 (from fnxf_xiii; banjo_renut_scaler_crop): the same, scanning out the scaler's source rect (x1 y1 x2 y2,
+// guest pixels) when it is a part of the front buffer from its corner.
+PresentImage FrontBufferImageLocked(u32 texture_va, const i32 scaler[4]);
 // banjo-nx (2026-10-19): the texture at that address holds what a resolve wrote (not a new, uninitialised image).
 bool FrontBufferWrittenLocked(u32 texture_va);
 

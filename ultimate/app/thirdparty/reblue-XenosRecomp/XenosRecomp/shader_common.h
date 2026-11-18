@@ -799,6 +799,12 @@ void banjoBlendSkip(float4 c)
 // target of bias 5 with an alpha scale of 1/32. The colour stays as exported in the host's float target: its blends come out
 // the same but for that scale, and what reads the target knows it.
 [[vk::constant_id(925)]] const uint g_banjoTargetBias = 0;
+// blur-nx (2026-11-17, blur_renut_target_bias_rgb; the menu backdrop): 1 scales the colour channels by the bias as well, as
+// the GPU scales everything the shader exports. Blur blurs its menu backdrop through 320x180 16_16_16_16_FLOAT targets of
+// bias 5, each pass resolved with exponent bias 11 and read by a shader that multiplies by 2^-16: on the console the three
+// cancel, here each pass came out 32 times too dark and the backdrop black. What reads a target then gets the scaled
+// colour, as on the console (the resolve applies its own exponent bias on top: blur_renut_resolve_exp_bias).
+[[vk::constant_id(927)]] const uint g_banjoTargetBiasRgb = 0;
 #endif
 // halo3-nx (2026-11-03): linear to Xenos' piecewise-linear gamma (slopes 1/4, 1/2, 1 and 2 in gamma against linear, the breaks
 // at 64, 96 and 192 of 255): the encode of a gamma target's writes, the inverse of renutPWLGammaToLinear (port 25).
@@ -810,13 +816,17 @@ float3 renutLinearToGamma(float3 l)
 float4 banjoTrim(float4 c, uint target)
 {
 #ifdef __spirv__
+    const uint bias = (g_banjoTargetBias >> (target * 6u)) & 0x3Fu;
+    const float biasScale = bias != 0u ? pow(2.0, float(int(bias << 26u) >> 26)) : 1.0;
+    // blur-nx (2026-11-17): the colour scaled first, as the GPU does before the format's encode (constant 927 above).
+    if (bias != 0u && g_banjoTargetBiasRgb != 0u)
+        c.xyz *= biasScale;
     if (((g_banjoTargetGamma >> target) & 1u) != 0u)
         c.xyz = renutLinearToGamma(c.xyz);
-    const uint bias = (g_banjoTargetBias >> (target * 6u)) & 0x3Fu;
     // Saturated: the alpha of the formats that use a bias is unorm on the console (2 bits in 2_10_10_10_FLOAT), and a blend
     // reads what the target can hold. A shader that does not divide its alpha by the bias would blend past 1 here.
     if (bias != 0u)
-        c.w = saturate(c.w * pow(2.0, float(int(bias << 26u) >> 26)));
+        c.w = saturate(c.w * biasScale);
     const uint m = (g_banjoOutputTrim >> (target * 4u)) & 0xFu;
     const float v = g_banjoTrimPoison != 0u ? 60000.0 : 0.0;
     return select(bool4((m & 1u) != 0u, (m & 2u) != 0u, (m & 4u) != 0u, (m & 8u) != 0u), float4(v, v, v, v), c);

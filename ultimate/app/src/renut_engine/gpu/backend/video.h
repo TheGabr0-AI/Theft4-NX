@@ -144,6 +144,8 @@ struct VideoState {
   plume::RenderCommandList *pending_list = nullptr;
   uint64_t pending_ticket = 0;
   uint32_t list_draws = 0;
+  // Port 164 (banjo_deko3d_progressive_submit): the frame's draws so far and the previous frame's (the piece size).
+  uint32_t frame_draws = 0, last_frame_draws = 0;
   // Bumped each time a command list begins; bound state cached against an
   // older value has to be set again.
   uint64_t list_generation = 0;
@@ -289,6 +291,20 @@ struct VideoState {
   std::vector<std::unique_ptr<plume::RenderBuffer>> retired_buffers[kFramesInFlight];
   std::vector<std::unique_ptr<plume::RenderFramebuffer>> retired_framebuffers[kFramesInFlight];
   std::vector<std::unique_ptr<plume::RenderDescriptorSet>> retired_sets[kFramesInFlight];
+  // blur-nx (2026-11-17, audit #4, blur_renut_texture_pool): render-target images given back by Retire, by the slot of
+  // the frame that last used them, and the images whose frame has finished, kept for Create to reuse (no new image,
+  // no GPU address mapping: 65 a second, 24 ms of the render thread in Blur's race).
+  struct PooledTexture {
+    plume::RenderTextureDesc desc;
+    std::unique_ptr<plume::RenderTexture> texture;
+    uint64_t bytes = 0;
+  };
+  std::vector<PooledTexture> retired_pool[kFramesInFlight];
+  std::vector<PooledTexture> texture_pool;  // oldest first
+  uint64_t texture_pool_bytes = 0;
+  // Counted on the render thread, read and reset by the 10 s report (the game thread): atomics.
+  std::atomic<uint64_t> texture_pool_hits{0}, texture_pool_misses{0}, texture_pool_dropped{0};
+  std::atomic<uint64_t> texture_pool_kept{0}, texture_pool_kept_bytes{0};
   std::vector<uint32_t> retired_texture_slots[kFramesInFlight];
 
   OverlayHook overlay_hook;
@@ -366,6 +382,14 @@ public:
   static plume::RenderCommandList *CommandListLocked();
   static UploadRing &UploadsLocked();
 
+  // blur-nx (2026-11-17, audit #4, blur_renut_texture_pool): a render-target image given back (reused once the in-flight
+  // frames are done with it), and one of the same description taken from the pool (null: none there; make one).
+  static void RetirePooledLocked(std::unique_ptr<plume::RenderTexture> texture, const plume::RenderTextureDesc &desc);
+  static std::unique_ptr<plume::RenderTexture> TakePooledLocked(const plume::RenderTextureDesc &desc);
+  static std::string TexturePoolReportLocked();
+  // renut-ultimate (2026-11-17, port 148): the pool's images destroyed now (memory pressure: textures.cpp's
+  // EvictColdTexturesLocked). They are out of every frame in flight already (DrainSlot put them there). The number gone.
+  static size_t DropTexturePoolLocked();
   static uint32_t AllocateTextureSlotLocked();
   static void SetTextureSlotLocked(uint32_t slot, plume::RenderTexture *texture,
                                    plume::RenderTextureView *view);

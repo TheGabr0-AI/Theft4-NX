@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>  // blur-nx (2026-11-17): ResolveRemakeReport
 #include <vector>
 
 #include <plume_render_interface.h>
@@ -33,6 +34,10 @@ struct HostTexture {
   u32 guest_va = 0;
   u32 base_page = 0;  // banjo-nx (2026-10-27): its fetch constant's base page as made (BumpTextureBindings)
   u32 desc[6] = {};  // the header fetch constant bits that define the data
+  // blur-nx (2026-11-17, audit #4, blur_renut_texture_pool): how Create made 'texture' (a render target only), and the
+  // image it made, so Retire gives back to the pool only that image under that description.
+  plume::RenderTextureDesc pool_desc{};
+  const plume::RenderTexture *pool_texture = nullptr;
 
   TextureDimension dimension = TextureDimension::Tex2D;
   GpuTextureFormat guest_format = GpuTextureFormat::Fmt8_8_8_8;
@@ -318,11 +323,18 @@ void ReleaseHostTextureLocked(u32 texture_va);
 // streaming's sub_822DAB48) over data in its section pools; D3D never destroys
 // them, and the game drops them by destroying the pool at a section change
 // (game/level_pools.cpp).
+// blur-nx (2026-11-17, the Renut audit's #4 and #5): why resolve destinations are made, and the texture pool; the
+// 10 s line (banjo_renut_tuning.cpp), atomics only.
+std::string ResolveRemakeReport();
 void ReleaseHostTexturesInMemoryLocked(u32 physical, u32 size);
 
 void TransitionTextureLocked(HostTexture *texture, plume::RenderTextureLayout layout);
 // banjo-nx (2026-10-19): a layout a texture is only read in (banjo_deko3d_barrier_lean).
 bool ReadOnlyLayout(plume::RenderTextureLayout layout);
+// Port 161 (banjo_deko3d_vertex_texture_barrier): every layout move notes a GPU write; a draw whose vertex shader
+// samples textures calls the barrier first.
+void NoteGpuWriteLayoutLocked(plume::RenderTextureLayout layout);
+void VertexTextureBarrierLocked();
 
 // Rebuilds the host levels of a resolve destination (HostTexture::extra_levels)
 // over 'rect' of level 0, in host texels, after a resolve wrote it. Leaves the

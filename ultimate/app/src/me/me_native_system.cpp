@@ -276,6 +276,18 @@ REXCVAR_DEFINE_BOOL(masseffect_native_pm4_fast, false, "Mass Effect",
                     "straight from the guest words; same register contents and generation bumps")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DECLARE(bool, banjo_cpu_verify);  // src/cpu/banjo_enhancements.cpp
+// Port 172 (from fnxf_xiii): see VblankLoop (and the SDK's GraphicsSystem vsync worker). Off by default: every title's vblank timing changes.
+REXCVAR_DEFINE_BOOL(banjo_vblank_from_display, false, "GPU",
+                    "The guest's vblanks follow the display's refreshes (its vsync event), the 60 Hz timer only while "
+                    "none comes for 1.5 periods: on the timer the guest's vblank drifted against the display, and 30 fps "
+                    "frames came out uneven (fnxf_xiii). Needs a title that follows the display (banjo_display_sync). "
+                    "false: the timer, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+namespace rex::graphics {
+// Port 172: the display's refresh count, waited for (set by app/src/renut_engine/display_sync.cpp; read here and by
+// sdk/src/graphics/graphics_system.cpp). Defined here: this object is in every build.
+uint64_t (*g_display_refresh_wait)(uint64_t seen, uint64_t timeout_ns) = nullptr;
+}
 REXCVAR_DECLARE(bool, masseffect_native_deferred_recording);  // masseffect_native_deferred.cpp
 REXCVAR_DECLARE(bool, banjo_d3d_api_clear);  // src/me/banjo_d3d_clear.h
 REXCVAR_DECLARE(bool, banjo_d3d_api_resolve);  // src/me/banjo_d3d_clear.h
@@ -1760,7 +1772,30 @@ class NativeGraphicsSystem final : public rex::system::IGraphicsSystem {
     const auto interval =
         std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / hz));
     auto next = Clock::now() + interval;
+    // Port 172 (from fnxf_xiii, its notes of 2026-10-27 and 10-29; banjo_vblank_from_display): a vblank at each of the
+    // display's refreshes (its vsync event, counted by app/src/renut_engine/display_sync.cpp); the timer's only while
+    // none comes for 1.5 periods (the display asleep). On the timer the guest's vblank drifted against the display and
+    // 30 fps frames came out uneven (fnxf_xiii). Looked for at every tick: the display's thread may start later.
+    static const bool follow_display = REXCVAR_GET(banjo_vblank_from_display);
     while (active_.load(std::memory_order_acquire)) {
+      if (follow_display && rex::graphics::g_display_refresh_wait) {
+        const uint64_t period_ns = uint64_t(1e9 / hz);
+        uint64_t seen = rex::graphics::g_display_refresh_wait(UINT64_MAX, 0);
+        auto last = Clock::now();
+        while (active_.load(std::memory_order_acquire)) {
+          const uint64_t count = rex::graphics::g_display_refresh_wait(seen, period_ns * 3 / 2);
+          const auto now = Clock::now();
+          if (count == seen && now - last < interval)
+            continue;
+          seen = count;
+          last = now;
+          counter_.fetch_add(1, std::memory_order_relaxed);
+          Interrupt(0, 2);
+          WakeRingWait();  // banjo_ring_wait_vblank: the interrupt handler has run
+          REX_SYS_COUNT(rex::syscount::kVblankTick, 1);
+        }
+        return 0;
+      }
       const auto now = Clock::now();
       if (now - next > std::chrono::milliseconds(250)) next = now;
       while (now >= next) {

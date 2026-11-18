@@ -93,6 +93,8 @@ if(NOT TARGET rexglue_switch_startup)
         "LINKER:--wrap=nvFenceWait,--wrap=nvGpuChannelKickoff,--wrap=nvMapCreate"
         "LINKER:--wrap=nvAddressSpaceAllocFixed,--wrap=nvioctlNvhostAsGpu_MapBufferEx"
         "LINKER:--wrap=armDCacheClean,--wrap=nwindowQueueBuffer,--wrap=bqDequeueBuffer"
+        # renut-ultimate (2026-11-16, port 145): async present (switch_perf.cpp, banjo_async_present).
+        "LINKER:--wrap=nwindowDequeueBuffer"
         "LINKER:--wrap=svcSleepThread,--wrap=svcSetThreadCoreMask")
 endif()
 

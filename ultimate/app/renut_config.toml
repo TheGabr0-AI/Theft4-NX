@@ -31,6 +31,12 @@ fp_copy_pairs = true
 fp_copy_forwarding = true
 div_inline = true
 fp_moves_modeless = true
+# Theft4-NX (U18 MAX, 2026-11-17; the base's port 144, tw2de_nx's rex_spin_hint): the Xenon's spin-wait hints (db16cyc,
+# 12 sites in GTA IV: XAudio's 8216C750 and 82169D90, Direct3D's 829CFE80 and 829DD928) call rex_spin_hint, which on
+# the Switch is rex::thread::MaybeYield (sdk/src/system/xthread.cpp): a spinning thread gives its core up instead of
+# burning it while the thread it waits for may be waiting for that core. Exact (no guest-visible effect). Off in the
+# base; on here at the user's request (U18 MAX).
+spin_hint_yield = true
 
 # Registers as C++ locals. non_volatile_as_local (r14-r31, f14-f31, v14-v31) was audited for GTA IV on the 0.9
 # generator (tools/switch-codegen/read_before_write.py; the five share_registers fragments in config/renut_funcs.toml)

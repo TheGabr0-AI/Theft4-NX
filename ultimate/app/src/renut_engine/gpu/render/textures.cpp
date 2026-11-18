@@ -2,6 +2,8 @@
  * @file    gpu/render/textures.cpp
  */
 #include "renut_engine/gpu/render/textures.h"
+#include "renut_engine/gpu/stage_census.h"  // blur-nx (2026-11-17, the Renut audit's census)
+#include "renut_engine/gpu/host_batch.h"  // blur-nx (2026-11-18, the Renut host batch)
 
 #include <algorithm>
 #include <bit>
@@ -24,6 +26,8 @@
 #include "renut_engine/gpu/log.h"
 
 #include <atomic>
+#include <condition_variable>  // port 171
+#include <functional>
 #include "renut_engine/gpu/render/draw.h"
 #include "renut_engine/gpu/render/graphics_options.h"
 #include "renut_engine/gpu/backend/video.h"
@@ -110,6 +114,44 @@ REXCVAR_DEFINE_INT32(sasrt_texture_long_idle_frames, 0, "SASRT/Graphics",
                      "bindless table fine (made again from guest memory if bound again); 0: only under pressure, as "
                      "before. KNOWN TO HANG THE GPU on the Switch (SASRT, 1800): leave 0")
     .range(0, 1000000)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// renut-ultimate (2026-11-16, port 145; tw2de_nx's of 2026-11-13, ON at the user's word: "port the speed ups as on by
+// default"): UploadDirtyRowsLocked.
+REXCVAR_DEFINE_BOOL(banjo_renut_dynamic_texture_rows, true, "Banjo/Renut",
+                    "tw2de_nx (exact): a CPU-written (linear, dynamic) texture is uploaded only in the rows whose memory "
+                    "pages were written since its last upload (the store cards), not whole every frame (tw2de_nx: two "
+                    "768x256 RGBA32F textures written in turn, 3 MB a frame read, swapped and uploaded). Same texels. "
+                    "false: the whole texture every frame, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Port 171 (from fnxf_xiii, its notes of 2026-10-28 and 11-05): see UntileHelpers.
+REXCVAR_DEFINE_BOOL(banjo_renut_untile_helpers, true, "Banjo/Renut",
+                    "A large texture level (256 KB of guest blocks or more) untiled by the render thread and two helper "
+                    "threads (cores 0 and 2, the render thread's priority) in bands (fnxf_xiii: a 4096x4096 DXT1 level "
+                    "38 ms on the render thread alone). The same bytes. false: the render thread alone, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Port 168 (from fnxf_xiii, its note of 2026-11-05): see ParkLocked. Port 181: off by default (Blur's console,
+// 2026-11-18, bisected on its sync of ports 158-178: ghosting, colour fringes and heavy grain over whole races with it
+// on, clean with it off and the other keys of ports 161-171 on; docs/off-by-default.md section 2). A game that has
+// checked its picture with it turns it on in its toml.
+REXCVAR_DEFINE_BOOL(banjo_renut_texture_park, false, "Banjo/Renut",
+                    "A host texture replaced at its address by another description is kept (up to 64, 96 MB, all "
+                    "dropped when memory or the bindless table runs low) and taken back when that address asks for the "
+                    "same layout and content again, instead of uploading it again (fnxf_xiii: 35 uploads of 36.7 MB in "
+                    "one frame, all content a host texture had already). Off by default (port 181): it broke Blur's "
+                    "picture on the console. false: retired at once, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Port 161 (from fnxf_xiii): see VertexTextureBarrierLocked. A fix, so off by default here (fnxf_xiii: on).
+REXCVAR_DEFINE_BOOL(banjo_deko3d_vertex_texture_barrier, false, "Banjo/Renut",
+                    "deko3d: a draw whose vertex shader samples textures waits for all earlier GPU work when anything "
+                    "was rendered or resolved since (a vertex shader read a resolve before it had landed)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// blur-nx (2026-11-17, the Renut audit's #4): Create / Retire.
+REXCVAR_DEFINE_BOOL(blur_renut_texture_pool, true, "Banjo/Renut",
+                    "blur-nx (audit #4, exact): a render-target image Retire gives back (a resolve destination made "
+                    "again) is kept, once the in-flight frames are done with it, and Create takes one of the same "
+                    "description instead of making a new image (Blur's race: 65 new images a second, each a GPU "
+                    "address mapping, 24 ms of the render thread a second). A new render target's content is undefined "
+                    "either way (ResolveTarget discards it). false: every image made new and destroyed, as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 // renut-ultimate (2026-11-13, sasrt-nx's resolve project R2): ResolveTarget.
 REXCVAR_DEFINE_BOOL(sasrt_gpu_words_probe_kept, true, "SASRT/GPU",
@@ -380,11 +422,20 @@ void ReadLevel(const TextureFormatInfo &info, const TextureFetch &fetch, const L
   const bool is_3d = fetch.Dimension() == TextureDimension::Tex3D;
   const uint32_t run = is_3d ? 1 : TiledRunBlocks(bpb_log2);
 
-  std::vector<uint8_t> row(size_t(blocks_w) * gbpb);
+  // Port 164 (from fnxf_xiii, its note of 2026-11-06): blocks kept as they are are gathered straight into the
+  // staging row and swapped there (no row buffer, no second copy); the others through a per-thread row buffer (no
+  // allocation per level). The same bytes in the same places.
+  const bool direct = info.conversion == TexelConversion::Copy && hbpb == gbpb;
+  thread_local std::vector<uint8_t> t_row;
+  const size_t row_size = size_t(blocks_w) * gbpb;
+  if (!direct && t_row.size() < row_size)
+    t_row.resize(row_size);
   for (uint32_t z = 0; z < depth; ++z) {
     for (uint32_t y = 0; y < blocks_h; ++y) {
       const uint32_t sy = y + src.y_blocks;
       const uint32_t sz = z + src.z_offset;
+      uint8_t *out = dst + size_t(z) * dst_slice_pitch + size_t(y) * dst_row_pitch;
+      uint8_t *row = direct ? out : t_row.data();
       if (fetch.Tiled()) {
         for (uint32_t x = 0; x < blocks_w;) {
           const uint32_t sx = x + src.x_blocks;
@@ -392,26 +443,126 @@ void ReadLevel(const TextureFormatInfo &info, const TextureFetch &fetch, const L
               is_3d ? TiledOffset3D(sx, sy, sz, src.pitch_blocks, src.height_blocks, bpb_log2)
                     : TiledOffset2D(sx, sy, src.pitch_blocks, bpb_log2);
           const uint32_t count = std::min(run - sx % run, blocks_w - x);
-          std::memcpy(row.data() + size_t(x) * gbpb, src.base + offset, size_t(count) * gbpb);
+          std::memcpy(row + size_t(x) * gbpb, src.base + offset, size_t(count) * gbpb);
           x += count;
         }
       } else {
         const size_t offset = (size_t(sz) * src.height_blocks + sy) * src.pitch_blocks * gbpb +
                               size_t(src.x_blocks) * gbpb;
-        std::memcpy(row.data(), src.base + offset, row.size());
+        std::memcpy(row, src.base + offset, row_size);
       }
-      SwapEndian(endian, row.data(), row.data(), row.size());
-      uint8_t *out = dst + size_t(z) * dst_slice_pitch + size_t(y) * dst_row_pitch;
+      SwapEndian(endian, row, row, row_size);
+      if (direct)
+        continue;
       if (info.conversion == TexelConversion::Copy)
-        std::memcpy(out, row.data(), size_t(blocks_w) * hbpb);
+        std::memcpy(out, row, size_t(blocks_w) * hbpb);
       else if (info.decoded_blocks)
-        DecodeBlockRow(info.conversion, row.data(), out, blocks_w, dst_row_pitch / info.block_size);
+        DecodeBlockRow(info.conversion, row, out, blocks_w, dst_row_pitch / info.block_size);
       else
-        ConvertTexels(info.conversion, row.data(), out, blocks_w);
+        ConvertTexels(info.conversion, row, out, blocks_w);
     }
   }
 }
 
+
+// Port 171 (from fnxf_xiii, its notes of 2026-10-28 and 11-05; banjo_renut_untile_helpers): a large level untiled by
+// the render thread and two helpers (cores 0 and 2, the render thread's priority), in twelve bands taken in turn.
+// fnxf_xiii's area loads: uploads of 124-311 ms a frame, nearly all of it ReadLevel (a 4096x4096 DXT1 level 38 ms,
+// 2048x2048 ones 12-17 ms), while the game waited. A band reads guest memory and writes its own rows of the staging
+// buffer: the same bytes in the same places. A helper may join late or not at all: the render thread's part takes
+// whatever the helpers did not, and only the helpers that joined are waited for.
+class UntileHelpers {
+public:
+  static constexpr u32 kParts = 3;  // the render thread is part 0
+
+  void Run(const std::function<void(u32)> &fn) {
+    Start();
+    {
+      std::lock_guard lock(mutex_);
+      fn_ = &fn;
+      busy_ = 0;
+      active_ = true;
+      ++generation_;
+    }
+    wake_.notify_all();
+    fn(0);
+    std::unique_lock lock(mutex_);
+    active_ = false;
+    done_.wait(lock, [this] { return busy_ == 0; });
+    fn_ = nullptr;
+  }
+
+  void Loop(u32 index) {
+    banjo::renut_gpu::OnCopyHelperStart(index);
+    uint64_t seen = 0;
+    for (;;) {
+      const std::function<void(u32)> *fn;
+      {
+        std::unique_lock lock(mutex_);
+        wake_.wait(lock, [&] { return generation_ != seen; });
+        seen = generation_;
+        if (!active_)
+          continue;  // that run is over
+        fn = fn_;
+        ++busy_;
+      }
+      (*fn)(index + 1);
+      {
+        std::lock_guard lock(mutex_);
+        --busy_;
+      }
+      done_.notify_one();
+    }
+  }
+
+private:
+  void Start();
+  bool started_ = false;
+  std::mutex mutex_;
+  std::condition_variable wake_, done_;
+  uint64_t generation_ = 0;
+  u32 busy_ = 0;         // helpers inside the current run's fn
+  bool active_ = false;  // a run is taking helpers
+  const std::function<void(u32)> *fn_ = nullptr;
+};
+UntileHelpers g_untile_helpers;
+
+void UntileHelpers::Start() {
+  if (started_)
+    return;
+  started_ = true;
+  banjo::renut_gpu::StartLongLivedThread([] { g_untile_helpers.Loop(0); }, 64 << 10);
+  banjo::renut_gpu::StartLongLivedThread([] { g_untile_helpers.Loop(1); }, 64 << 10);
+}
+
+// A level split in bands: 256 KB of guest blocks or more, one slice, 48 rows of blocks at least.
+bool LevelIsLarge(const TextureFormatInfo &info, uint32_t blocks_w, uint32_t blocks_h, uint32_t depth) {
+  return depth == 1 && blocks_h >= 3 * 16 && uint64_t(blocks_w) * blocks_h * info.guest_block_bytes >= (256u << 10);
+}
+
+void ReadLevelParallel(const TextureFormatInfo &info, const TextureFetch &fetch, const LevelSource &src,
+                       uint32_t blocks_w, uint32_t blocks_h, uint32_t depth, uint8_t *dst, uint32_t dst_row_pitch,
+                       uint32_t dst_slice_pitch) {
+  static const bool on = REXCVAR_GET(banjo_renut_untile_helpers);
+  if (!on || !LevelIsLarge(info, blocks_w, blocks_h, depth)) {
+    ReadLevel(info, fetch, src, blocks_w, blocks_h, depth, dst, dst_row_pitch, dst_slice_pitch);
+    return;
+  }
+  constexpr u32 kBands = 4 * UntileHelpers::kParts;
+  std::atomic<u32> next{0};
+  const std::function<void(u32)> part = [&](u32) {
+    for (u32 k; (k = next.fetch_add(1, std::memory_order_relaxed)) < kBands;) {
+      const uint32_t y0 = blocks_h * k / kBands, y1 = blocks_h * (k + 1) / kBands;
+      if (y1 <= y0)
+        continue;
+      LevelSource band = src;
+      band.y_blocks += y0;
+      ReadLevel(info, fetch, band, blocks_w, y1 - y0, 1, dst + size_t(y0) * dst_row_pitch, dst_row_pitch,
+                dst_slice_pitch);
+    }
+  };
+  g_untile_helpers.Run(part);
+}
 // Staging data read from guest memory at submission rather than at the draw,
 // the way the GPU reads a texture when it executes (see BindTextureLocked).
 struct PendingFill {
@@ -448,6 +599,14 @@ uint64_t g_zero_rechecks = 0, g_zero_reuploads = 0, g_zero_marked = 0;
 // Records the copies of every level into 't'. The guest data is read now, or
 // when the command list is submitted if 'defer_read'.
 bool Upload(HostTexture &t, const TextureFetch &fetch, bool defer_read) {
+  ::renut::gpu::census::Scope census_scope(::renut::gpu::census::kUpload);  // blur-nx (2026-11-17)
+  // blur-nx (2026-11-18, the census's #7 and #24): which textures upload again, and how much.
+  if (::renut::gpu::host_batch::CensusOn()) {
+    const uint64_t bytes = uint64_t(t.width) * t.height * 4;  // (a size's measure: four bytes a texel)
+    ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kUploadCalls);
+    ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kUploadBytes, bytes);
+    ::renut::gpu::host_batch::NoteUpload(t.guest_va, t.width, t.height, uint32_t(t.guest_format), bytes);
+  }
   FlushResolveMipsLocked(t);  // banjo-nx (2026-10-28, banjo_renut_lazy_resolve_mips): from the level 0 the resolves left
   // banjo-nx (2026-10-19, render-thread proposal 1): the interval the guest bytes are read in: now, or at the next
   // kick's flush (FlushTextureFillsLocked, right after FlushVertexFillsLocked starts a new interval; a later one is
@@ -511,7 +670,7 @@ bool Upload(HostTexture &t, const TextureFetch &fetch, bool defer_read) {
       if (defer_read)
         g_pending_fills.push_back({t.info, fetch, src, blocks_w, blocks_h, d, dst, row_pitch, slice_pitch});
       else
-        ReadLevel(t.info, fetch, src, blocks_w, blocks_h, d, dst, row_pitch, slice_pitch);
+        ReadLevelParallel(t.info, fetch, src, blocks_w, blocks_h, d, dst, row_pitch, slice_pitch);  // port 171
       if (zero_check && !any_zero)  // dishonored-nx (port 104): the level's storage (a packed tail's: the tail)
         any_zero = GuestLevelZero(src.base, size_t(src.pitch_blocks) * src.height_blocks * t.info.guest_block_bytes *
                                                 std::max(1u, layout.depth));
@@ -686,13 +845,25 @@ bool Create(HostTexture &t, const TextureFetch &fetch, bool render_target,
   const uint32_t max_size = scale.Factor() > 1.0f ? kMaxTextureSize * 2 : kMaxTextureSize;
   if (w > max_size || h > max_size || t.depth > kMaxTextureSize)
     return false;
-  t.texture = device->createTexture(desc);
+  // blur-nx (2026-11-17, audit #4, blur_renut_texture_pool): a render target's image from the pool when one matches.
+  static const bool pool = REXCVAR_GET(blur_renut_texture_pool);
+  t.pool_texture = nullptr;
+  if (pool && render_target)
+    t.texture = Video::TakePooledLocked(desc);
+  const bool pooled = t.texture != nullptr;
+  if (!pooled)
+    t.texture = device->createTexture(desc);
   if (!TextureCreated(t.texture.get())) {
     t.texture.reset();
     ReportDeviceLost(device);
     return false;
   }
-  t.texture->setName("renut texture");
+  if (pool && render_target) {
+    t.pool_desc = desc;
+    t.pool_texture = t.texture.get();
+  }
+  if (!pooled)
+    t.texture->setName("renut texture");
 
   view_desc.mipLevels = t.mip_levels;
   view_desc.componentMapping = SwizzleMapping(fetch.Swizzle(), swap_red_blue, format);
@@ -734,7 +905,12 @@ void Retire(HostTexture &t) {
   Video::RetireLocked(std::move(t.level0_view));
   Video::RetireLocked(std::move(t.copy_framebuffer));  // banjo-nx (2026-10-18)
   Video::RetireLocked(std::move(t.view));
-  Video::RetireLocked(std::move(t.texture));
+  // blur-nx (2026-11-17, audit #4, blur_renut_texture_pool): the image Create made for it, back to the pool.
+  if (t.texture && t.pool_texture == t.texture.get())
+    Video::RetirePooledLocked(std::move(t.texture), t.pool_desc);
+  else
+    Video::RetireLocked(std::move(t.texture));
+  t.pool_texture = nullptr;
   if (t.words) {
     for (HostTexture::WordsView &v : t.words_views) {  // banjo-nx (banjo_gpu_depth_words_view)
       if (v.slot != UINT32_MAX && v.slot != kInvalidDescriptor)
@@ -908,6 +1084,16 @@ bool ConvertibleResolveFormat(plume::RenderFormat f) {
   }
 }
 
+// blur-nx (2026-11-17, the Renut audit's #5): why ResolveTarget made a destination (ResolveRemakeReport): 1 none at the
+// address, 2 a texture there, not a target, 3 another fetch description, 4 no image, 5 another host format, 6 another
+// scale, 7 another allocated size; and render-target host textures released (by memory freed, idle, cold).
+std::atomic<uint64_t> g_rt_made[8];
+std::atomic<uint64_t> g_rt_released_memory{0}, g_rt_released_idle{0}, g_rt_released_cold{0};
+void CountRtRelease(const HostTexture *t, std::atomic<uint64_t> &n) {
+  if (t && t->render_target)
+    n.fetch_add(1, std::memory_order_relaxed);
+}
+
 // GetResolveTextureLocked; 'fetch' receives the header's fetch constant.
 HostTexture *ResolveTarget(u32 texture_va, plume::RenderFormat format, RenderScale scale,
                            const d3d::TextureFetchConstant *header_format, bool depth,
@@ -965,6 +1151,27 @@ HostTexture *ResolveTarget(u32 texture_va, plume::RenderFormat format, RenderSca
   static const bool probe_kept = REXCVAR_GET(sasrt_gpu_words_probe_kept);
   bool carry_words = false, carried_wanted = false;
   uint32_t carried_probe = 0;
+  {  // blur-nx (2026-11-17, audit #5): the reason a destination is made (ResolveRemakeReport)
+    uint32_t why = 0;
+    if (!slot)
+      why = 1;
+    else if (!keep_other_format) {
+      if (!slot->render_target)
+        why = 2;
+      else if (std::memcmp(slot->desc, desc, sizeof(desc)) != 0)
+        why = 3;
+      else if (!slot->texture)
+        why = 4;
+      else if (slot->host_format != format)
+        why = 5;
+      else if (slot->scale != scale)
+        why = 6;
+      else if (slot->alloc_width != scale.Size(slot->width) || slot->alloc_height != scale.Size(slot->height))
+        why = 7;
+    }
+    if (why)
+      g_rt_made[why].fetch_add(1, std::memory_order_relaxed);
+  }
   if (slot && !keep_other_format && (!slot->render_target || std::memcmp(slot->desc, desc, sizeof(desc)) != 0 ||
                !slot->texture || slot->host_format != format || slot->scale != scale ||
                slot->alloc_width != scale.Size(slot->width) || slot->alloc_height != scale.Size(slot->height))) {
@@ -1055,6 +1262,106 @@ void ApplyUnlocksLocked() {
 //   stopped changing.
 // - Otherwise the content is hashed at every check.
 // A write after the check shows the next frame.
+
+// renut-ultimate (2026-11-16, port 145; tw2de_nx's UploadDirtyRowsLocked of 2026-11-13, banjo_renut_dynamic_texture_rows):
+// the rows of a dynamic linear texture whose pages were written since its last upload read them, uploaded alone (read
+// at the next kick's flush, as a whole deferred upload is). The cards of its extent were just taken (ExtentClean said
+// written), so each page's serial says whether it was written since. False: nothing recorded, the caller uploads it
+// whole (a texture with levels, a 3D, stacked, tiled or block-compressed one, one under 16 rows, or most of it written).
+uint64_t g_row_uploads[3] = {};  // [0] row uploads, [1] rows sent, [2] rows the whole uploads would have sent
+bool UploadDirtyRowsLocked(HostTexture &t, const TextureFetch &fetch) {
+  static const bool on = REXCVAR_GET(banjo_renut_dynamic_texture_rows);
+  if (!on || !banjo::renut_gpu::StoreCardsOn() || banjo::renut_gpu::StoreCardsVerifyOn() || !t.uploaded ||
+      t.read_interval == UINT64_MAX || !t.texture)
+    return false;
+  if (t.mip_levels != 1 || t.depth != 1 || t.stacked || fetch.Tiled() || fetch.Dimension() != TextureDimension::Tex2D ||
+      t.info.decoded_blocks || t.info.block_size != 1 || t.info.host == plume::RenderFormat::UNKNOWN ||
+      t.height < 16 || t.alloc_width != t.width || t.alloc_height != t.height)
+    return false;
+  u32 block_width, block_height;
+  FormatBlockSize(fetch.Format(), block_width, block_height);
+  const TextureLevelLayout layout = GetTextureLevelLayout(fetch, 0);
+  if (block_width != 1 || block_height != 1 || !layout.page || layout.in_tail || layout.pitch_texels < t.width)
+    return false;
+  const uint32_t pitch_bytes = layout.pitch_texels * t.info.guest_block_bytes;
+  const uint64_t base = (uint64_t(layout.page) << 12) + layout.offset;
+  const uint32_t rows = t.height;
+  const uint32_t first_page = u32(base >> 12), last_page = u32((base + uint64_t(rows) * pitch_bytes - 1) >> 12);
+  // The runs of rows over written pages; two runs fewer than 4 rows apart are one.
+  struct Run {
+    uint32_t y0, y1;
+  };
+  Run runs[16];
+  uint32_t run_count = 0, dirty_rows = 0;
+  for (uint32_t page = first_page; page <= last_page; ++page) {
+    if (GuestRangeCardsClean(GuestPhysicalPtr<const u8>(page << 12), 4096, t.read_interval))
+      continue;
+    const uint64_t p0 = uint64_t(page) << 12, p1 = p0 + 4096;
+    const uint32_t y0 = p0 > base ? u32((p0 - base) / pitch_bytes) : 0;
+    const uint32_t y1 = u32(std::min<uint64_t>(rows, (p1 - base + pitch_bytes - 1) / pitch_bytes));
+    if (y1 <= y0)
+      continue;
+    if (run_count && y0 <= runs[run_count - 1].y1 + 4) {
+      if (y1 > runs[run_count - 1].y1) {
+        dirty_rows += y1 - std::max(y0, runs[run_count - 1].y1);
+        runs[run_count - 1].y1 = y1;
+      }
+      continue;
+    }
+    if (run_count == 16)
+      return false;
+    runs[run_count++] = {y0, y1};
+    dirty_rows += y1 - y0;
+  }
+  if (!run_count || uint64_t(dirty_rows) * 4 > uint64_t(rows) * 3)
+    return false;  // nothing found on the level's pages (the whole upload decides), or most of it written
+  auto &s = State();
+  plume::RenderCommandList *cmd = s.command_list;
+  const uint32_t row_bytes = t.width * t.info.host_block_bytes;
+  const uint32_t row_pitch = (row_bytes + 255u) / 256u * 256u;
+  UploadAllocation staging[16];
+  for (uint32_t i = 0; i < run_count; ++i) {
+    staging[i] = s.uploads[s.frame].Allocate(uint64_t(row_pitch) * (runs[i].y1 - runs[i].y0), 512);
+    if (!staging[i])
+      return false;  // nothing recorded yet
+  }
+  // This interval, not the next kick's (which is when the rows are read, and what a whole upload records): the rows
+  // left out were only seen clean now. A page written after this and found by another check before the kick (its
+  // cards taken in this interval) counts as written at this texture's next check; the price is that the rows
+  // uploaded now are uploaded once more then.
+  t.read_interval = CardsInterval();
+  t.resolve_signature = 0;
+  static const uint32_t kProfileLabel = gpu_profile::Label("texture uploads");
+  gpu_profile::Mark(s, kProfileLabel);
+  cmd->barriers(plume::RenderBarrierStage::COPY,
+                plume::RenderTextureBarrier(t.texture.get(), plume::RenderTextureLayout::COPY_DEST));
+  t.layout = plume::RenderTextureLayout::COPY_DEST;
+  const uint32_t row_texels = row_pitch / t.info.host_block_bytes;
+  for (uint32_t i = 0; i < run_count; ++i) {
+    const uint32_t n = runs[i].y1 - runs[i].y0;
+    LevelSource src;
+    src.pitch_blocks = layout.pitch_texels;
+    src.height_blocks = layout.height;
+    src.x_blocks = layout.tail_x_blocks;
+    src.y_blocks = layout.tail_y_blocks + runs[i].y0;
+    src.z_offset = layout.tail_z;
+    src.base = GuestPhysicalPtr<const uint8_t>(u32(base));
+    g_pending_fills.push_back({t.info, fetch, src, t.width, n, 1, static_cast<uint8_t *>(staging[i].cpu), row_pitch,
+                               row_pitch * n});
+    cmd->copyTextureRegion(plume::RenderTextureCopyLocation::Subresource(t.texture.get(), 0, 0),
+                           plume::RenderTextureCopyLocation::PlacedFootprint(staging[i].ref.ref, t.info.host, t.width, n,
+                                                                             1, row_texels, staging[i].ref.offset),
+                           0, runs[i].y0, 0, nullptr);
+  }
+  ++g_row_uploads[0];
+  g_row_uploads[1] += dirty_rows;
+  g_row_uploads[2] += rows;
+  if ((g_row_uploads[0] & 0x3FFF) == 1)
+    RGPU_INFO("[renut] banjo_renut_dynamic_texture_rows: {} row uploads so far, {} of {} rows sent", g_row_uploads[0],
+              g_row_uploads[1], g_row_uploads[2]);
+  return true;
+}
+
 void RefreshLinearLocked(HostTexture &t, const TextureFetch &fetch) {
   ApplyUnlocksLocked();
   auto upload = [&](uint64_t hash) {
@@ -1093,7 +1400,7 @@ void RefreshLinearLocked(HostTexture &t, const TextureFetch &fetch) {
     if (banjo::renut_gpu::StoreCardsOn() && !banjo::renut_gpu::StoreCardsVerifyOn() &&
         ExtentClean(t, t.read_interval)) {
       banjo::renut_gpu::CountTextureCards(uint64_t(t.sample_sizes[0]) + t.sample_sizes[1], 2);
-    } else {
+    } else if (!UploadDirtyRowsLocked(t, fetch)) {  // port 145 (banjo_renut_dynamic_texture_rows)
       t.uploaded = Upload(t, fetch, true);
     }
   } else {
@@ -1112,6 +1419,109 @@ void RefreshLinearLocked(HostTexture &t, const TextureFetch &fetch) {
 // The backstop (kEvictPressureSlots, kEvictMemoryShare): with the bindless
 // table filling up or video memory near its budget, the host textures idle
 // for a while go.
+// Port 168 (from fnxf_xiii, its note of 2026-11-05; banjo_renut_texture_park): parked host textures. fnxf_xiii's run
+// 8b92fd2c: in play the game re-described 30-35 textures at their addresses and then brought the content back, and the
+// renderer uploaded it again (35 uploads of 36.7 MB in 69 ms in one frame, 22 of 33 MB in 43 ms in another, all content
+// a host texture had already, at the same address). A host texture replaced at its address by another description now
+// waits here; when that address asks for an upload whose layout and content hash are a parked one's, that one is taken
+// back instead. The same content check as the cache's own. Only textures from guest memory (none a resolve or the GPU
+// wrote, none that changes all the time). At most kParkCount / kParkBytes (the oldest go first past them); all go when
+// the GPU memory or the bindless table runs low (EvictColdTexturesLocked, EvictIdleTexturesLocked).
+uint64_t HostTextureBytes(const HostTexture &t);  // further down
+namespace {
+uint64_t ParkContentKey(const u32 desc[6], uint64_t hash) {
+  const u32 words[5] = {desc[0], desc[1] & 0xFFFu, desc[2], desc[5] & 0xFFFu, desc[3]};
+  return XXH3_64bits_withSeed(words, sizeof(words), hash);
+}
+struct ParkedTexture {
+  u32 va = 0;
+  uint64_t key = 0, bytes = 0;
+  std::unique_ptr<HostTexture> t;
+};
+constexpr size_t kParkCount = 64;
+constexpr uint64_t kParkBytes = 96ull << 20;
+std::vector<ParkedTexture> g_parked;
+uint64_t g_parked_bytes = 0;
+uint64_t g_parked_taken = 0, g_parked_taken_bytes = 0;
+
+bool ParkOn() {
+  static const bool on = REXCVAR_GET(banjo_renut_texture_park);
+  return on;
+}
+
+bool Parkable(const HostTexture &t) {
+  return ParkOn() && t.texture && t.uploaded && t.content_hash && !t.gpu_written && !t.render_target && !t.words &&
+         !t.dynamic && !t.lock_driven && !t.zero_levels;
+}
+
+void UnparkAtLocked(size_t i, bool retire) {
+  if (retire && g_parked[i].t)
+    Retire(*g_parked[i].t);
+  g_parked_bytes -= g_parked[i].bytes;
+  g_parked.erase(g_parked.begin() + std::ptrdiff_t(i));
+}
+
+// 'slot' leaves its address (empty after). Requires Parkable(*slot).
+void ParkLocked(u32 va, std::unique_ptr<HostTexture> &slot) {
+  ++g_texture_epoch;  // as Retire does: bound sets made with it are made again
+  BumpTextureBindings(*slot);
+  DepthHandOverForgetLocked(*slot);
+  ParkedTexture p;
+  p.va = va;
+  p.key = ParkContentKey(slot->desc, slot->content_hash);
+  p.bytes = HostTextureBytes(*slot);
+  p.t = std::move(slot);
+  g_parked_bytes += p.bytes;
+  g_parked.push_back(std::move(p));
+  while (!g_parked.empty() && (g_parked.size() > kParkCount || g_parked_bytes > kParkBytes))
+    UnparkAtLocked(0, true);  // the oldest first
+}
+
+// The parked texture of 'va' with this layout and content, put back in 'slot' (whose texture is parked or retired).
+bool TakeParkedLocked(u32 va, std::unique_ptr<HostTexture> &slot, const u32 desc[6], uint64_t hash) {
+  if (g_parked.empty() || !slot)
+    return false;
+  const uint64_t key = ParkContentKey(desc, hash);
+  for (size_t i = g_parked.size(); i-- > 0;) {
+    ParkedTexture &p = g_parked[i];
+    if (p.va != va || p.key != key || !p.t || p.t->scale != slot->scale ||
+        std::memcmp(p.t->desc, desc, 6 * sizeof(u32)) != 0)
+      continue;
+    std::unique_ptr<HostTexture> back = std::move(p.t);
+    const uint64_t bytes = p.bytes;
+    UnparkAtLocked(i, false);
+    HostTexture &now = *slot;
+    // The content check's state is the texture's now (the cards' interval of the hash just taken).
+    back->last_hash = now.last_hash;
+    back->hash_interval = now.hash_interval;
+    back->content_hash = hash;
+    back->uploaded = true;
+    back->checked_frame = g_frame;
+    back->used_frame = g_frame;
+    if (Parkable(now)) {
+      ParkLocked(va, slot);
+    } else {
+      Retire(now);
+      slot.reset();
+    }
+    slot = std::move(back);
+    ++g_texture_epoch;
+    BumpTextureBindings(*slot);
+    ++g_parked_taken;
+    g_parked_taken_bytes += bytes;
+    if ((g_parked_taken & (g_parked_taken - 1)) == 0)
+      RGPU_INFO("[park] {} parked textures taken back ({} MB not uploaded again; banjo_renut_texture_park)",
+                g_parked_taken, g_parked_taken_bytes >> 20);
+    return true;
+  }
+  return false;
+}
+}  // namespace
+
+void DropParkedTexturesLocked() {
+  while (!g_parked.empty())
+    UnparkAtLocked(g_parked.size() - 1, true);
+}
 void EvictIdleTexturesLocked() {
   const bool slots = Video::TextureSlotsInUseLocked() >= kEvictPressureSlots;
   GpuMemoryUsage memory;
@@ -1128,6 +1538,8 @@ void EvictIdleTexturesLocked() {
       long_only = true;
     }
   }
+  if (!long_only)
+    DropParkedTexturesLocked();  // port 168: memory or slots short: the parked textures go first
   std::vector<u32> idle;
   const bool keep_gpu_written = banjo::renut_gpu::KeepGpuWritten();  // banjo-nx
   for (const auto &[va, t] : g_textures) {
@@ -1139,8 +1551,11 @@ void EvictIdleTexturesLocked() {
     if (!t || g_frame - t->used_frame >= limit)
       idle.push_back(va);
   }
-  for (u32 va : idle)
+  for (u32 va : idle) {
+    if (auto it = g_textures.find(va); it != g_textures.end())
+      CountRtRelease(it->second.get(), g_rt_released_idle);  // blur-nx (2026-11-17, audit #5)
     ReleaseHostTextureLocked(va);
+  }
   if (long_only) {
     static uint32_t long_logged = 0;
     if (!idle.empty() && long_logged++ < 32)
@@ -1194,6 +1609,14 @@ void EvictColdTexturesLocked(uint64_t reserve) {
     g_memory_pressure = left < reserve || low;
     if (left >= reserve && !low)
       return;
+    DropParkedTexturesLocked();  // port 168: the parked textures first
+    // renut-ultimate (2026-11-17, port 148): blur_renut_texture_pool's kept images first (Video::DropTexturePoolLocked).
+    if (const size_t pooled = Video::DropTexturePoolLocked()) {
+      static uint32_t pool_logged = 0;
+      if (pool_logged++ < 8)
+        RGPU_WARN("Textures: memory short (banjo_renut_memory_policy): {} pooled render-target images released "
+                  "(blur_renut_texture_pool)", pooled);
+    }
   }
   const uint64_t cold_frames =
       !slots && (left < reserve / 2 || (low && banjo::renut_gpu::MemoryCritical())) ? kColdFramesUrgent : kColdFrames;
@@ -1206,8 +1629,11 @@ void EvictColdTexturesLocked(uint64_t reserve) {
     if (!t || g_frame - t->used_frame >= limit)
       cold.push_back(va);
   }
-  for (u32 va : cold)
+  for (u32 va : cold) {
+    if (auto it = g_textures.find(va); it != g_textures.end())
+      CountRtRelease(it->second.get(), g_rt_released_cold);  // blur-nx (2026-11-17, audit #5)
     ReleaseHostTextureLocked(va);
+  }
   banjo::renut_gpu::CountReserveEviction(cold.size());
   static uint32_t logged = 0;
   if (!cold.empty() && logged++ < 32) {
@@ -1270,8 +1696,30 @@ void ReleaseHostTexturesInMemoryLocked(u32 physical, u32 size) {
     if (inside(base_page) || (mip_page && inside(mip_page)))
       gone.push_back(va);
   }
-  for (u32 va : gone)
+  for (u32 va : gone) {
+    if (auto it = g_textures.find(va); it != g_textures.end())
+      CountRtRelease(it->second.get(), g_rt_released_memory);  // blur-nx (2026-11-17, audit #5)
     ReleaseHostTextureLocked(va);
+  }
+}
+
+// blur-nx (2026-11-17, the Renut audit's #4 and #5): the 10 s line (banjo_renut_tuning.cpp); atomics only.
+std::string ResolveRemakeReport() {
+  uint64_t made[8];
+  uint64_t total = 0;
+  for (int i = 1; i < 8; ++i)
+    total += made[i] = g_rt_made[i].exchange(0, std::memory_order_relaxed);
+  const uint64_t by_memory = g_rt_released_memory.exchange(0, std::memory_order_relaxed);
+  const uint64_t by_idle = g_rt_released_idle.exchange(0, std::memory_order_relaxed);
+  const uint64_t by_cold = g_rt_released_cold.exchange(0, std::memory_order_relaxed);
+  std::string pool = Video::TexturePoolReportLocked();
+  if (!total && pool.empty())
+    return {};
+  return fmt::format("resolve destinations made: {} (none at the address {}, a texture there {}, another fetch "
+                     "description {}, no image {}, another host format {}, another scale {}, another size {}); target "
+                     "textures released: {} with their memory, {} idle, {} cold{}{}",
+                     total, made[1], made[2], made[3], made[4], made[5], made[6], made[7], by_memory, by_idle, by_cold,
+                     pool.empty() ? "" : "; ", pool);
 }
 
 void NoteTextureUnlocked(u32 resource_va) {
@@ -1281,8 +1729,8 @@ void NoteTextureUnlocked(u32 resource_va) {
 
 void FlushTextureFillsLocked() {
   for (const PendingFill &f : g_pending_fills) {
-    ReadLevel(f.info, f.fetch, f.src, f.blocks_w, f.blocks_h, f.depth, f.dst, f.row_pitch,
-              f.slice_pitch);
+    ReadLevelParallel(f.info, f.fetch, f.src, f.blocks_w, f.blocks_h, f.depth, f.dst, f.row_pitch,
+                      f.slice_pitch);  // port 171
   }
   g_pending_fills.clear();
 }
@@ -1340,10 +1788,45 @@ bool ReadOnlyLayout(plume::RenderTextureLayout layout) {
          layout == plume::RenderTextureLayout::COPY_SOURCE || layout == plume::RenderTextureLayout::RESOLVE_SOURCE;
 }
 
+// Port 161 (from fnxf_xiii, its note of 2026-11-16; banjo_deko3d_vertex_texture_barrier): a texture made readable
+// goes through a Fragments barrier (plume_deko3d): later draws' fragments wait, their VERTEX work does not, so a vertex
+// shader that samples a texture written earlier in the frame (fnxf_xiii: FF XIII's flare samples the frame's linear
+// depth, a resolve, 64 times around the light) could read it before the write had landed (the flare blinked at random).
+// A draw whose vertex shader samples textures, after any GPU write since the last such barrier, gets a Primitives
+// barrier (all earlier work finished) with the texture cache dropped. Pixel-shader reads keep the lighter barrier.
+namespace {
+uint64_t g_gpu_writes_since_vertex_barrier = 0;
+bool WriteLayout(plume::RenderTextureLayout layout) {
+  return layout == plume::RenderTextureLayout::COLOR_WRITE || layout == plume::RenderTextureLayout::DEPTH_WRITE ||
+         layout == plume::RenderTextureLayout::COPY_DEST || layout == plume::RenderTextureLayout::RESOLVE_DEST ||
+         layout == plume::RenderTextureLayout::GENERAL;
+}
+}  // namespace
+
+void NoteGpuWriteLayoutLocked(plume::RenderTextureLayout layout) {
+  if (WriteLayout(layout))
+    ++g_gpu_writes_since_vertex_barrier;
+}
+
+void VertexTextureBarrierLocked() {
+  static const bool on = REXCVAR_GET(banjo_deko3d_vertex_texture_barrier);
+  if (!on || !IsDeko3D() || g_gpu_writes_since_vertex_barrier == 0)
+    return;
+  plume::RenderCommandList *cmd = Video::CommandListLocked();
+  if (!cmd)
+    return;
+  // plume_deko3d: a SHADER_READ barrier without a texture drops the texture cache and waits (a null texture is
+  // "written" and "sampled" there); the COMPUTE stage makes it Primitives.
+  cmd->barriers(plume::RenderBarrierStage::GRAPHICS_AND_COMPUTE,
+                plume::RenderTextureBarrier(nullptr, plume::RenderTextureLayout::SHADER_READ));
+  g_gpu_writes_since_vertex_barrier = 0;
+}
+
 void TransitionTextureLocked(HostTexture *texture, plume::RenderTextureLayout layout) {
   if (!texture || !texture->texture || texture->layout == layout)
     return;
   ++g_layout_epoch;  // banjo-nx (2026-10-26)
+  NoteGpuWriteLayoutLocked(layout);  // port 161 (banjo_deko3d_vertex_texture_barrier)
   if (IsDeko3D() && banjo::renut_gpu::Deko3DBarrierLeanOn() && ReadOnlyLayout(texture->layout) &&
       ReadOnlyLayout(layout)) {
     texture->layout = layout;
@@ -1501,8 +1984,13 @@ TextureBinding BindTextureLocked(u32 texture_va, const TextureFetch &device_fetc
                   slot->desc[1], slot->desc[2], slot->desc[3], slot->desc[4], slot->desc[5], desc[0], desc[1], desc[2],
                   desc[3], desc[4], desc[5]);
     }
-    Retire(*slot);
-    slot.reset();
+    // port 168 (banjo_renut_texture_park): kept a while for its content's return
+    if (Parkable(*slot)) {
+      ParkLocked(as_stacked ? texture_va | 1 : texture_va, slot);
+    } else {
+      Retire(*slot);
+      slot.reset();
+    }
   }
   // What a depth resolve wrote to the memory (only the GPU has it), which is
   // at the resolve's scale; guest data is at the guest size.
@@ -1610,6 +2098,11 @@ TextureBinding BindTextureLocked(u32 texture_va, const TextureFetch &device_fetc
       RefreshLinearLocked(t, fetch);
     } else {
       const uint64_t hash = CheckedHash(fetch, t, true);  // banjo-nx (2026-10-19, render-thread proposal 1)
+      // port 168 (banjo_renut_texture_park): a parked texture of this address with this content goes back in place of
+      // an upload (the slot then holds it; bound again from the top, where its check of this frame is already done)
+      if ((!t.uploaded || hash != t.content_hash) && hash &&
+          TakeParkedLocked(as_stacked ? texture_va | 1 : texture_va, slot, desc, hash))
+        return BindTextureLocked(texture_va, device_fetch, fx);
       if (!t.uploaded || hash != t.content_hash) {
         t.content_hash = hash;
         t.uploaded = Upload(t, fetch, false);
@@ -1681,6 +2174,7 @@ uint64_t g_texture_bind_gen = 1;  // banjo-nx (2026-10-27, Phase A): textures.h
 uint32_t g_texture_va_epochs[kTextureEpochBuckets] = {};
 
 bool RefreshBindingLocked(u32 texture_va, const TextureFetch &device_fetch, const BindEffects &fx) {
+  ::renut::gpu::census::Scope census_scope(::renut::gpu::census::kRefreshBinding);  // blur-nx (2026-11-17)
   HostTexture *t = fx.transition[0];
   if (!t || fx.depth_source || fx.words_viewed || fx.handover_surface || fx.handover_image || fx.transition[1])
     return false;

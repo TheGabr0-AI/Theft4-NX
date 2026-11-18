@@ -90,7 +90,10 @@ enum : uint32_t {
   kXformChain = 21,  // katamari-nx (2026-11-01, rc10): sub_82277E70
   kBoxTest = 22,     // sub_82265C08
   kXlateMul = 23,    // sub_8223A970
-  kNatives = 24
+  kRageReverb = 24,  // Theft4-NX (U18 MAX): GTA IV's reverb sub_828C6740 (gta4_reverb_native.inc)
+  kRageLimiter = 25,  // Theft4-NX (U18 MAX): GTA IV's look-ahead limiter sub_828C5A58 (gta4_limiter_native.inc)
+  kRageBiquad = 26,  // Theft4-NX (U18 MAX-B): GTA IV's filter sub_828C2D28, two biquad pairs (gta4_biquad_native.inc)
+  kNatives = 27
 };
 extern uint8_t g_state[kNatives];
 uint8_t Init(uint32_t which);
@@ -2849,5 +2852,16 @@ template <class S>
 }
 
 }  // namespace n_82265C08
+
+// Theft4-NX (U18 MAX, 2026-11-17): GTA IV's reverb sub_828C6740 (the audio mixer thread's 15.5 %, console run U18-1
+// B0), written by tools/ultimate/gen_reverb_native.py from its processed copy: the copy's statements with the comb and
+// allpass loops in registers. Key gta4_hand_reverb.
+#include "cpu/hot/gta4_reverb_native.inc"
+// Theft4-NX (U18 MAX): GTA IV's look-ahead limiter sub_828C5A58 (12.1 % of the same thread), by
+// tools/ultimate/gen_limiter_native.py. Keys gta4_hand_limiter, gta4_hand_limiter_verify.
+#include "cpu/hot/gta4_limiter_native.inc"
+// Theft4-NX (U18 MAX-B, 2026-11-18): GTA IV's filter sub_828C2D28 (16.3 % of a core in the street, console run U18 MAX-A),
+// by tools/ultimate/gen_biquad_native.py: the copy's loop with its stack slots in locals. Key gta4_hand_biquad.
+#include "cpu/hot/gta4_biquad_native.inc"
 
 }  // namespace banjo::hand

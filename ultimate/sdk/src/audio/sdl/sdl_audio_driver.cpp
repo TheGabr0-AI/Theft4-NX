@@ -381,7 +381,11 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
     } else {
       auto buffer = driver->frames_queued_.front();
       driver->frames_queued_.pop();
-      if (REXCVAR_GET(audio_mute)) {
+      // blur-nx (2026-11-16, the 15 ms batch): with a dump asked for, the dump gets the mix even when the output is muted
+      // (tools/run_pc.ps1 always mutes; the batch's inexact audio natives are checked from the dumps of two runs).
+      const bool muted = REXCVAR_GET(audio_mute);
+      const bool dump_muted = muted && REXCVAR_GET(audio_dump_output_s) > 0;
+      if (muted && !dump_muted) {
         std::memset(data, 0, len);
       } else {
         switch (driver->sdl_device_channels_) {
@@ -398,12 +402,16 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
             break;
         }
       }
+      if (dump_muted) {
+        RecordOutput(data, len, driver->sdl_device_channels_);
+        std::memset(data, 0, len);
+      }
       if (!SDL_PutAudioStreamData(stream, data, len)) {
         REXAPU_ERROR("SDL_PutAudioStreamData() failed: {}", SDL_GetError());
         driver->frames_unused_.push(buffer);
         break;
       }
-      RecordOutput(data, len, driver->sdl_device_channels_);
+      if (!dump_muted) RecordOutput(data, len, driver->sdl_device_channels_);
       CountFrame(false);
       driver->frames_unused_.push(buffer);
 

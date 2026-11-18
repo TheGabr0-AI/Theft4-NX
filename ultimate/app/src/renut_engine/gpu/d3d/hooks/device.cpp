@@ -14,6 +14,8 @@
  * (BlockOnFence_hook), and Swap waits when the game gets a frame too far ahead.
  */
 #include <rex/frame_latency.h>  // banjo-nx (2026-10-19)
+#include "renut_engine/gpu/stage_census.h"  // blur-nx (2026-11-17, the Renut audit's census)
+#include "renut_engine/gpu/host_batch.h"  // blur-nx (2026-11-18, the Renut host batch; port 177)
 #include "renut_engine/display_sync.h"
 #include "renut_engine/gpu/render/pipeline.h"  // banjo-nx (2026-10-20): SyncPipelineListLocked
 #include <algorithm>
@@ -60,8 +62,17 @@
 // banjo-nx (2026-10-20, from sa2-nx): the SDK's Switch core layout (sdk/src/system/xthread.cpp).
 extern "C" uint32_t RexSetGuestThreadCoreLayout(int main_core, uint32_t others_mask, int others_preferred);
 void renutFrameLimit();  // katamari_keys.cpp: the player's frame_cap
+extern std::atomic<uint64_t> g_banjo_game_frames;  // katamari_keys.cpp: game frames swapped (D3DDevice_Swap_hook)
 
 // banjo-nx (2026-10-20, from sa2-nx's sa2_renut_core_layout): see D3DDevice_Swap_hook.
+// Port 161 (from fnxf_xiii, its note of 2026-11-05): see D3DDevice_Swap_hook's present closure.
+REXCVAR_DEFINE_BOOL(banjo_renut_bookkeeping_after_present, true, "Banjo/Enhancements",
+                    "The render thread's frame bookkeeping (texture and stream-cache frames, the resolution latch, the "
+                    "memory report, the idle pipelines and spare buffers) after the frame's present, while the GPU "
+                    "draws it (fnxf_xiii: 15-37 ms spikes in it held the submit back and the frame missed its refresh). "
+                    "false: before the present, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(banjo_renut_core_layout, false, "Banjo/Enhancements",
                     "Renut's renderer on the Switch: at the first Swap the guest main thread (N&B's drawing thread, the "
                     "one that calls Direct3D) is pinned to core 0 and every other guest thread gets cores 1-2 "
@@ -616,12 +627,20 @@ u32 BlockOnFence_hook(u32 device_va, u32 fence, u32 /*type*/, u32 /*no_kick*/) {
   // The fence may wait for callbacks, which this thread runs as the render
   // thread reaches them.
   const auto waiting = std::chrono::steady_clock::now();
+  const bool hb_census = ::renut::gpu::host_batch::CensusOn();  // blur-nx (2026-11-18, the census's #8; port 177)
+  const uint64_t hb_t0 = hb_census ? ::renut::gpu::host_batch::Ticks() : 0;
   for (;;) {
     RunReadyCallbacks();
     if (!FencePending(bytes, fence))
       break;
     if (!render_thread::WaitForFenceProgress(std::chrono::milliseconds(2)))
       break;  // no render thread: nothing would complete it
+  }
+  if (hb_census) {
+    ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kFenceWaits);
+    ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kFenceWaitTicks, ::renut::gpu::host_batch::Ticks() - hb_t0);
+    if (!covered)
+      ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kFenceWaitsKicked);
   }
   renut::frame_stats::OnGameThreadWait(
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waiting).count());
@@ -716,6 +735,7 @@ u32 D3DDevice_BeginCommandBuffer_hook(u32 device_va, u32 command_buffer, u32 fla
   auto bw = [buffer](u32 offset) -> be_u32 & { return buffer[offset / 4]; };
   bw(kBufferFlags) = native::Insert(bw(kBufferFlags), 2, 0, 4);
   if (const u32 fence = bw(kBufferFence)) {
+    ::renut::gpu::census::Scope fence_scope(::renut::gpu::census::kBeginCbFence);  // blur-nx (2026-11-17, audit #22)
     native::BlockOnFence(native::GlobalDevice(), fence);
     bw(kBufferFence) = 0u;
   }
@@ -902,6 +922,10 @@ void D3DDevice_Swap_hook(u32 device_va, u32 front_buffer, u32 /*parameters*/) {
 #endif
   }
   renut::frame_stats::OnGameFrame();
+  // blur-nx (2026-11-17): the game frames the captures' video waits on (banjo_video_s) and the D3D census reads, counted
+  // here rather than in the Present hook (hooks/draw.cpp, which ends in this hook through native::Swap): Blur swaps
+  // without Present, so the count stayed 0 and the video never got its first frame (no file in any Ryujinx run).
+  g_banjo_game_frames.fetch_add(1, std::memory_order_relaxed);
   rex::latency::NoteGuestSwap();  // banjo-nx (2026-10-19, input latency): the probe
   const uint64_t swap_ordinal = rex::latency::SwapCount();
   FlushDeferredVertices(device_va);
@@ -934,6 +958,12 @@ void D3DDevice_Swap_hook(u32 device_va, u32 front_buffer, u32 /*parameters*/) {
     Video::NoteGameGamma(device + 14988, g_gamma_piecewise);  // katamari-nx: 0x3A9C->0x3A84; halo3-nx: the form
   }
 
+  // Port 161 (from fnxf_xiii, its note of 2026-11-05; banjo_renut_bookkeeping_after_present; theft4 U18 MAX-B, by hand:
+  // this file keeps GTA IV's form): the frame's bookkeeping (texture and stream-cache frames, the resolution latch, the
+  // memory report, the idle pipelines and spare buffers) after the present, while the GPU draws the frame. It still
+  // comes before the next frame's commands (one render thread). Port 169's scaler crop is not taken (Katamari's device
+  // offset; GTA IV renders its whole front buffer).
+  static const bool after = REXCVAR_GET(banjo_renut_bookkeeping_after_present);
   render_thread::QueueFrame([front_buffer, swap_ordinal] {
     PresentImage image;
     {
@@ -941,16 +971,35 @@ void D3DDevice_Swap_hook(u32 device_va, u32 front_buffer, u32 /*parameters*/) {
       image = FrontBufferImageLocked(front_buffer);
       if (image.texture)
         State().last_front_buffer = front_buffer;
-      AdvanceTextureFrameLocked();
-      AdvanceStreamCacheFrameLocked();
-      LatchResolutionScaleLocked();
+      if (!after) {
+        AdvanceTextureFrameLocked();
+        AdvanceStreamCacheFrameLocked();
+        LatchResolutionScaleLocked();
+      }
     }
-    MaybeReportMemory();
-    ReleaseIdlePrebuiltPipelines();  // banjo-nx (2026-10-28, the heap)
-    ReleaseSpareBuffersWhenHeapShort();
+    if (!after) {
+      MaybeReportMemory();
+      ReleaseIdlePrebuiltPipelines();  // banjo-nx (2026-10-28, the heap)
+      ReleaseSpareBuffersWhenHeapShort();
+    }
     // The front buffer is the texture the game resolved the frame into.
     Video::NotePresentingSwap(swap_ordinal);  // banjo-nx (2026-10-20): the probe's "input -> GPU done"
     Video::Present(image.texture ? &image : nullptr);
+    if (after) {
+      rex::latency::NotePresented(swap_ordinal);  // banjo-nx (2026-10-19, input latency)
+      banjo::display_sync::NotePresented(swap_ordinal);  // banjo-nx (2026-10-19, latency batch 3)
+      {
+        std::lock_guard lock(State().mutex);
+        ::renut::gpu::SyncPipelineListLocked();  // banjo-nx (2026-10-20): the list's new records to the card
+        AdvanceTextureFrameLocked();
+        AdvanceStreamCacheFrameLocked();
+        LatchResolutionScaleLocked();
+      }
+      MaybeReportMemory();
+      ReleaseIdlePrebuiltPipelines();  // banjo-nx (2026-10-28, the heap)
+      ReleaseSpareBuffersWhenHeapShort();
+      return;
+    }
     {
       std::lock_guard lock(State().mutex);
       ::renut::gpu::SyncPipelineListLocked();  // banjo-nx (2026-10-20): the list's new records to the card

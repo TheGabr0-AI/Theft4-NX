@@ -4,6 +4,7 @@
  *          list management for the native renderer.
  */
 #include "renut_engine/gpu/backend/video.h"
+#include "renut_engine/gpu/host_batch.h"  // blur-nx (2026-11-18, the Renut host batch)
 
 #include <cstdio>
 #include <mutex>
@@ -13,6 +14,7 @@
 #include <filesystem>
 #include <system_error>
 #include <vector>
+#include <algorithm>  // blur-nx (2026-11-17, audit #4): std::max
 #include <atomic>
 #include <chrono>  // banjo-nx (2026-10-20): banjo_deko3d_latency_trim
 #include <string>
@@ -568,6 +570,29 @@ void DrainSlot(VideoState &s, uint32_t slot) {
   s.retired_framebuffers[slot].clear();
   s.retired_views[slot].clear();
   s.retired_textures[slot].clear();
+  // blur-nx (2026-11-17, audit #4, blur_renut_texture_pool): the slot's frame is done with its given-back images: into
+  // the pool (after the views above, which name them), the oldest dropped past kTexturePoolBytes or kTexturePoolCount.
+  if (!s.retired_pool[slot].empty()) {
+    constexpr uint64_t kTexturePoolBytes = 96ull << 20;
+    constexpr size_t kTexturePoolCount = 48;
+    for (VideoState::PooledTexture &p : s.retired_pool[slot]) {
+      s.texture_pool_bytes += p.bytes;
+      s.texture_pool.push_back(std::move(p));
+    }
+    s.retired_pool[slot].clear();
+    size_t drop = 0;
+    while (drop < s.texture_pool.size() &&
+           (s.texture_pool_bytes > kTexturePoolBytes || s.texture_pool.size() - drop > kTexturePoolCount)) {
+      s.texture_pool_bytes -= s.texture_pool[drop].bytes;
+      ++drop;
+    }
+    if (drop) {
+      s.texture_pool.erase(s.texture_pool.begin(), s.texture_pool.begin() + ptrdiff_t(drop));
+      s.texture_pool_dropped.fetch_add(drop, std::memory_order_relaxed);
+    }
+    s.texture_pool_kept.store(s.texture_pool.size(), std::memory_order_relaxed);
+    s.texture_pool_kept_bytes.store(s.texture_pool_bytes, std::memory_order_relaxed);
+  }
   s.retired_buffers[slot].clear();
   s.retired_sets[slot].clear();
   ReleaseCacheCopiesLocked(slot);
@@ -609,6 +634,16 @@ constexpr uint32_t kKickListsAFrame = 3;
 // banjo-nx (2026-10-20, banjo_deko3d_eager_kicks): smaller lists, more of them, each submitted at its own kick.
 constexpr uint32_t kEagerKickDraws = 100;
 static_assert(kKickListsAFrame <= VideoState::kKickLists);
+// Port 164 (from fnxf_xiii, its note of 2026-11-05; banjo_deko3d_progressive_submit): the piece was 200 draws, at most
+// 3 a frame; fnxf_xiii's gameplay frame had ~195 (up to ~400), so a frame almost never split and the GPU started it
+// only at the present (submit -> GPU done 17-18 of its 19 ms; a late Swap or a render-thread spike then missed the
+// refresh). Now a quarter of the previous frame's draws (40 at least), up to kKickLists pieces: the GPU works on the
+// frame while the game and the render thread still make the rest.
+constexpr uint32_t kPiecesAFrame = 4;
+constexpr uint32_t kPieceMinDraws = 40;
+uint32_t PieceDraws(const VideoState &s) {
+  return std::max(kPieceMinDraws, s.last_frame_draws / kPiecesAFrame);
+}
 
 class RingCleaner {
 public:
@@ -678,9 +713,25 @@ private:
 
   void Run() {
     banjo::renut_gpu::OnBackgroundThreadStart("ring cleaner");
+    // blur-nx (2026-11-18, the Renut host batch's #11, blur_renut_ring_cleaner_priority / A/B 233): above the game
+    // threads on the background core, so that the ranges are clean before a submit needs them (the race: the render
+    // thread cleaned 835 of 1,946 ranges a 10 s itself, the cleaner behind the game threads there). Set again when the
+    // A/B half changes it.
+    int priority = ::renut::gpu::host_batch::BackgroundPriority();
+    const auto follow = [&priority] {
+      const int want = ::renut::gpu::host_batch::On(::renut::gpu::host_batch::kCleanerPriority)
+                           ? ::renut::gpu::host_batch::CleanerPriority()
+                           : ::renut::gpu::host_batch::BackgroundPriority();
+      if (want != priority) {
+        ::renut::gpu::host_batch::SetThisThreadPriority(want);
+        priority = want;
+      }
+    };
+    follow();
     std::unique_lock lock(mutex_);
     for (;;) {
       cv_.wait(lock, [this] { return !queue_.empty(); });
+      follow();
       const Job job = queue_.front();
       queue_.pop_front();
       working_ = job.ticket;
@@ -980,6 +1031,8 @@ void SubmitAndAdvance(VideoState &s, plume::RenderCommandSemaphore *wait,
     // banjo-nx (2026-10-20, input latency): the guest Swap this frame ends, for the probe's "input -> GPU done".
     g_slot_swap[cur] = g_presenting_swap;
     g_gpu_done_noted[cur] = g_presenting_swap == 0;
+    s.last_frame_draws = s.frame_draws;  // port 164 (banjo_deko3d_progressive_submit)
+    s.frame_draws = 0;
 #if defined(PLUME_DEKO3D)
     g_trim.frame_end[cur] = plume::Deko3DCopyFence(s.fences[cur].get());
     FirstGpuWorkLocked(cur);
@@ -1175,6 +1228,7 @@ bool Video::EnsureCommandListLocked() {
 
 void Video::NoteDrawLocked() {
   ++State().list_draws;
+  ++State().frame_draws;  // port 164
 }
 
 void Video::NotePresentingSwap(uint64_t swap) {
@@ -1234,9 +1288,10 @@ void Video::KickLocked() {
   }
   // The open list ends here when it holds enough draws; the frame goes on in a kick list of the slot.
   const bool eager = banjo::renut_gpu::EagerKicksOn();
+  const bool progressive = !eager && banjo::renut_gpu::ProgressiveSubmitOn();  // port 164
   if (!banjo::renut_gpu::KickSubmitOn() ||
-      s.list_draws < (eager ? detail::kEagerKickDraws : detail::kKickSubmitDraws) ||
-      s.kick_lists_used[cur] >= (eager ? VideoState::kKickLists : detail::kKickListsAFrame))
+      s.list_draws < (eager ? detail::kEagerKickDraws : progressive ? detail::PieceDraws(s) : detail::kKickSubmitDraws) ||
+      s.kick_lists_used[cur] >= (eager || progressive ? VideoState::kKickLists : detail::kKickListsAFrame))
     return;
   std::unique_ptr<plume::RenderCommandList> &next = s.kick_lists[cur][s.kick_lists_used[cur]];
   if (!next) {
@@ -1333,6 +1388,79 @@ void Video::RetireLocked(std::unique_ptr<plume::RenderTexture> texture) {
     auto &s = State();
     s.retired_textures[s.frame].push_back(std::move(texture));
   }
+}
+
+// blur-nx (2026-11-17, audit #4, blur_renut_texture_pool).
+namespace {
+bool SamePoolDesc(const plume::RenderTextureDesc &a, const plume::RenderTextureDesc &b) {
+  return a.dimension == b.dimension && a.width == b.width && a.height == b.height && a.depth == b.depth &&
+         a.mipLevels == b.mipLevels && a.arraySize == b.arraySize && a.format == b.format &&
+         a.multisampling.sampleCount == b.multisampling.sampleCount && !a.multisampling.sampleLocationsEnabled &&
+         !b.multisampling.sampleLocationsEnabled && a.textureArrangement == b.textureArrangement &&
+         a.optimizedClearValue == nullptr && b.optimizedClearValue == nullptr && a.flags == b.flags &&
+         a.committed == b.committed;
+}
+uint64_t PoolBytes(const plume::RenderTextureDesc &d) {
+  // An estimate for the pool's cap: 8 bytes a texel at most, the levels' third more.
+  const uint64_t texels = uint64_t(d.width) * d.height * std::max(d.depth, 1u) * std::max(d.arraySize, 1u) *
+                          std::max<uint64_t>(uint64_t(d.multisampling.sampleCount), 1);
+  return texels * 8 * (d.mipLevels > 1 ? 4 : 3) / 3;
+}
+}  // namespace
+
+void Video::RetirePooledLocked(std::unique_ptr<plume::RenderTexture> texture, const plume::RenderTextureDesc &desc) {
+  if (!texture)
+    return;
+  auto &s = State();
+  s.retired_pool[s.frame].push_back({desc, std::move(texture), PoolBytes(desc)});
+}
+
+std::unique_ptr<plume::RenderTexture> Video::TakePooledLocked(const plume::RenderTextureDesc &desc) {
+  auto &s = State();
+  // Newest first: the image the same destination gave back a frame or two ago.
+  for (size_t i = s.texture_pool.size(); i-- > 0;) {
+    if (SamePoolDesc(s.texture_pool[i].desc, desc)) {
+      std::unique_ptr<plume::RenderTexture> t = std::move(s.texture_pool[i].texture);
+      s.texture_pool_bytes -= s.texture_pool[i].bytes;
+      s.texture_pool.erase(s.texture_pool.begin() + ptrdiff_t(i));
+      s.texture_pool_hits.fetch_add(1, std::memory_order_relaxed);
+      s.texture_pool_kept.store(s.texture_pool.size(), std::memory_order_relaxed);
+      s.texture_pool_kept_bytes.store(s.texture_pool_bytes, std::memory_order_relaxed);
+      return t;
+    }
+  }
+  s.texture_pool_misses.fetch_add(1, std::memory_order_relaxed);
+  return nullptr;
+}
+
+size_t Video::DropTexturePoolLocked() {
+  // renut-ultimate (2026-11-17, port 148): the pool holds up to 96 MB of images that Retire would have destroyed; with
+  // the heap or the GPU budget short they go before any cold texture does. The images of retired_pool, still in a frame
+  // in flight, join the pool at their DrainSlot and go at the next check.
+  auto &s = State();
+  const size_t n = s.texture_pool.size();
+  if (!n)
+    return 0;
+  s.texture_pool.clear();
+  s.texture_pool_bytes = 0;
+  s.texture_pool_dropped.fetch_add(n, std::memory_order_relaxed);
+  s.texture_pool_kept.store(0, std::memory_order_relaxed);
+  s.texture_pool_kept_bytes.store(0, std::memory_order_relaxed);
+  return n;
+}
+
+std::string Video::TexturePoolReportLocked() {
+  // (Called by the 10 s report on the game thread: only the atomics.)
+  auto &s = State();
+  const uint64_t hits = s.texture_pool_hits.exchange(0, std::memory_order_relaxed);
+  const uint64_t misses = s.texture_pool_misses.exchange(0, std::memory_order_relaxed);
+  const uint64_t dropped = s.texture_pool_dropped.exchange(0, std::memory_order_relaxed);
+  if (!hits && !misses)
+    return {};
+  return fmt::format("texture pool (blur_renut_texture_pool): {} images reused, {} made new, {} dropped; {} kept "
+                     "({:.1f} MB)",
+                     hits, misses, dropped, s.texture_pool_kept.load(std::memory_order_relaxed),
+                     double(s.texture_pool_kept_bytes.load(std::memory_order_relaxed)) / (1024.0 * 1024.0));
 }
 
 void Video::RetireLocked(std::unique_ptr<plume::RenderTextureView> view) {

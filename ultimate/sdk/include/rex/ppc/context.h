@@ -36,6 +36,11 @@ constexpr float kPack2101010_Max10 = std::bit_cast<float>(0x404001FFu);
 constexpr float kPack2101010_Min2 = std::bit_cast<float>(0x40400000u);
 constexpr float kPack2101010_Max2 = std::bit_cast<float>(0x40400003u);
 
+// renut-ultimate (2026-11-16, port 144; tw2de_nx's): the Xenon's spin-wait hints (db16cyc, or r1,r1,r1) with the
+// codegen option spin_hint_yield call this (sdk/src/system/xthread.cpp): the thread yields its core, so a spinning
+// thread lets the one it waits for run (the 360 had six hardware threads; the Switch gives a game three cores).
+extern "C" void rex_spin_hint(void);
+
 namespace rex::ppc {
 
 //=============================================================================
@@ -406,6 +411,9 @@ struct alignas(0x40) PPCContext {
   PPCCRRegister cr7;
   PPCFPSCRRegister fpscr;
   uint8_t vscr_sat = 0;  // VSCR saturation flag (for vector ops)
+  // renut-ultimate (2026-11-16, port 144; tw2de_nx's): VSCR NJ as mtvscr wrote it (1 at reset), for mfvscr
+  // (codegen option extra_instructions). In the padding after vscr_sat: no field moves. The vector unit always flushes.
+  uint8_t vscr_nj = 1;
 
   /**
    * Last indirect call target address. Set by REX_CALL_INDIRECT_FUNC before

@@ -44,12 +44,26 @@ REXCVAR_DEFINE_STRING(frame_cap, "Off", "Katamari/Performance",
 // renut_engine/frameHooks.cpp, called at the end of the game's Swap (d3d/hooks/device.cpp). With the display's refresh
 // known (the Switch) a frame is released at a refresh plus the measured phase (renut_engine/display_sync.h), else on its
 // own timer; a late frame goes at once. Off, it returns at the first test and starts no thread.
+// blur-nx (2026-11-18, the game menu; port 177, theft4 U18 MAX-B by hand): the cap chosen in the menu, from the next
+// frame (-1: frame_cap's, read at start). The key itself stays as read; the menu writes the player's file.
+static std::atomic<int> g_frame_cap_live{-1};
+void BlurSetFrameCapLive(int fps) { g_frame_cap_live.store(fps < 0 ? 0 : fps, std::memory_order_relaxed); }
+int BlurFrameCapNow() {
+  const int live = g_frame_cap_live.load(std::memory_order_relaxed);
+  if (live >= 0)
+    return live;
+  const std::string &v = REXCVAR_GET(frame_cap);
+  return v.empty() || v == "Off" ? 0 : std::atoi(v.c_str());
+}
+
 void renutFrameLimit() {
   using clock = std::chrono::steady_clock;
-  static const int fps = [] {
+  static const int configured = [] {
     const std::string &v = REXCVAR_GET(frame_cap);
     return v.empty() || v == "Off" ? 0 : std::atoi(v.c_str());
   }();
+  const int live = g_frame_cap_live.load(std::memory_order_relaxed);
+  const int fps = live >= 0 ? live : configured;
   // pacman-nx (2026-11-03, pacman_vblank_display_sync, futari-nx's): with no frame cap the display's refresh starts the
   // game's next frame (display_sync.h). The game's speed follows its frames.
   if (fps <= 0) {

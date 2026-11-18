@@ -55,6 +55,9 @@ public:
 
     FPSManager* fpsManager = nullptr;
 
+    // blur-nx (2026-11-18, #27): only while the counter shows.
+    bool WantsFrame() const override { return fpsManager && fpsManager->showFPS; }
+
     void OnDraw(ImGuiIO& io) override {
 
         //Limit draw to every 10 frames

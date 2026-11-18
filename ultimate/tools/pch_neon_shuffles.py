@@ -90,12 +90,20 @@ def main():
     text = open(args[0], encoding='utf-8').read()
     if MARKER in text:
         # sasrt-nx (2026-11-11, port 73): an older block of this tool is replaced (it lies before ANCHOR).
-        start = text.index(MARKER)
-        end = text.index(ANCHOR, start)
-        if text[start:end] == BLOCK:
+        # renut-ultimate (2026-11-17, port 150): only this tool's block, up to the next tool's marker (every block
+        # starts with one) or ANCHOR. It took everything up to ANCHOR before: in a tree that had been through the
+        # steps once, a block inserted before ANCHOR by a step that runs earlier (guest_fences.py, new in port 150)
+        # went with it, and the build then stopped on REX_GUEST_EIEIO undeclared.
+        if BLOCK in text:
             print('pch_neon_shuffles: already in %s' % args[0])
             return
-        text = text[:start] + text[end:]
+        start = text.index(MARKER)
+        ends = [text.index(ANCHOR, start)]
+        for next_marker in ('\n// rexglue ports: ', '\n// blur-nx: '):
+            k = text.find(next_marker, start + len(MARKER))
+            if k >= 0:
+                ends.append(k + 1)
+        text = text[:start] + text[min(ends):]
     if ANCHOR not in text:
         sys.exit('ERROR (post-codegen patch): pch_neon_shuffles: no REX_LOAD_U8 in %s: the generated pch changed'
                  % args[0])

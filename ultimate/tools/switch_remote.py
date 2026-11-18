@@ -26,6 +26,10 @@ console run needs the console owner's word first.
   raw "CMD ..."              a sys-botbase command as it is, the reply printed
   album-ls [PATH]            the Album, read only: /Nintendo/Album... or /emuMMC/<folder>/Nintendo/Album...
   album-get REMOTE [LOCAL]   one Album file downloaded (read only; nothing in the Album is written or deleted)
+  crash-ls                   Atmosphere's crash reports, read only: /atmosphere/crash_reports
+  crash-get NAME [LOCAL]     one crash report downloaded (read only; nothing there is written or deleted)
+  stall-dump                 an empty logs/rex/stall_dump in the port's folder: the running game's stall watchdog
+                             (banjo_stall_watch_*) dumps every thread and the guest waits, then deletes it
 
 The host comes from --host, else the SWITCH_HOST environment variable, else out/switch_host.txt's first line. The
 port's folder on the card comes from --root, else SWITCH_SD_ROOT, else out/switch_sd_root.txt's first line (for example
@@ -80,6 +84,20 @@ def sd_path(path=''):
     if full != SD_ROOT and not full.startswith(SD_ROOT + '/'):
         sys.exit('refused: %s is outside %s' % (path, SD_ROOT))
     return full
+
+
+# blur-nx (2026-11-13, the user: "You can open the folder the crash report in"): Atmosphere's crash reports, read only,
+# for crash-ls and crash-get: one folder, listed, and its files downloaded by name. Nothing here writes, renames or
+# deletes, and no other part of /atmosphere is reached.
+CRASH_ROOT = '/atmosphere/crash_reports'
+
+
+def crash_path(name=None):
+    if name is None:
+        return CRASH_ROOT
+    if ':' in name or '/' in name or chr(92) in name or name in ('', '.', '..'):
+        sys.exit('refused: %s is not a file name in %s' % (name, CRASH_ROOT))
+    return CRASH_ROOT + '/' + name
 
 
 # sasrt-nx (2026-11-09, the user: "grab screenshots I took from the emunand album, do not delete any files"): the Album
@@ -359,6 +377,24 @@ def main():
             remote = album_path(rest[0])
             local = rest[1] if len(rest) > 1 else os.path.basename(remote)
             print(local, ftp_get_file(host, remote, local), 'bytes')
+    elif cmd in ('crash-ls', 'crash-get'):
+        # blur-nx (2026-11-13): Atmosphere's crash reports, read only (crash_path above).
+        if cmd == 'crash-ls':
+            lines = []
+            ftp_retry(host, lambda f: (f.cwd(crash_path()), f.retrlines('LIST', lines.append)))
+            for line in lines:
+                print(line)
+        else:
+            remote = crash_path(rest[0] if rest else '')
+            local = rest[1] if len(rest) > 1 else rest[0]
+            print(local, ftp_get_file(host, remote, local), 'bytes')
+    elif cmd == 'stall-dump':
+        # blur-nx (2026-11-14, app/src/profiler/stall_watch_switch.cpp): the watchdog looks for the file once a second and
+        # deletes it before it dumps, so only the upload is checked (a size check afterwards could race the delete).
+        import io
+        remote = sd_path('logs/rex/stall_dump')
+        ftp_retry(host, lambda f: f.storbinary('STOR ' + remote, io.BytesIO(b'')))
+        print('requested a stall dump:', remote, time.strftime('%H:%M:%S'))
     elif cmd in ('ls', 'get', 'put'):
         # Refused before any connection is made: the card path is rest[1] for put, rest[0] for the others.
         sd_path(rest[1] if cmd == 'put' else (rest[0] if rest else ''))

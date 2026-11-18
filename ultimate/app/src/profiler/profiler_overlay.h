@@ -30,6 +30,9 @@ class ProfilerOverlayDialog : public rex::ui::ImGuiDialog {
   }
   ~ProfilerOverlayDialog() override { rex::ui::UnregisterBind("bind_profiler"); }
 
+  // blur-nx (2026-11-18, #27): only while the window shows (its graphs then fill from that frame on).
+  bool WantsFrame() const override { return REXCVAR_GET(banjo_show_profiler); }
+
   void OnDraw(ImGuiIO& io) override {
     using banjo::profiler::Series;
     constexpr size_t kSeries = static_cast<size_t>(Series::kCount);

@@ -39,10 +39,14 @@ import re
 import sys
 
 FUNC = re.compile(r'^DEFINE_REX_FUNC\((sub_([0-9A-F]{8}))\) \{$')
-PLAIN = re.compile(r'^\tREX_CALL_INDIRECT_FUNC\(((?:ctx\.)?ctr\.u32)\);$')
-SITE = re.compile(r'^\tREX_CALL_INDIRECT_FUNC_AT\(0x[0-9A-F]{8}, \d+, ((?:ctx\.)?ctr\.u32)\);$')
+# Theft4-NX (U18 MAX, 2026-11-17): GTA IV's generated code ends a bctrl's line with ' REX_R1_ASSUMED();' (the r1 mirror's
+# marker after a call: sasrt-nx's r1 tracking); the three forms take it as an optional suffix and the rewrite keeps it.
+# Without it no site of GTA IV matched: neither the promotions nor CG-08's site cache were ever applied here.
+R1_SUFFIX = r'( REX_R1_ASSUMED\(\);)?'
+PLAIN = re.compile(r'^\tREX_CALL_INDIRECT_FUNC\(((?:ctx\.)?ctr\.u32)\);' + R1_SUFFIX + '$')
+SITE = re.compile(r'^\tREX_CALL_INDIRECT_FUNC_AT\(0x[0-9A-F]{8}, \d+, ((?:ctx\.)?ctr\.u32)\);' + R1_SUFFIX + '$')
 PROMOTED = re.compile(r'^\tif \(REX_PROMOTED_IS\(((?:ctx\.)?ctr\.u32), 0x[0-9A-F]{8}u\)\) \[\[likely\]\] \{ '
-                      r'REX_PROMOTED_CALL\(.*\} else \{ REX_CALL_INDIRECT_FUNC_AT\(.*\); \}$')
+                      r'REX_PROMOTED_CALL\(.*\} else \{ REX_CALL_INDIRECT_FUNC_AT\(.*\); \}' + R1_SUFFIX + '$')
 MARKER = '// rexglue ports: indirect call sites (tools/indirect_calls.py)'
 MACROS = MARKER + '''
 #ifndef REX_PROMOTED_IS
@@ -53,7 +57,49 @@ MACROS = MARKER + '''
 #endif
 #endif
 #ifndef REX_CALL_INDIRECT_FUNC_AT
-#if defined(__SWITCH__) || defined(REX_INDIRECT_CENSUS_OFF)
+#if defined(__SWITCH__) && !defined(REX_SITE_CACHE_OFF)
+// blur-nx (2026-11-17, CG-08 of docs/codegen-ideas-3.md): a one-entry cache per site. The dispatch table is 2 bytes per
+// guest code byte (20 MB for Blur), so a virtual call's table load usually misses (0.4-0.5 % of all console samples,
+// 1.6-3.3 % of the audio worker's). The site keeps its first target and function in one 64-bit word (~target in the
+// high half, and an empty word never taken for target 0xFFFFFFFF; the function as a 32-bit offset from RexSiteAnchor),
+// read and written whole, so it is never torn. An empty word is filled by RexSiteMiss (out of line, once per site); a
+// full word for another target takes the plain lookup inline, as without the cache (batch 1's version replaced full
+// words on 1 miss in 16 from an out-of-line miss path: its polymorphic sites paid a call and a counter read at every
+// miss, ~0.5 % of the frame jobs' samples). Memory::SetFunction clears every word after a table write
+// (sdk/src/system/xmemory.cpp: the section rex_site_cache, only when a word was filled since). The table path and the
+// result are the table's: exact. REX_SITE_CACHE_OFF: the plain lookup.
+extern "C" unsigned char g_rex_site_cache_dirty;
+[[gnu::noinline, gnu::used]] inline void RexSiteAnchor(PPCContext&, uint8_t*) {}
+[[gnu::noinline]] inline void RexSiteMiss(uint64_t* slot, uint32_t t, PPCContext& ctx, uint8_t* base) {
+  PPCFunc* f = nullptr;
+  if ((uint32_t)(t - REX_CODE_BASE) < REX_CODE_SIZE + REX_THUNK_RESERVE_SIZE) [[likely]] f = REX_LOOKUP_FUNC(base, t);
+  if (f) [[likely]] {
+    const intptr_t off = (intptr_t)f - (intptr_t)&RexSiteAnchor;
+    if (off == (intptr_t)(int32_t)off && t != 0xFFFFFFFFu) {
+      __atomic_store_n(slot, (uint64_t(~t) << 32) | uint32_t(int32_t(off)), __ATOMIC_RELAXED);
+      if (!__atomic_load_n(&g_rex_site_cache_dirty, __ATOMIC_RELAXED))
+        __atomic_store_n(&g_rex_site_cache_dirty, 1, __ATOMIC_RELAXED);
+    }
+  } else {
+    ctx.last_indirect_target = t;
+    f = rex::runtime::ResolveIndirectFunction(t);
+  }
+  f(ctx, base);
+}
+#define REX_CALL_INDIRECT_FUNC_AT(function, site, x)                                                    \\
+  do {                                                                                                  \\
+    static uint64_t rex_site_cache_ __attribute__((section("rex_site_cache")));                         \\
+    const uint32_t rex_site_t_ = (uint32_t)(x);                                                         \\
+    const uint64_t rex_site_c_ = __atomic_load_n(&rex_site_cache_, __ATOMIC_RELAXED);                   \\
+    if ((uint32_t)(rex_site_c_ >> 32) == ~rex_site_t_ && rex_site_c_ != 0) [[likely]]                  \\
+      ((PPCFunc*)((intptr_t)&RexSiteAnchor + (intptr_t)(int32_t)(uint32_t)rex_site_c_))(ctx, base);     \\
+    else if (rex_site_c_ != 0)                                                                          \\
+      REX_CALL_INDIRECT_FUNC(rex_site_t_);                                                              \\
+    else                                                                                                \\
+      RexSiteMiss(&rex_site_cache_, rex_site_t_, ctx, base);                                            \\
+  } while (0)
+#define REX_PROMOTED_CALL(target, function) ((void)0)
+#elif defined(__SWITCH__) || defined(REX_INDIRECT_CENSUS_OFF)
 #define REX_CALL_INDIRECT_FUNC_AT(function, site, x) REX_CALL_INDIRECT_FUNC(x)
 #define REX_PROMOTED_CALL(target, function) ((void)0)
 #else
@@ -120,11 +166,18 @@ def main():
             # Only the plain `bctrl` form: the generator's other indirect calls (the forms that save and restore
             # registers around the call, tail calls) are left as they are and not counted.
             m = PLAIN.match(line) or SITE.match(line) or PROMOTED.match(line)
-            if not m or i == 0 or not lines[i - 1].startswith('\t// bctrl'):
+            # Theft4-NX (U18 MAX): GTA IV's code generation writes the link register between the comment and the call
+            # (`// bctrl` / `ctx.lr = 0x...;` / the call), which is the same plain bctrl.
+            if not m or i == 0:
+                continue
+            if not (lines[i - 1].startswith('\t// bctrl') or
+                    (i >= 2 and re.match(r'^\tctx\.lr = 0x[0-9A-Fa-f]+;$', lines[i - 1]) and
+                     lines[i - 2].startswith('\t// bctrl'))):
                 continue
             site = ordinal
             ordinal += 1
             expr = m.group(1)
+            suffix = m.group(2) or ''  # Theft4-NX (U18 MAX): REX_R1_ASSUMED(); kept after the call
             tag = 'REX_CALL_INDIRECT_FUNC_AT(0x%s, %d, %s);' % (function, site, expr)
             wanted = promote.get((function, site))
             if wanted:
@@ -136,7 +189,7 @@ def main():
                 for n, target in enumerate(wanted):
                     new += ('if (REX_PROMOTED_IS(%s, 0x%su)) %s{ REX_PROMOTED_CALL(0x%s, sub_%s); sub_%s(ctx, base); } '
                             'else ' % (expr, target, '[[likely]] ' if n == 0 else '', target, target, target))
-                new += '{ %s }' % tag
+                new += '{ %s }' % tag + suffix
                 targets.update(wanted)
                 promoted += 1
                 chained += len(wanted) > 1
@@ -146,7 +199,7 @@ def main():
                     already += 1
                     continue
             else:
-                new = '\t' + tag
+                new = '\t' + tag + suffix
                 if line == new:
                     already += 1
                     continue
@@ -178,6 +231,16 @@ def main():
                      'changed' % pch)
         if not a.check:
             open(pch, 'w', encoding='utf-8', newline='\n').write(text.replace(anchor, MACROS + '\n' + anchor, 1))
+    elif MACROS not in text:
+        # renut-ultimate (2026-11-17, port 150): an older form of the block (before CG-08's site caches, say) is put in
+        # place of, as loop_locals.py does with its own: a game's tree gets the current macros without a new codegen.
+        # The block ends with REX_CALL_INDIRECT_FUNC_AT's two #endif lines, every form of it so far.
+        start = text.index(MARKER)
+        tail = '#endif\n#endif\n'
+        end = text.index(tail, text.index('#ifndef REX_CALL_INDIRECT_FUNC_AT', start)) + len(tail)
+        if not a.check:
+            open(pch, 'w', encoding='utf-8', newline='\n').write(text[:start] + MACROS + text[end:])
+        print('indirect_calls: the macros in %s were replaced by the current ones' % pch)
     print('indirect_calls%s: %d bctrl sites written (%d promoted to a guarded direct call, %d of them with two or '
           'three targets; %d in the list), %d already as wanted; %d files changed' %
           (' (check only)' if a.check else '', tagged, promoted, chained, len(promote), already, changed))

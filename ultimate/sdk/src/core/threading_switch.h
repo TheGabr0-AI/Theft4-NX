@@ -212,8 +212,11 @@ unsigned RexSwitchAppCoreMask(void);
 bool RexSwitchMoveCurrentThreadToSystemCore(int priority);
 /* banjo-nx (2026-10-27): running under the forwarder banjo_forwarder_program_id names, writes the four-core NPDM to
  * sdmc:/atmosphere/contents/<id>/exefs/main.npdm when it is missing or different (Atmosphere's ExeFS file replacement;
- * it takes effect at the forwarder's next launch). 0 nothing to do, 1 already in place, 2 written, -1 failed. */
+ * it takes effect at the forwarder's next launch). 0 nothing to do, 1 already in place, 2 written, -1 failed.
+ * blur-nx (2026-11-18): with four_core_mode false it removes that NPDM instead (3 removed, 0 none of ours there). */
 int RexSwitchEnsureForwarderNpdm(void);
+/* blur-nx (2026-11-18): the same for the game menu's four-core option (on: written, off: removed), at once. */
+int RexSwitchApplyFourCoreMode(int on);
 /* banjo-nx (2026-10-27): banjo_system_core_xma (the XMA Decoder on the system core) and the mixer's priority there. */
 bool RexSwitchSystemCoreXma(void);
 int RexSwitchSystemCoreMixerPriority(void);

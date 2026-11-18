@@ -126,6 +126,11 @@ void __nx_win_exit(void) {
 
 namespace banjo::display_sync {
 namespace {
+// Port 172 (from fnxf_xiii, its notes of 2026-10-27 and 10-29; banjo_vblank_from_display): the display's refreshes, for
+// the SDK's guest vblank worker (sdk/src/graphics/graphics_system.cpp, rex::graphics::g_display_refresh_wait).
+std::atomic<uint64_t> g_refresh_count{0};
+std::mutex g_refresh_mutex;
+std::condition_variable g_refresh_cv;
 
 uint64_t NowNs() {
   return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -435,6 +440,11 @@ void Run() {
     last = now;
     g_period.store(uint64_t(period), std::memory_order_relaxed);
     g_last_vsync.store(now, std::memory_order_release);
+    {
+      std::lock_guard lock(g_refresh_mutex);  // port 172: a refresh for the vblank worker
+      g_refresh_count.fetch_add(1, std::memory_order_release);
+    }
+    g_refresh_cv.notify_all();
     // sa2-nx (2026-10-28, sa2_renut_queue_drain): the newest image at this refresh, before AtRefresh's own fence tests.
     const uint64_t presented = renut::gpu::Video::PresentCount();
     const bool new_image = presented != g_presented_at_vsync;
@@ -512,12 +522,23 @@ uint32_t LateInputGuardUs() {
   return g_guard_us.load(std::memory_order_relaxed);
 }
 
+// Port 172: the refreshes counted so far, once one past 'seen' has come or 'timeout_ns' has passed (0: at once).
+uint64_t WaitRefresh(uint64_t seen, uint64_t timeout_ns) {
+  std::unique_lock lock(g_refresh_mutex);
+  if (timeout_ns)
+    g_refresh_cv.wait_for(lock, std::chrono::nanoseconds(timeout_ns),
+                          [&] { return g_refresh_count.load(std::memory_order_acquire) != seen; });
+  return g_refresh_count.load(std::memory_order_acquire);
+}
+
 void Start() {
 #if REX_PLATFORM_SWITCH
   static std::once_flag once;
   std::call_once(once, [] {
-    if (REXCVAR_GET(banjo_display_sync))
+    if (REXCVAR_GET(banjo_display_sync)) {
       banjo::renut_gpu::StartLongLivedThread(&Run, 128 * 1024);
+      rex::graphics::g_display_refresh_wait = &WaitRefresh;  // port 172 (used with banjo_vblank_from_display)
+    }
   });
 #endif
 }

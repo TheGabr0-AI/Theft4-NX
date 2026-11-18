@@ -205,6 +205,15 @@ void FloatBigEndian(Tally& t) {
     const uint32_t be = __builtin_bswap32(Opaque(b));
     t.Expect("FloatFromBigEndian", in, std::bit_cast<uint32_t>(rex::ppc::FloatFromBigEndian(&be)), b);
   }
+  // blur-nx (2026-11-17, #231): the double load (the same eight bytes).
+  const uint64_t dbits[] = {0x0000000000000000ull, 0x8000000000000000ull, 0x3FF0000000000000ull,
+                            0x0000000000000001ull, 0x7FF0000000000000ull, 0x7FF8000000000001ull,
+                            0x7FF0000000000001ull, 0xFFF4000000000000ull, 0x0123456789ABCDEFull};
+  for (uint64_t b : dbits) {
+    const std::string in = fmt::format("{:016X}", b);
+    const uint64_t be = __builtin_bswap64(Opaque(b));
+    t.Expect("DoubleFromBigEndian", in, std::bit_cast<uint64_t>(rex::ppc::DoubleFromBigEndian(&be)), b);
+  }
 }
 
 void VectorHelpers(Tally& t) {

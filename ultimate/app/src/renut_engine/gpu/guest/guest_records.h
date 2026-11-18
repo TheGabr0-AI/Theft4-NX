@@ -55,7 +55,7 @@ int OursFast(u32 guest_va);
 
 // A block of the guest physical window for renderer-owned guest memory (the
 // Begin*Vertices scratch). Never freed. 0 on failure.
-u32 AllocPhysicalBlock(u32 size);
+u32 AllocPhysicalBlock(u32 size, bool quiet = false);  // quiet: no error logged on failure (port 161)
 
 } // namespace records
 

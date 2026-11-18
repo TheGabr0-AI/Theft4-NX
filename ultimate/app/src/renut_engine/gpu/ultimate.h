@@ -31,6 +31,7 @@ bool TextureSignsOn();     // sasrt_renut_texture_signs (sasrt-nx)
 bool TextureExpAdjustOn(); // sasrt_renut_texture_exp_adjust (sasrt-nx)
 bool TextureIntFormatOn(); // sasrt_renut_texture_int_format (sasrt-nx)
 bool TargetGammaBiasOn();  // halo3_renut_target_gamma_bias (halo3-nx)
+bool TargetBiasRgbOn();  // blur_renut_target_bias_rgb (blur-nx, 2026-11-17): the bias on the colour too
 bool Fixed16FloatOn();  // sasrt_renut_fixed16_float (sasrt-nx)
 bool Fixed16ClampOn();  // sasrt_renut_fixed16_clamp (sasrt-nx)
 bool DepthRestoreOn();  // sasrt_renut_depth_restore (sasrt-nx)

@@ -54,6 +54,7 @@ set(REXKERNEL_SOURCES
     xboxkrnl/xboxkrnl_usbcam.cpp  # peggle1-nx (2026-10-21): Peggle imports the XUsbcam* functions (Xbox Live Vision); "not connected"
     xboxkrnl/xboxkrnl_video.cpp
     xboxkrnl/xboxkrnl_xconfig.cpp
+    xboxkrnl/xboxkrnl_timezone.cpp  # renut-ultimate (2026-11-16, port 147): tw2de_nx's, xconfig_host_time_zone
     xboxkrnl/xboxkrnl_audio.cpp
     xboxkrnl/xboxkrnl_audio_xma.cpp
 

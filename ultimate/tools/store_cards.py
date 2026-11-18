@@ -71,6 +71,8 @@ MACROS = MARKER + '''
 #else
 #define REX_CARD(ea) ((void)(*(u8*)(base + ((u32)(ea) >> 12)) = 0))
 #endif
+#if defined(REX_CARD_ADDR_TWICE)
+// The forms before port 160 (A/B only): the address written twice.
 #define REX_STORE_D_U8_C(r, d, y) (REX_STORE_D_U8(r, d, y), REX_CARD((u32)(r) + (u32)(d)))
 #define REX_STORE_D_U16_C(r, d, y) (REX_STORE_D_U16(r, d, y), REX_CARD((u32)(r) + (u32)(d)))
 #define REX_STORE_D_U32_C(r, d, y) (REX_STORE_D_U32(r, d, y), REX_CARD((u32)(r) + (u32)(d)))
@@ -79,12 +81,38 @@ MACROS = MARKER + '''
 #define REX_STORE_U16_C(x, y) (REX_STORE_U16(x, y), REX_CARD(x))
 #define REX_STORE_U32_C(x, y) (REX_STORE_U32(x, y), REX_CARD(x))
 #define REX_STORE_U64_C(x, y) (REX_STORE_U64(x, y), REX_CARD(x))
-#define REX_STVLX_C(ea, v) do { REX_STVLX(ea, v); REX_CARD(ea); } while (0)
-#define REX_STVRX_C(ea, v) do { REX_STVRX(ea, v); REX_CARD(ea); } while (0)
 #define REX_MM_STORE_U8_C(a, v) do { REX_MM_STORE_U8(a, v); REX_CARD(a); } while (0)
 #define REX_MM_STORE_U16_C(a, v) do { REX_MM_STORE_U16(a, v); REX_CARD(a); } while (0)
 #define REX_MM_STORE_U32_C(a, v) do { REX_MM_STORE_U32(a, v); REX_CARD(a); } while (0)
 #define REX_MM_STORE_U64_C(a, v) do { REX_MM_STORE_U64(a, v); REX_CARD(a); } while (0)
+#else
+// Port 160 (from fnxf_xiii, its note of 2026-10-24): each form evaluates its address once. The stores are volatile
+// and, with -fno-strict-aliasing, may change ctx as far as the compiler knows, so an address written twice was loaded
+// from ctx and added again for the card (fnxf_xiii: 2.3 MB of .text, about 250k extra ldr / add). The same address
+// and the same card; -DREX_CARD_ADDR_TWICE gives the old forms back.
+#define REX_STORE_D_U8_C(r, d, y) \
+  ({ const u32 rex_card_r_ = (u32)(r); REX_STORE_D_U8(rex_card_r_, d, y); REX_CARD(rex_card_r_ + (u32)(d)); })
+#define REX_STORE_D_U16_C(r, d, y) \
+  ({ const u32 rex_card_r_ = (u32)(r); REX_STORE_D_U16(rex_card_r_, d, y); REX_CARD(rex_card_r_ + (u32)(d)); })
+#define REX_STORE_D_U32_C(r, d, y) \
+  ({ const u32 rex_card_r_ = (u32)(r); REX_STORE_D_U32(rex_card_r_, d, y); REX_CARD(rex_card_r_ + (u32)(d)); })
+#define REX_STORE_D_U64_C(r, d, y) \
+  ({ const u32 rex_card_r_ = (u32)(r); REX_STORE_D_U64(rex_card_r_, d, y); REX_CARD(rex_card_r_ + (u32)(d)); })
+#define REX_STORE_U8_C(x, y) ({ const u32 rex_card_ea_ = (u32)(x); REX_STORE_U8(rex_card_ea_, y); REX_CARD(rex_card_ea_); })
+#define REX_STORE_U16_C(x, y) ({ const u32 rex_card_ea_ = (u32)(x); REX_STORE_U16(rex_card_ea_, y); REX_CARD(rex_card_ea_); })
+#define REX_STORE_U32_C(x, y) ({ const u32 rex_card_ea_ = (u32)(x); REX_STORE_U32(rex_card_ea_, y); REX_CARD(rex_card_ea_); })
+#define REX_STORE_U64_C(x, y) ({ const u32 rex_card_ea_ = (u32)(x); REX_STORE_U64(rex_card_ea_, y); REX_CARD(rex_card_ea_); })
+#define REX_MM_STORE_U8_C(a, v) \
+  do { const u32 rex_card_ea_ = (u32)(a); REX_MM_STORE_U8(rex_card_ea_, v); REX_CARD(rex_card_ea_); } while (0)
+#define REX_MM_STORE_U16_C(a, v) \
+  do { const u32 rex_card_ea_ = (u32)(a); REX_MM_STORE_U16(rex_card_ea_, v); REX_CARD(rex_card_ea_); } while (0)
+#define REX_MM_STORE_U32_C(a, v) \
+  do { const u32 rex_card_ea_ = (u32)(a); REX_MM_STORE_U32(rex_card_ea_, v); REX_CARD(rex_card_ea_); } while (0)
+#define REX_MM_STORE_U64_C(a, v) \
+  do { const u32 rex_card_ea_ = (u32)(a); REX_MM_STORE_U64(rex_card_ea_, v); REX_CARD(rex_card_ea_); } while (0)
+#endif
+#define REX_STVLX_C(ea, v) do { REX_STVLX(ea, v); REX_CARD(ea); } while (0)
+#define REX_STVRX_C(ea, v) do { REX_STVRX(ea, v); REX_CARD(ea); } while (0)
 #define REX_GUEST_CAS_C(ea, p, e, d) (REX_CARD(ea), REX_GUEST_CAS(p, e, d))
 #endif  // REX_CARD
 ''' + END

@@ -48,6 +48,28 @@ try:
         controller.SetFrameEvent(a.eventId, True)
         say("event", a.eventId, "indices", a.numIndices)
         vk = controller.GetVulkanPipelineState()
+        if vk is None:
+            # blur-nx (2026-11-11): a D3D12 capture (renderdoccmd on Renut's D3D12 back end or the emulated renderer).
+            d3d = controller.GetD3D12PipelineState()
+            om = d3d.outputMerger
+            dss = om.depthStencilState
+            say("   depth", fields(dss, ["depthEnable", "depthWrites", "depthFunction", "depthBoundsEnable",
+                                         "stencilEnable"]))
+            say("   raster", fields(d3d.rasterizer.state, ["cullMode", "frontCCW", "depthClip", "depthBias",
+                                                            "depthBiasClamp", "slopeScaledDepthBias", "fillMode",
+                                                            "multisampleEnable"]))
+            try:
+                b = om.blendState.blends[0]
+                say("   blend 0", fields(b, ["enabled"]), fields(b.colorBlend, ["source", "destination", "operation"]),
+                    "alpha", fields(b.alphaBlend, ["source", "destination", "operation"]), "mask", b.writeMask)
+            except Exception as e:
+                say("   blend ?", e)
+            try:
+                vp = d3d.rasterizer.viewports[0]
+                say("   viewport", fields(vp, ["x", "y", "width", "height", "minDepth", "maxDepth"]))
+            except Exception as e:
+                say("   viewport ?", e)
+            continue
         ds = vk.depthStencil
         say("   depth", fields(ds, ["depthTestEnable", "depthWriteEnable", "depthFunction", "depthBoundsEnable",
                                     "stencilTestEnable"]))

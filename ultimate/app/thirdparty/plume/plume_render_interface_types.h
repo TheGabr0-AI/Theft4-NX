@@ -176,6 +176,13 @@ namespace plume {
         // sasrt-nx (2026-11-11, port 75; its formats batch, rows 7, 66, 73, 95, 96: renut_format_7e3_rg11b10): 11:11:10
         // unsigned float, no alpha (deko3d RG11B10, Vulkan B10G11R11_UFLOAT_PACK32, D3D12 R11G11B10_FLOAT).
         R11G11B10_FLOAT,
+        // renut-ultimate (2026-11-16, port 145; tw2de_nx's of 2026-10-25): the Xenos 5:6:5, 1:5:5:5 and 4:4:4:4 in the
+        // GPU's own 16-bit formats (the same bit layout, the first component in the lowest bits; deko3d RGB565_Unorm,
+        // RGB5A1_Unorm, RGBA4_Unorm: Maxwell B5G6R5, A1B5G5R5, A4B4G4R4 with the identity swizzle). deko3d only
+        // (banjo_deko3d_native_16bit; the other back ends never get them).
+        R5G6B5_UNORM,
+        R5G5B5A1_UNORM,
+        R4G4B4A4_UNORM,
         MAX
     };
 
@@ -584,6 +591,10 @@ namespace plume {
         case RenderFormat::R10G10B10A2_UNORM:
         case RenderFormat::R11G11B10_FLOAT:
             return 4;
+        case RenderFormat::R5G6B5_UNORM:  // port 145 (tw2de_nx's)
+        case RenderFormat::R5G5B5A1_UNORM:
+        case RenderFormat::R4G4B4A4_UNORM:
+            return 2;
         case RenderFormat::R8G8_TYPELESS:
         case RenderFormat::R8G8_UNORM:
         case RenderFormat::R8G8_UINT:
@@ -669,6 +680,9 @@ namespace plume {
         // sasrt-nx (2026-11-11, port 75; its formats batch, rows 6, 8, 10, 74, 93 and 7, 66, 73, 95, 96)
         case RenderFormat::R10G10B10A2_UNORM:
         case RenderFormat::R11G11B10_FLOAT:
+        case RenderFormat::R5G6B5_UNORM:  // port 145 (tw2de_nx's)
+        case RenderFormat::R5G5B5A1_UNORM:
+        case RenderFormat::R4G4B4A4_UNORM:
         case RenderFormat::R32_FLOAT:
         case RenderFormat::R32_UINT:
         case RenderFormat::R32_SINT:

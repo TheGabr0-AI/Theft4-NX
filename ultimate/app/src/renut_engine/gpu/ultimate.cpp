@@ -192,6 +192,14 @@ REXCVAR_DEFINE_BOOL(halo3_renut_target_gamma_bias, true, "Banjo/Enhancements",
                     "linear curve), and a target's colour exponent bias scales the alpha written, as the GPU does (Vulkan and "
                     "deko3d; Halo 3's menu was nearly transparent without the bias). Off: written as the host format takes them")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// blur-nx (2026-11-17, the menu backdrop): with halo3_renut_target_gamma_bias, the colour channels scaled by the target's
+// colour exponent bias as well (shader_common.h banjoTrim, constant 927; render/pipeline.cpp).
+REXCVAR_DEFINE_BOOL(blur_renut_target_bias_rgb, true, "Banjo/Enhancements",
+                    "A colour target's exponent bias (RB_COLOR_INFO) scales the colour a pixel shader writes as well as its "
+                    "alpha, as the GPU scales all of it (Vulkan and deko3d; needs halo3_renut_target_gamma_bias). Blur's menu "
+                    "backdrop was black without it: its blur passes draw into targets of bias 5. Off: the alpha alone, as "
+                    "halo3-nx did")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 // sasrt-nx (2026-10-20).
 REXCVAR_DEFINE_BOOL(sasrt_renut_fixed16_float, true, "Banjo/Enhancements",
@@ -478,6 +486,10 @@ bool TextureIntFormatOn() {
 }
 bool TargetGammaBiasOn() {
   static const bool on = REXCVAR_GET(halo3_renut_target_gamma_bias);
+  return on;
+}
+bool TargetBiasRgbOn() {  // blur-nx (2026-11-17)
+  static const bool on = REXCVAR_GET(halo3_renut_target_gamma_bias) && REXCVAR_GET(blur_renut_target_bias_rgb);
   return on;
 }
 bool Fixed16FloatOn() {

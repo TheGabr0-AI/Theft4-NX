@@ -13,7 +13,15 @@
 #include <cstdint>
 #include <string>
 
+namespace rex::graphics {
+// Port 172: sdk/src/graphics/graphics_system.cpp (banjo_vblank_from_display).
+extern uint64_t (*g_display_refresh_wait)(uint64_t seen, uint64_t timeout_ns);
+}
+
 namespace banjo::display_sync {
+
+// Port 172: the display's refreshes counted so far, once one past 'seen' has come or 'timeout_ns' has passed.
+uint64_t WaitRefresh(uint64_t seen, uint64_t timeout_ns);
 
 // Starts the thread on the first call (the Switch, banjo_display_sync); a no-op elsewhere and after the first call.
 void Start();

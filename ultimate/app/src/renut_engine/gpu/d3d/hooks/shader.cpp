@@ -13,6 +13,7 @@
  * container hash.
  */
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -34,6 +35,7 @@
 #include "renut_engine/gpu/log.h"
 #include "renut_engine/gpu/backend/render_thread.h"
 #include "renut_engine/gpu/guest/resources.h"
+#include "renut_engine/gpu/lean_mutex.h"  // blur-nx (2026-11-17, audit #8)
 #include "renut_engine/gpu/render/pipeline.h"
 #include "renut_engine/gpu/render/shader_library.h"
 #include "renut_engine/gpu/backend/video.h"
@@ -51,6 +53,18 @@ REXCVAR_DEFINE_BOOL(banjo_renut_shared_host_shaders, true, "Banjo/Enhancements",
                     "shader (N&B makes a shader object per mesh, many alive at once with the same shader: each unpacked "
                     "and parsed its GLSL on the render thread, kept its own copy of it and compiled its own variants). "
                     "false: one host shader an object, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_bindings_lockfree, true, "Banjo/Enhancements",
+                    "blur-nx (2026-11-17, the 24-hour run): every draw's recorded bind (banjo_renut_recorded_binds: "
+                    "LastBindingOf, on each recorded op and each queued draw) and the render thread's bind of it read "
+                    "from tables written under the binds' lock, not under the lock (the frame jobs waited 12 % of their "
+                    "racing time on a lock inside NewOp: this one, ~25,000 times a second). Off: the lock every time")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_in_place_memo, true, "Banjo/Enhancements",
+                    "blur-nx (2026-11-17, the 24-hour run): the narrowed captures' shader lookups (InPlaceShaderEntry, "
+                    "two a Begin*Vertices draw) answered from a small per-thread memo while no shader was registered or "
+                    "destroyed since, instead of a shared lock each (Game Master spent 1.2 % of its racing time in that "
+                    "lock's unlock). Off: the lock every time, as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(banjo_renut_recorded_binds, true, "Banjo/Renut",
                     "halo3-nx (2026-11-03, from sasrt-nx's sasrt_renut_recorded_binds): each draw keeps the "
@@ -297,27 +311,57 @@ struct InPlaceShader {
   RecordKind kind;
   const ShaderCacheEntry *entry;
 };
-std::shared_mutex g_in_place_mutex;
+LeanSharedMutex g_in_place_mutex;  // blur-nx (2026-11-17, audit #8, blur_renut_lean_rwlock): was std::shared_mutex
 std::unordered_map<u32, InPlaceShader> g_in_place;
+// blur-nx (2026-11-17, blur_renut_in_place_memo): bumped under the lock at every change of g_in_place; a thread's memo
+// answers while the generation it was made at is still the current one: the map then gives the same answer. A change
+// made on another thread at the same moment is ordered with the lookup by nothing, with or without the lock (the
+// header's comment: the change's render-thread item is queued before it), so the memo answers as the lock would have.
+std::atomic<uint64_t> g_in_place_generation{1};
+struct InPlaceMemo {
+  uint64_t generation = 0;
+  u32 shader_va = 0;
+  RecordKind kind{};
+  bool found = false;
+  const ShaderCacheEntry *entry = nullptr;
+};
+constexpr u32 kInPlaceMemoSlots = 16;
+thread_local InPlaceMemo t_in_place_memo[kInPlaceMemoSlots];
 }  // namespace
 
 bool InPlaceShaderEntry(u32 shader_va, RecordKind kind, const ShaderCacheEntry **entry) {
+  static const bool memo_on = REXCVAR_GET(blur_renut_in_place_memo);
+  uint64_t generation = 0;
+  InPlaceMemo *memo = nullptr;
+  if (memo_on) {
+    generation = g_in_place_generation.load(std::memory_order_acquire);
+    memo = &t_in_place_memo[(shader_va * 2654435761u) >> 28];
+    if (memo->generation == generation && memo->shader_va == shader_va && memo->kind == kind) {
+      if (memo->found)
+        *entry = memo->entry;
+      return memo->found;
+    }
+  }
   std::shared_lock lock(g_in_place_mutex);
   const auto it = g_in_place.find(shader_va);
-  if (it == g_in_place.end() || it->second.kind != kind)
-    return false;
-  *entry = it->second.entry;
-  return true;
+  const bool found = it != g_in_place.end() && it->second.kind == kind;
+  if (found)
+    *entry = it->second.entry;
+  if (memo)
+    *memo = {generation, shader_va, kind, found, found ? it->second.entry : nullptr};
+  return found;
 }
 
 void ForgetInPlaceShader(u32 shader_va) {
   std::unique_lock lock(g_in_place_mutex);
   g_in_place.erase(shader_va);
+  g_in_place_generation.fetch_add(1, std::memory_order_acq_rel);  // blur-nx (2026-11-17)
 }
 
 void NoteInPlaceShader(u32 shader_va, RecordKind kind, const ShaderCacheEntry *entry) {
   std::unique_lock lock(g_in_place_mutex);
   g_in_place[shader_va] = {kind, entry};
+  g_in_place_generation.fetch_add(1, std::memory_order_acq_rel);  // blur-nx (2026-11-17)
 }
 
 ShaderRecord *FindShaderLocked(u32 shader_va, RecordKind kind) {
@@ -501,6 +545,39 @@ std::deque<RecordedBinding> g_bindings;
 std::unordered_map<u32, std::vector<u32>> g_shader_bindings;
 std::unordered_map<u32, u32> g_last_binding;
 
+// blur-nx (2026-11-17, blur_renut_bindings_lockfree): g_last_binding as an open-addressed table (a shader's address in
+// the high half of an entry, its last bind's id in the low half, one 64-bit word: never torn) and g_bindings' elements
+// by id, both written under g_bindings_mutex (the map and the deque stay the truth) and read without it. Entries are
+// only added or overwritten, never removed (the map is never erased), so a reader's probe ends at the shader's entry or
+// at an empty one. Release stores, acquire loads: a bind's id seen in the table has its element in g_binding_ptrs.
+// A full table (or an id past the pointer table) sends the readers back to the lock, as before.
+constexpr u32 kLastBindingSlots = 1u << 14;
+std::atomic<uint64_t> g_last_binding_fast[kLastBindingSlots];
+std::atomic<bool> g_last_binding_fast_full{false};
+constexpr u32 kBindingPtrs = 1u << 16;
+std::atomic<const RecordedBinding *> g_binding_ptrs[kBindingPtrs];
+
+bool BindingsLockFree() {
+  static const bool on = REXCVAR_GET(blur_renut_bindings_lockfree);
+  return on;
+}
+
+// Under g_bindings_mutex.
+void NoteLastBindingFast(u32 shader_va, u32 id) {
+  if (g_last_binding_fast_full.load(std::memory_order_relaxed))
+    return;
+  const uint64_t entry = (uint64_t(shader_va) << 32) | id;
+  for (u32 i = 0, slot = (shader_va * 2654435761u) >> 18; i < kLastBindingSlots; ++i, slot = (slot + 1) & (kLastBindingSlots - 1)) {
+    const uint64_t e = g_last_binding_fast[slot].load(std::memory_order_relaxed);
+    if (e == 0 || u32(e >> 32) == shader_va) {
+      if (e != entry)
+        g_last_binding_fast[slot].store(entry, std::memory_order_release);
+      return;
+    }
+  }
+  g_last_binding_fast_full.store(true, std::memory_order_release);
+}
+
 u32 InternBinding(u32 shader_va, const VertexDeclarationRecord &declaration, const u32 (&strides)[d3d::kMaxStreams]) {
   std::lock_guard lock(g_bindings_mutex);
   std::vector<u32> &ids = g_shader_bindings[shader_va];
@@ -511,6 +588,7 @@ u32 InternBinding(u32 shader_va, const VertexDeclarationRecord &declaration, con
         std::memcmp(b.declaration->elements.data(), declaration.elements.data(),
                     declaration.elements.size() * sizeof(GuestVertexElement)) == 0) {
       g_last_binding[shader_va] = id;
+      NoteLastBindingFast(shader_va, id);  // blur-nx (2026-11-17)
       return id;
     }
   }
@@ -519,8 +597,11 @@ u32 InternBinding(u32 shader_va, const VertexDeclarationRecord &declaration, con
   b.declaration = std::make_shared<VertexDeclarationRecord>(declaration);
   std::memcpy(b.strides, strides, sizeof(strides));
   const u32 id = u32(g_bindings.size());
+  if (id < kBindingPtrs)
+    g_binding_ptrs[id].store(&b, std::memory_order_release);  // blur-nx (2026-11-17): before the id is published
   ids.push_back(id);
   g_last_binding[shader_va] = id;
+  NoteLastBindingFast(shader_va, id);  // blur-nx (2026-11-17)
   static uint32_t rebinds = 0;
   if (ids.size() > 1 && (++rebinds <= 16 || rebinds % 1000 == 0))
     RGPU_INFO("Vertex shader {:08X} bound with layout {} of its own (declaration {:08X}, stride {}; {} such binds so far)",
@@ -533,14 +614,27 @@ u32 LastBindingOf(u32 shader_va) {
   static const bool on = REXCVAR_GET(banjo_renut_recorded_binds);
   if (!on || !shader_va)
     return 0;
+  // blur-nx (2026-11-17, blur_renut_bindings_lockfree): the table's answer, the map's as of the read.
+  if (BindingsLockFree() && !g_last_binding_fast_full.load(std::memory_order_acquire)) {
+    for (u32 i = 0, slot = (shader_va * 2654435761u) >> 18; i < kLastBindingSlots;
+         ++i, slot = (slot + 1) & (kLastBindingSlots - 1)) {
+      const uint64_t e = g_last_binding_fast[slot].load(std::memory_order_acquire);
+      if (e == 0)
+        return 0;
+      if (u32(e >> 32) == shader_va)
+        return u32(e);
+    }
+  }
   std::lock_guard lock(g_bindings_mutex);
   const auto it = g_last_binding.find(shader_va);
   return it != g_last_binding.end() ? it->second : 0;
 }
 
 void ApplyBindingLocked(u32 id) {
-  const RecordedBinding *b;
-  {
+  const RecordedBinding *b = nullptr;
+  if (BindingsLockFree() && id < kBindingPtrs)  // blur-nx (2026-11-17): stored before the id was handed out
+    b = g_binding_ptrs[id].load(std::memory_order_acquire);
+  if (!b) {
     std::lock_guard lock(g_bindings_mutex);
     b = &g_bindings[id - 1];  // (a deque: its elements stay where they are)
   }
@@ -686,6 +780,7 @@ u32 CreateShaderRecord(const be_u32 *function, bool pixel) {
   shader->entry = FindShaderEntry(shader->hash);
   shader->fetch_3d_mask = Fetch3DMask(container);  // kameo-nx (2026-11-03)
   shader->export_only = !pixel && ContainerIsExportOnly(container);  // vivapinata-nx (2026-11-03)
+  shader->fetch_filters = ScanFetchFilters(container);  // port 145 (tw2de_nx's, 2026-10-31)
   if (!shader->entry)
     CaptureMissingShader(container, pixel, shader->hash);
   NoteShaderSortKey(shader->self_va, shader->hash, ShaderSortableByHash(shader->hash, shader->entry, pixel));  // 2026-10-27
@@ -727,7 +822,9 @@ void RegisterGuestShader(u32 shader_va, u32 physical_va, bool pixel) {
   NoteShaderSortKey(shader_va, hash, ShaderSortableByHash(hash, sort_entry, pixel));  // banjo-nx (2026-10-27)
 
   // In order with the draws that use it (render thread).
-  render_thread::Queue([shader_va, pixel, hash, kind, fetch_3d_mask = Fetch3DMask(container.data()), export_only] {
+  const FetchFilterOverrides fetch_filters = ScanFetchFilters(container.data());  // port 145 (tw2de_nx's)
+  render_thread::Queue([shader_va, pixel, hash, kind, fetch_3d_mask = Fetch3DMask(container.data()), export_only,
+                        fetch_filters] {
     auto &shader = g_guest_shaders[shader_va];
     if (shader && shader->hash == hash && shader->kind == kind)
       return;
@@ -746,6 +843,7 @@ void RegisterGuestShader(u32 shader_va, u32 physical_va, bool pixel) {
     shader->entry = FindShaderEntry(hash);
     shader->fetch_3d_mask = fetch_3d_mask;  // kameo-nx (2026-11-03)
     shader->export_only = export_only;  // vivapinata-nx (2026-11-03)
+    shader->fetch_filters = fetch_filters;  // port 145
     PipelineShaderLoaded(shader->entry);
   });
   NoteInPlaceShader(shader_va, kind, sort_entry);  // blur-nx (2026-11-13, #13's fix): after the item above is queued

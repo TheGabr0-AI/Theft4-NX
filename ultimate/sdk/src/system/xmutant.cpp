@@ -14,6 +14,7 @@
 #include <rex/logging.h>
 #include <rex/stream.h>
 #include <rex/system/kernel_state.h>
+#include <rex/system/wait_registry.h>
 #include <rex/system/xmutant.h>
 #include <rex/system/xthread.h>
 
@@ -60,6 +61,8 @@ X_STATUS XMutant::ReleaseMutant(uint32_t priority_increment, bool abandon, bool 
                   handle());
     return X_STATUS_MUTANT_NOT_OWNED;
   }
+  // blur-nx (2026-11-14, rex/system/wait_registry.h): the stall dumps' record of this release.
+  waitreg::NoteSignalOf(this, waitreg::kRelease);
   if (mutant_->Release()) {
     return X_STATUS_SUCCESS;
   } else {

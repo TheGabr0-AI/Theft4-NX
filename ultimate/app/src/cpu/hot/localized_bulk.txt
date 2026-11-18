@@ -17,6 +17,11 @@
 # like U10's four (vector lane 0: copy fff0eeeb / original 7fc00001, three passes in a row; docs/switch-port/20,
 # section 2.18); in the 240 s run, 827F4BB0 (21 samples) the same way (copy 7fffffff / original ffffffff), and
 # 828DC908, whose copy took 827F4BB0 in as an inline member and differed with it.
+# Also left out (U17 -> U18, 2026-11-16, PC guard on the NEW-GAME path: intro film to the first drive, 560 s, which
+# the save runs never reach): 82221530 (a stored byte d4 / original d7: the low byte of a float, a rounding
+# difference, not a NaN), 8290F508, 8290F050, 8290E808 (vector lane 0: copy 7fc00001 / original ffffffff and the
+# reverse: a NaN payload), each three passes in a row. On the console the copies run in place with no guard, so they
+# stay generated code (docs/switch-port/20, section 2.25).
 82221358 3390 console samples, 34 instructions, 1 direct callees
 828C2D28 2389 console samples, 656 instructions, 3 direct callees
 828C6740 1966 console samples, 470 instructions, 1 direct callees
@@ -37,7 +42,6 @@
 8290CEA8 302 console samples, 218 instructions, 0 direct callees
 8289F2A0 288 console samples, 322 instructions, 0 direct callees
 823E61F0 263 console samples, 220 instructions, 0 direct callees
-82221530 216 console samples, 430 instructions, 3 direct callees
 82871130 193 console samples, 86 instructions, 1 direct callees
 8289A228 192 console samples, 264 instructions, 0 direct callees
 828969B0 190 console samples, 286 instructions, 3 direct callees
@@ -99,7 +103,6 @@
 827C0268 71 console samples, 156 instructions, 4 direct callees
 828AEB88 68 console samples, 216 instructions, 4 direct callees
 8284E950 68 console samples, 210 instructions, 1 direct callees
-8290E808 67 console samples, 92 instructions, 1 direct callees
 822F5AF0 64 console samples, 116 instructions, 4 direct callees
 8218CDE8 64 console samples, 112 instructions, 5 direct callees
 827F6750 63 console samples, 134 instructions, 0 direct callees
@@ -159,7 +162,6 @@
 82866698 33 console samples, 48 instructions, 2 direct callees
 82998000 32 console samples, 608 instructions, 4 direct callees
 829D12C0 32 console samples, 116 instructions, 2 direct callees
-8290F050 31 console samples, 124 instructions, 1 direct callees
 8216BEE0 31 console samples, 58 instructions, 4 direct callees
 82878140 31 console samples, 48 instructions, 3 direct callees
 823F7618 31 console samples, 118 instructions, 8 direct callees
@@ -189,7 +191,6 @@
 829A1260 25 console samples, 108 instructions, 0 direct callees
 828C0968 25 console samples, 124 instructions, 5 direct callees
 8289EC00 25 console samples, 131 instructions, 10 direct callees
-8290F508 25 console samples, 58 instructions, 2 direct callees
 8227FC78 24 console samples, 258 instructions, 4 direct callees
 828CFC78 24 console samples, 120 instructions, 3 direct callees
 827EEEC0 24 console samples, 44 instructions, 0 direct callees
@@ -313,3 +314,16 @@
 827BA478 12 console samples, 216 instructions, 3 direct callees
 82335680 12 console samples, 384 instructions, 4 direct callees
 82783D80 12 console samples, 186 instructions, 0 direct callees
+# Theft4-NX (U18 MAX, 2026-11-17): from the U18-1 console profiles (B0-B5, N; NRO 315669d3; tools/switch_hot_bulk.py --merge
+# --min-samples 12, then by hand: at least 50 samples and 40 instructions, none of the functions left out above or
+# by U18-1 (82221530 8290F508 8290F050 8290E808)). The PC guard of U18 MAX checks them. Left out after it (2026-11-17, PC run
+# cvt1 from the save, 3 passes in a row): 828DC908 and 828DDFD8, whose copies give another NaN in a vector lane than the
+# original (v8 lane: 7fc00001 against fff0eeeb), the same family as U10's four; they stay generated code. And 82890AF0
+# (154 samples, 180 vector float operations): never run on the PC (banjo_hot_count from the save), so the guard could not
+# check it: it stays generated code (U10's rule).
+828C1028 82 console samples, 42 instructions, 4 direct callees
+828D6118 70 console samples, 66 instructions, 0 direct callees
+821CAD90 68 console samples, 1094 instructions, 17 direct callees
+821DD718 54 console samples, 154 instructions, 4 direct callees
+8239D498 52 console samples, 184 instructions, 5 direct callees
+827312B0 50 console samples, 80 instructions, 1 direct callees

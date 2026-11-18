@@ -72,6 +72,24 @@ option(BLUR_FMADDS_SINGLE "Scalar fmadds and kin rounded once in single precisio
 if(NOT BLUR_FMADDS_SINGLE)
     add_compile_definitions(REX_FMADDS_DOUBLE_ROUNDING)
 endif()
+# renut-ultimate (2026-11-16, port 144; tw2de_nx's fix, off by default at the user's word): fnmadd / fnmsub and their
+# single forms with the PowerPC's sign of zero and NaN (sdk/include/rex/ppc/fpu_fma.h, tools/fnm_sign.py's
+# REX_FNEG_FUSED). GCC folds the generated -std::fma(...) into FNMADD / FMSUB, which give +0 where the 360 gives -0 and
+# negate a NaN result (Xenia's hardware-recorded tests: 160 cases). ON: the fused result kept by an empty asm, then
+# negated unless NaN (an instruction or two more a site; Katamari: 272 sites). A compile-time switch: retrain the PGO
+# profile.
+option(TW2DE_FNMADD_SIGN "fnmadd / fnmsub with the PowerPC's sign of zero and NaN (exact; off by default)" OFF)
+if(TW2DE_FNMADD_SIGN)
+    add_compile_definitions(REX_FNMADD_SIGN_EXACT)
+endif()
+# renut-ultimate (2026-11-16, port 144; tw2de_nx's, off by default at the user's word): vsl / vsr with a count per byte,
+# as the hardware shifts (rex/ppc/intrinsics.h REX_VSHIFT_PER_BYTE; Xenia's hardware-recorded tests: 453 of 475 vsl
+# cases with counts that differ between bytes). The same as before for the ISA's uniform counts; on AArch64 five NEON
+# instructions each (the default vsl goes through memory). Katamari: 112 vsr sites. Retrain the PGO profile.
+option(TW2DE_VSHIFT_PER_BYTE "vsl / vsr with each byte's own shift count, as the hardware (off by default)" OFF)
+if(TW2DE_VSHIFT_PER_BYTE)
+    add_compile_definitions(REX_VSHIFT_PER_BYTE)
+endif()
 # blur-nx (2026-11-12, codegen-ideas-3 CG-13; the user: "build CG 13 ... it probably should be off by default"): all guest
 # float code with the host's flush mode on (rex/ppc/context.h, rex/ppc/diet_ops.h): no `msr fpcr` switch in the game code
 # after a thread's first, and the any-mode float helpers as the plain operations. NOT bit-exact: the Xenon's scalar FPU
@@ -126,6 +144,17 @@ if(BLUR_CARD_VIEWS_ONLY)
     add_compile_definitions(REX_CARD_VIEWS_ONLY)
 endif()
 include(generated/rexglue.cmake)
+# Port 158 (from fnxf_xiii, its note of 2026-10-26): the function registration (generated/renut_register.cpp, one
+# function of about 44,000 SetFunction calls, run once at start) without optimisation in the Switch build. GCC's
+# optimisation of it was the build's critical path: 1,171 s of a 1,195 s full Switch build (Katamari, 2026-11-18;
+# fnxf_xiii: 81 minutes at -O2). Appended to the generated sources' options, so it comes after their -O level and
+# wins. Without the precompiled header: GCC does not use a PCH made with optimisation in an -O0 file ("__OPTIMIZE__ not
+# defined"); renut_init.h includes renut_pch.h itself. LTO keeps each function's own level. OFF: as before.
+option(BANJO_REGISTER_O0 "Switch: the function registration file at -O0, without the PCH (build time)" ON)
+if(BANJO_REGISTER_O0 AND REXGLUE_PLATFORM_SWITCH AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/generated/renut_register.cpp")
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/generated/renut_register.cpp" APPEND PROPERTY COMPILE_OPTIONS -O0)
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/generated/renut_register.cpp" PROPERTY SKIP_PRECOMPILE_HEADERS ON)
+endif()
 
 # banjo-nx (from sa2-nx): the optimised codegen. The build re-runs the generator by itself whenever an input in
 # codegen.d changes (renut_config.toml with the codegen keys, the xex, the generator binary). That rewrites
@@ -163,6 +192,8 @@ endif()
 set(RENUT_SOURCES
     src/main.cpp
     src/katamari_keys.cpp
+    src/game_menu.cpp  # blur-nx (2026-11-18): the game menu (A+B+X+Y+L+R on the Switch, F8 on the PC)
+    src/blur_small_alloc.cpp  # blur-nx (2026-11-17, #220; port 151): small C++ allocations per thread (Switch; 32 MB)
     # katamari-nx (2026-10-31): DLC packages in the "dlc" folder next to the NRO installed at start (reNut upstream's).
     src/renut_engine/dlc_install.cpp
 	src/renut_engine/FPS.cpp
@@ -823,6 +854,22 @@ target_sources(renut PRIVATE
 # Precompiled SPIR-V of the SDK presenter (vulkan_spirv/guest_output_*): the native renderer draws the game
 # image into the presenter output with it.
 target_include_directories(renut PRIVATE "${REXSDK_DIR}/src/ui/shaders")
+# blur-nx (2026-11-18, the game menu's font option): Dear ImGui's misc/fonts as byte arrays (game_menu_fonts.h). Their
+# licences: THIRD_PARTY_NOTICES.md.
+set(_blur_menu_fonts_dir "${REXSDK_DIR}/thirdparty/imgui/misc/fonts")
+set(_blur_menu_fonts_text "// Made by app/CMakeLists.txt from ${_blur_menu_fonts_dir} (do not edit).\n#pragma once\n")
+foreach(_pair "kMenuFontProggyTiny:ProggyTiny.ttf" "kMenuFontRoboto:Roboto-Medium.ttf" "kMenuFontKarla:Karla-Regular.ttf"
+              "kMenuFontCousine:Cousine-Regular.ttf")
+    string(REPLACE ":" ";" _parts "${_pair}")
+    list(GET _parts 0 _var)
+    list(GET _parts 1 _file)
+    file(READ "${_blur_menu_fonts_dir}/${_file}" _hex HEX)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _hex "${_hex}")
+    string(APPEND _blur_menu_fonts_text "alignas(4) static const unsigned char ${_var}[] = {${_hex}};\n")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_blur_menu_fonts_dir}/${_file}")
+endforeach()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/game_menu_fonts/game_menu_fonts.h" "${_blur_menu_fonts_text}")
+target_include_directories(renut PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/game_menu_fonts")
 
 foreach(_dep imgui xxhash renderdoc)
     if(TARGET ${_dep})

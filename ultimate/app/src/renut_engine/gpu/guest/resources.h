@@ -13,6 +13,7 @@
 
 #include "renut_engine/gpu/d3d/d3d.h"
 #include "renut_engine/gpu/guest/guest_records.h"
+#include "renut_engine/gpu/render/fetch_filters.h"  // port 145
 #include "renut_engine/gpu/render/vertex_format.h"
 #include "shader_cache.h"
 
@@ -107,6 +108,11 @@ struct ShaderRecord {
   u32 fetch_strides[d3d::kMaxStreams] = {};
 
   std::mutex host_mutex;  // building host
+
+  // renut-ultimate (2026-11-16, port 145; tw2de_nx's): its texture fetches' own filters (render/fetch_filters.h),
+  // read from the microcode when made; used with banjo_renut_fetch_filters (off by default). At the end: the fields
+  // every draw reads stay in the record's first lines.
+  FetchFilterOverrides fetch_filters;
 
   bool pixel() const { return kind == RecordKind::PixelShader; }
 };

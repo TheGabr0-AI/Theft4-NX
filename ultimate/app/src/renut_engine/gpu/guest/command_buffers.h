@@ -63,6 +63,7 @@ std::string ReplayRepeatCensusReport();
 // banjo-nx (2026-10-28, banjo_renut_diag_packet_census): replayed draws a whole-state keyed cache would answer.
 std::string PacketCensusReport();
 std::string StateSourceReport();  // banjo-nx (2026-10-26, banjo_renut_diag_fast_census)
+std::string RecordLockReport();  // blur-nx (2026-11-17): NewOp's memo census and the record lock's slow paths
 
 // Copies the data of the device's recorded Begin*Vertices draw, if any. Any
 // thread, with or without State().mutex.

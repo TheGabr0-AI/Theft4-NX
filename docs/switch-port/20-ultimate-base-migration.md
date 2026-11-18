@@ -1768,6 +1768,346 @@ generato: tipi 2, 3 e 5): difetto latente dell'SDK, da correggere quando lo si t
 
 **Prossimo ciclo (U18), proposto, nessuna build Switch senza autorizzazione:** in `19-optimization-matrix.md`.
 
+### 2.26 U18-1: la build Switch autorizzata, il pacchetto B0-B5, V, N (2026-11-16; build sul PC, nessun run su console)
+
+**Contenuto (autorizzato dall'utente: gruppi 142, 143, 145, 146, 147 + le quattro copie tolte; niente 144, LTO, PGO,
+mixer; C1/C2 escluse; fast draw acceso).** Base `168baa6` (U17). Le patch di `out/u18-prep` ricontrollate prima: hash
+uguali a `README-U18-prep.txt`, ognuna e tutte insieme `git apply --check` pulite; i simboli che usano (`GetFlagByName`,
+`RexGmBase/RexGmSize`, store cards, `nwindowCancelBuffer` di libnx) esistono nel nostro albero.
+
+**Rigenerazione (fatto, misurato).** Le copie sono scritte "in place" nei file generati: togliere le quattro dalla lista
+richiede `tools/ultimate/regenerate.ps1` completo (codegen 74 s, `post_codegen.py` 1.162 s; manifest
+`ultimate-manifests/gen-u18-1.json`, 922 file, 37.067 funzioni, hash combinato `336793fad70bfb28`). Prima, l'albero U17 copiato
+in `ultimate/out/generated-u17-backup` (930 file). Confronto completo dei due alberi (`gen_compare.py`):
+- tolti solo `hot/n_82221530`, `n_8290E808`, `n_8290F050`, `n_8290F508` (`.h` e `.blocks.json`) e le loro righe in
+  `banjo_hot_bulk_*.inc`;
+- cinque copie che le chiamavano (`n_8290EF68`, `n_822828B0`, `n_823DB1E8`, `n_825EBA50`, `n_8266F3D0`): ora riscrivono al
+  ritorno i registri che la funzione generata può leggere (`ctx.r10 = l_r10` ecc.), atteso;
+- **87 `REX_LOOP_BARRIER()` in meno** (17.914 -> 17.827) in 39 etichette: un controllo indipendente
+  (`barrier_check.py`, raggiungibilità sulle `goto`) dice che **nessuna è un ciclo**: dall'etichetta si arriva solo a un
+  `return`. L'albero U17 le aveva perché il passaggio U16 di `post_codegen.py` girò su testo già elaborato
+  (`REX_LEAF_DEAD_R` non letto come ritorno: barriera prudente). Nessuna barriera di un ciclo vero è sparita;
+- 12 righe del flusso della modalità flush in 3 funzioni (`828B7ED8`, `828B0080`: un cambio di modalità ora dimostrato
+  inutile, `REX_FLUSH_KNOWN_*`; `82229488`: di nuovo esplicito); `renut_pch.h`: lo stesso blocco `F64ANY` spostato e il
+  censimento CAS solo con `REX_NX_CENSUS_ON` (mai definito nelle build). Da verificare con la guardia sul PC (sotto).
+
+**Build Switch (fatto).** `tools\ultimate\build_switch.bat everyday`, `THEFT4_SWITCH_JOBS=1`, `THEFT4_BUILD_LABEL=u18-1`,
+nessun'altra build in corso: 363 passi, 86 minuti, nessun errore; gli avvisi sono quelli dell'SDK in una ricompilazione
+completa (nei file dei port: solo l'espressione originale di `XFile::ReadScatter` riformattata, ramo nuovo spento).
+Stamp `168baa62b651-dirty+u18-1`. Pacchetto `out/console-runs/u18-1` (`package_switch.py --allow-dirty`, manifest
+`ultimate-manifests/switch-u18-1.json`, cache DKSH U10):
+
+| File | Byte | SHA-256 |
+|---|---|---|
+| `COPY_TO_SD/switch/theft4-ultimate/theft4-ultimate.nro` | 65.235.141 | `315669d34192752e61a38d8334f7640fc1b5e5546eb87382087804b923ea39d2` |
+| `theft4-ultimate.elf` | 82.285.744 | `be4b450863d4a6a13f7a6ad027f80767ad7ccb7f764020cc99d3056c4d67552e` |
+| `deko3d_shaders.bin` (U10, invariata) | 51.766.560 | `438346a3…` |
+| `u18-1-uncommitted.patch` (il codice contro `168baa6`, 34 file, `git apply --check --reverse` pulito) | 101.894 | `0ecf0cbf…` |
+
+**Gruppo 147 tolto dopo la build (fatto).** La build PC si ferma su `sdk/src/rexglue/commands/test_recompiler.cpp` del 147:
+usa `RecompilerConfig::vcmpbfpCr6Exact` e `vupkd3dExact`, che arrivano col **144** (escluso). È una dipendenza 147 -> 144 che
+`git apply --check` non vede (file disgiunti). Il 147 (strumenti di test PowerPC, generatore host `rexglue`) non entra
+nell'NRO: tolto dall'albero con `git apply -R`; `ninja -n` nella cartella Switch dice "no work to do", quindi **l'NRO
+`315669d3…` è identico senza il 147**. Il 147 va con il 144 (U18-2).
+
+Gli hash dei toml, del README e della patch sono in `SHA256SUMS-U18-1.txt`; le istruzioni per la scheda in
+`README-U18-1.txt`. U16 (`4424ac8a…`) e U17 (`15da0fff…`, 0 discordanze con `SHA256SUMS-U17.txt`) intatti.
+
+**Varianti (verificate: ogni chiave esiste come cvar nell'ELF; ogni toml differisce dal suo riferimento solo nelle chiavi
+elencate; in tutti core 3 = 0, fast draw acceso, 720p fissi; `u18_verify.py`).** Base: il toml di U17-A. Nell'ELF le quattro
+copie non ci sono più (nessun simbolo `n_<indirizzo>`).
+
+| Run | Rispetto a | Differenza |
+|---|---|---|
+| B0 | U17-A | le 11 chiavi nuove come prima dei port (`banjo_renut_stream_redeem`, `_dynamic_texture_rows`, `_keep_unused_targets`, `banjo_deko3d_native_16bit`, `banjo_async_present`, `thread_mutant_release_lockfree`, `filesystem_bounce_guest_only` = false; `filesystem_bounce_piece_mb` = 1; `kernel_deferred_overlapped_delay_ms` = 100; `kernel_overlapped_reset_event`, `xmp_poll_throttle` = false): cambia solo il codice |
+| B1 | B0 | 146: pezzi da 4 MB, buffer host diretti, mutant senza mutex |
+| B2 | B0 | 145: stream redeem, righe di texture, target tenuti |
+| B3 | B2 | 145: texture a 16 bit native |
+| B4 | B0 | 145: present asincrono |
+| B5 (facoltativa, dopo B0) | B0 | 143: overlapped senza 100 ms, reset dell'evento, XMP throttle |
+| V (viste) | B0 | `banjo_deko3d_push_constants_verify`, `banjo_renut_fast_draw_verify`, `_chain_reuse_verify`, `_texture_slot_skip_verify`, `_store_cards_verify`; raffiche 3 ogni ~2 s, 60 |
+| N (nuova partita) | B0 | catture ogni 15 s, 60; procedura di `run-protocol.md` "Dalla U18" |
+
+`banjo_deko3d_txq_verify` resta fuori da V: dipinge di magenta e compila varianti a run (cambierebbe l'immagine).
+
+**Verifica sul PC (stesso albero, build PC a 3 job dopo quella Switch; D3D12, chiavi nuove ai default della base).**
+- Nuova partita (cartella utente vuota, 560 s, `out/pc-runs/u18-1-newgame`): copie native **0 differenze** (271 raggiunte e
+  accese, 241.348 chiamate confrontate; U17 sullo stesso percorso: 4), controlli del codice generato 0, specchio di r1 0,
+  inoltri dello stack 0 su 71,9 M; la missione parte come prima (Niko al volante, percorso sul radar, 420 s).
+- Salvataggio copiato (240 s, `out/pc-runs/u18-1-save`): copie 0 differenze (267), **flusso della modalità flush: 2,22
+  miliardi di controlli dimostrati, 0 hanno dovuto cambiare modo** (le 12 righe cambiate dalla rigenerazione sono giuste),
+  codice generato 0, ripristino in due passaggi 26.001 / 0 in nove; la stanza come prima.
+- Non dice nulla sui percorsi solo-console (deko3d, file system Switch, present asincrono): quelli li misurano B0-B4.
+
+### 2.27 U18 MAX-A: le run U18-1 lette, la causa dell'alone intermittente, le ottimizzazioni integrate in una build (2026-11-17; PC provato, NRO costruita, nessun run su console)
+
+**Richiesta dell'utente (U18 MAX):** basta run isolate; una build con tutte le ottimizzazioni trasferibili attive
+(MAX-A), al massimo 2-3 sessioni su console in tutto (MAX-B solo per una regressione concreta, MAX-C solo se
+indispensabile); audio e lampeggiamenti affrontati ora; nessun commit prima della prova su console.
+
+**Le run U18-1 lette (B0-B5, V, N; nessuna nota dell'utente nelle cartelle).** Mediane per scena (`u18_scenes.py`,
+lo stesso metodo di U17; il garage manca dove il percorso non lo raggiunge):
+
+| run | cucina fps / GPU ms | strada fps / render thread ms | filmato fps | audio strada | mixer (% di un core) |
+|---|---|---|---|---|---|
+| U17-A | 24,6 / 39,2 | 9,4 / 53,9 | 25,1 | 98,0 % | 106 |
+| U18-B0 | 25,2 / 38,7 | 9,7 / 47,9 | 24,2 | 94,0 % | 107 |
+| U18-B1 (146) | 30,7 / 25,2 (2 finestre) | 9,2 / 54,1 | 24,6 | 95,7 % | 110 |
+| U18-B2 (145 render) | 24,1 / 40,6 | 8,5 / 55,0 | 24,8 | - | - |
+| U18-B3 (+16 bit) | 25,2 / 31,5 | 9,5 / 51,6 | 25,6 | 97,0 % | 98 |
+| U18-B4 (async present) | 25,5 / 38,3 | 9,5 / 50,2 | 25,1 | 95,5 % | 106 |
+| U18-B5 (143) | 24,0 / 38,3 | 10,0 / 49,4 | 28,0 | 96,4 % | 106 |
+
+Nessun port 142-146 cambia in modo misurabile un fps o l'audio, nessuno peggiora: restano accesi (default della
+base). B3 (texture native a 16 bit) contro B2 nelle stesse inquadrature: catture identiche (schermate di caricamento,
+porta d'ingresso), nessun colore sbagliato. **Run N (nuova partita): la prima missione parte sulla console**: dopo i
+titoli Niko guida il taxi di Roman, radar col percorso giallo, suggerimenti a schermo (catture 23-25, 351-382 s): la
+questione aperta da U17 (le quattro copie diverse dall'originale, tolte in U18-1) è chiusa. Strada: tre core saturi (~354 %), thread di gioco a 0x3B ~128 %, mixer
+~105 %, render thread di Renut ~59 %, main ~41 %.
+
+**L'alone della lampada: la causa dell'intermittenza.** Run V (le verifiche del renderer accese): nel log 8 righe
+(il tetto del log) `banjo_renut_fast_draw_verify: the kept or cached pipeline key differs from the one made`, a 48 s,
+subito dopo un ripristino EDRAM della depth, su draw di sola depth/stencil (VS `A97B1F043F720396`, `22F0AB2B742F2053`).
+E con la correzione della verifica (V usa la chiave rifatta) la zona dentro il disco della lampada resta **95,4 in ogni
+cattura per 30 s a camera ferma** (69-98 s, tre catture a raffica ogni 2 s), dove U17-G0 senza verifica alternava
+60,8 / 78,8 dentro la stessa raffica. Nel codice: `MakeKey` mette nei bit 4-31 di `PipelineKey::reserved` il bit gamma
+e il bias d'esponente di ogni target (regola di Halo 3, accesa), ma `RenderStateIdLocked` (il numero con cui il
+percorso veloce trova la pipeline in `FastPipeline` e decide di tenere quella del draw prima, `key_rs_epoch`) firma i
+target solo per formato host e campioni: due draw con lo stesso stato su target dello stesso formato ma bias diverso
+(GTA IV: i target HDR hanno bias -1, 925 = 63; 111 delle 245 coppie di shader della lista V esistono con 925 = 0 e 63)
+condividono il numero, e il secondo disegna con la pipeline del primo (alfa per 2^-1 o no). Secondo buco: un target
+riassociato con un altro `ColorInfo` (stessa EDRAM, stesso formato, bias diverso) veniva aggiornato senza far avanzare
+l'epoca delle superfici. Solo deko3d (D3D12 non ha il percorso veloce): torna con "solo console".
+- **Correzione** (`render/draw.cpp` `RenderStateIdLocked`: `sig[7]` = gli stessi bit gamma/bias di `MakeKey`;
+  `render/surfaces.cpp`: epoca delle superfici avanzata quando `color_info_word` cambia davvero; la verifica ora scrive
+  il primo byte diverso e i due `reserved`, fino a 32 righe). Da provare sulla console (run L e P).
+- **Il disco in sé è un'altra cosa:** sul PC (D3D12, stessa build, stesso salvataggio, camera girata sulla lampada,
+  `pc-route1`) attorno alla lampadina c'è un alone morbido, sulla console un disco bianco uniforme a bordo netto (V lo
+  mostra fermo). Candidati sul PC (draw additivi ONE/ONE a 1280x720 nel frame della lampada): PS `23C88DA6F953E36B`
+  (11 draw), `AEB7F20FE3E5BEA9`, `55C44C1D9AF1FE91`, `458818340E2283DE`, `FD19EBDD8F6E207A`, `8E604F2EC70ED37A`. Due meccanismi solo console
+  mai riprovati dopo la correzione della luce spiegherebbero un disco piatto e circa il doppio della luminanza del PC
+  (60,8 / 78,8 contro 30-37): la regola di Halo 3 (`halo3_renut_target_gamma_bias`: scrittura codificata gamma nei
+  target di formato gamma e alfa per 2^bias, solo SPIR-V; il PC non ha né l'una né l'altra; U9-C2 la provò a luce
+  ancora sbagliata) e la saturazione 7e3 di Dishonored (`dishonored_renut_clamp_7e3`: un plateau HDR tagliato a 31,875
+  è un disco uniforme). Nessuna build in più: due run facoltative di 2 minuti nella stessa sessione, **L2** (regola di
+  Halo 3 spenta) e **L3** (saturazione spenta), ferme sulla lampada. Escluso: l'alpha-to-coverage reso test (port 127:
+  nessun draw del frame della lampada ha `a2c`).
+  **Indizio forte (lista delle pipeline di V):** GTA IV non ha target di formato gamma (la costante 924 non compare mai),
+  ma gli shader additivi delle luci candidati (`23C88DA6…`, `AEB7F20F…`, `2673E2AF…`, ONE/ONE) esistono in due varianti:
+  per il target HDR con bias -1 (`925=63`, nessuna saturazione) e per un target con bias 0 **con la saturazione 7e3**
+  (`990=1`, uscita tagliata a 31,875). Una luce forte tagliata a 31,875 è un plateau piatto, cioè un disco uniforme dal
+  bordo netto; il PC (nessuna saturazione) disegna la sfumatura. E il buco del bias faceva scambiare al percorso veloce
+  proprio queste due pipeline: disco presente / assente, i "due stati" di U17. Con la correzione ogni draw tiene la sua
+  variante: L dice se il disco resta (luce disegnata nel target con bias 0) o sparisce; L3 prova la saturazione da sola.
+
+**Il mixer (thread a 0x2D, 100-110 % di un core: il limite dell'audio).** Campioni PC del thread in B0 (5.295):
+router `8216D7E0` 28,7 % (62 % di esso nel ciclo del nativo XAudio di U10, già NEON a 16 campioni per passo: niente da
+togliere), `828C6740` 15,5 %, `828C2D28` 14,1 %, `828C5A58` 12,1 %, `82185E38` 9,1 % (PCM -> float già vettoriale),
+`828C7848` 4,4 %. Dal PowerPC:
+- `sub_828C6740` è un **riverbero tipo Freeverb**: 8 comb (1116 1188 1276 1356 1424 1491 1556 1616) e 4 allpass
+  (556 440 340 224), quattro campioni per vettore VMX, la ricorsione dello smorzamento come prodotti 4x4
+  (`vmsum4fp128`). Nella copia, per comb e per passo: due tabelle di puntatori lette con byte-swap, l'indice letto due
+  volte, un `divwu` per l'anello, lo stato riletto dallo stack, una card per store: ~80 istruzioni attorno a ~25 di
+  aritmetica.
+- `sub_828C5A58` è un **limiter con look-ahead**: per ognuno dei 256 campioni il picco |x| su una finestra di 21
+  campioni (20 di storia + il canale) con un ciclo `fabs` / `fsubs` / `fsel` (ogni `fsel` = conversione single->double,
+  test intero dei bit, due select: ~300 istruzioni a campione), poi inviluppo, guadagno con divisione.
+- `sub_828C2D28` sono due biquad in cascata con stato e coefficienti dallo stack a ogni campione: candidato seguente
+  (risparmio stimato 4-5 %, la catena `fmadds` resta).
+
+**Nativi audio (bit-exact).** Scritti da script che leggono la copia stessa (`tools/ultimate/gen_reverb_native.py`,
+`gen_limiter_native.py` -> `app/src/cpu/hot/gta4_reverb_native.inc`, `gta4_limiter_native.inc`), nelle liste
+`hand.txt` / `localized.txt`, chiavi `gta4_hand_reverb`, `gta4_hand_limiter` (accese):
+- riverbero: le istruzioni della copia, con i due nidi di cicli (comb, allpass) che tengono tabelle, indici, lunghezze
+  e stati nei registri per gli 8 passi, le stesse operazioni simde e `REX_VMADDFP` nello stesso ordine, ogni load e
+  store dei buffer nell'ordine originale, l'anello senza divisione salvo indice + 4 >= 2 x lunghezza, ogni registro
+  lasciato come l'originale (`exact=` tutti i 33). Torna alle istruzioni originali se una lunghezza è 0 o se una scrittura
+  del blocco tocca qualcosa che il blocco legge una volta sola. **PC, guardia densa (240 s dal salvataggio): 4.026
+  chiamate confrontate con le istruzioni originali, 0 differenze** (ogni store e i 33 registri).
+- limiter: per canale le 276 parole della finestra raccolte una volta (bit di segno tolti), per campione il picco come
+  massimo delle parole (per valori non NaN `fsel(m - |x| >= 0, m, |x|)` nell'ordine originale è esattamente il
+  massimo, e per single non negativi l'ordine dei valori è quello dei bit); le istruzioni originali per un canale con
+  un NaN, per l'ultimo campione di ogni canale (registri come l'originale) e se l'uscita si sovrappone agli ingressi. La
+  guardia non può confrontarlo (due chiamate reali del timebase prima del ciclo). **Verifiche:** contatori dei blocchi
+  sul PC (`banjo_hot_count`): ciclo dei campioni 18,3 M volte, cicli della finestra solo 71.624 (= l'ultimo campione di
+  ogni canale): il percorso veloce gira; modello esatto delle macro generate (`REX_FSUBS`, `GeZeroAnyMode`) contro il
+  massimo su 240.000 finestre casuali e di casi limite (denormali, infiniti, zeri, pareggi): **0 differenze**
+  (`scratchpad/limiter_check.py`). La chiave `gta4_hand_limiter_verify` (controllo di ogni campione) non ha preso il
+  valore dalla riga di comando del PC: da capire, non usata.
+
+**Le altre fonti.**
+- **Base `53bc36a3` (port 148-156, 2026-11-17).** 148 (lavoro CPU di Renut): integrato, ma GTA IV **non registra
+  command buffer** (B0: 0 draw "replayed", ogni draw è una copia intera del device da ~12 KB, ~280 MB/s): binds senza
+  lock e lock del record non si applicano; la metà "semafori su indirizzo" del port è tolta (il nostro
+  `thread_semaphore_address_wait` di U9/U10 resta, è quello che ha raddoppiato la cucina). 149 (hand-over della griglia
+  dei campioni), 151 (allocatore dei blocchi piccoli, 32 MB), 152 (coda APC senza lock), 153 (registro delle attese,
+  diagnostica), 154 (strumenti), 156 (frame contati allo Swap): integrati. 150 (codegen): CAS e fence nelle orderings del
+  PowerPC (63 CAS, 0 `isync` nel codice di GTA IV; 9 sync, 48 lwsync, 14 eieio), 154 load double nell'unità vettoriale,
+  **cache per sito delle chiamate indirette (CG-08): 14.161 siti** dopo una correzione di `tools/indirect_calls.py`
+  (in GTA IV la riga del `bctrl` finisce con `REX_R1_ASSUMED();` e il generatore scrive `ctx.lr = ...` tra il commento
+  e la chiamata: nessun sito era mai stato riconosciuto, né per le promozioni né per la cache). 155: le parti 2-3
+  integrate; la parte 1 (`blur_renut_target_bias_rgb`, colore scalato per il bias) **spenta per GTA IV** in
+  `gta4_switch_defaults.toml`: il PC disegna GTA IV giusto senza alcuna regola di bias e accenderla vuole un pacchetto
+  di shader e una cache DKSH nuovi.
+- **144** (`spin_hint_yield`, opzione del generatore): accesa in `renut_config.toml`, 12 siti (`db16cyc` di XAudio
+  `8216C750`, `82169D90` e di D3D `829CFE80`, `829DD928`); forme NEON di NORMSHORT2 in 9 siti. **147** (strumenti di
+  test PowerPC): integrato, fuori dall'NRO.
+- **FINAL FANTASY XIII (`recomp-nx/fnxf_xiii` `c88f574`):** 30 fps a clock standard con build O3 + LTO + PGO "batched"
+  (codice generato in file da ~1 MB, build propria). Conversione dei vertici su GPU (`stream_convert_cs`: per GTA IV
+  `ConvertVertices` è l'1,7 % del render thread), lock nativi, FSR3: nessuno è il collo di bottiglia misurato qui.
+- **LibertyRecomp:** lo studio dei use-after-free (`uaf-handle-investigation`) riguarda il suo eseguibile (gli indirizzi
+  di `grcDraw` cadono, nel nostro, nel codice audio) e un crash che le nostre run non mostrano: niente da portare.
+- **Copie macchina:** 9 nuove dai profili U18-1 (almeno 50 campioni e 40 istruzioni, nessuna delle escluse prima); la
+  guardia del PC ne ha trovate 2 diverse dall'originale in un NaN di una lane (`828DC908`, `828DDFD8`: già escluse in
+  U12, i commenti non le avevano fermate): tolte; e `82890AF0` (180 operazioni float vettoriali, la stessa famiglia) non gira
+  mai sul PC dal salvataggio (`banjo_hot_count`): non verificabile, tolta (regola di U10). Restano 6 (`828C1028`,
+  `828D6118`, `821CAD90`, `821DD718`, `8239D498`, `827312B0`), tutte raggiunte e confrontate dalla guardia.
+
+**Escluso, con il motivo:** C1/C2 (mixer sul core 3: le cause, il core condiviso col sistema e la fame del file system,
+non sono risolte); fast draw spento (costa l'11 % in strada; ora corretto); prefetch del mix (nessuna implementazione
+diversa); `audio_switch_pump_pairs` / `_frames` (latenza +5,3 ms per frame e parametri aggiornati la metà delle volte:
+non è una scelta del DSP ma cambia il tempo, non presa senza l'utente); `BLUR_FPCR_ONE_MODE` (non bit-exact sui
+denormali scalari); `thread_event_spin` (rumore in Blur); `BLUR_LOCALIZE_ABI_TRUST` (quasi esatto); **LTO e PGO**: la
+LTO è una build intera in una cartella propria (FFXIII, la base) con un picco di memoria al link non misurato su 16 GB
+a 1 job (~1,5-2 h in più), e la PGO vuole prima una sessione su console con l'NRO strumentata: entrambe proposte come
+passo dopo MAX-A, non dentro.
+
+**Priorità XAudio:** `gta4_xaudio_thread_priority = 45` (0x2D) ora nella NRO (ogni run da U11 la aveva nel toml); il
+nuovo mixer costa meno CPU, quindi la stessa priorità ruba meno ai thread di gioco.
+
+**Verifiche sul PC (D3D12, stesso salvataggio di U16-U18).** Guardia densa 240 s (`banjo_hot_guard_calls` 4000,
+periodo 64), due run: 274 copie su 296 raggiunte, 1,40 M chiamate confrontate, 0 differenze (guard1); sull'albero
+finale meno `82890AF0` 272 su 294, 1,42 M, 0 differenze, riverbero 4.028 confronti, 0 differenze (guard2); controlli del codice generato
+(costanti piegate, r1 mirror, stack forward) 0 differenze. Run cvt1: le 2 copie NaN trovate (sopra). Percorso: la
+lampada, la porta, il corridoio disegnati come prima (catture `pc-route1`, `pc-route2`); il resto del percorso fino
+alla strada non si fa alla cieca con `input_script` (Niko si ferma contro un mobile del corridoio): lo fa la run L.
+
+**Build e pacchetto (fatto, controllato).** Rigenerazione completa quattro volte (le ultime due per togliere le copie
+trovate dalla guardia): l'ultima 935 file, 37.067 funzioni, hash combinato `7a3bef565100e1ea`
+(`ultimate-manifests/gen-u18-max.json`). Build PC (clang) e Switch (GCC devkitA64, 1 job, 224 passi, 74 min) senza
+errori. **NRO `4485221b…` (67.102.917 byte), stamp `168baa62b651-dirty+u18max-a`.** Controllato nell'ELF, non solo nei
+sorgenti: i due nativi (`n_rage_reverb::Native`, `n_rage_limiter::Native`), la sezione `rex_site_cache` (116.200 byte,
+14.525 parole), 13 chiamate a `rex_spin_hint`, `blur::small_alloc`, `rex::system::waitreg` (port 153), le impostazioni
+incorporate (`gta4_xaudio_thread_priority = 45`, `blur_renut_target_bias_rgb = false`). Pacchetto
+`out/console-runs/u18max-a` (`tools/ultimate/package_switch.py --allow-dirty`, manifest `switch-u18max-a.json`): NRO,
+ELF, map, toml A / L / P / L2 / L3, cache U10 `438346a3…` (la stessa di U18-1), `README-U18MAX-A.txt`, la patch delle
+modifiche tracciate e lo zip dei 56 file nuovi (gli script `.py` nuovi sono ignorati da git: vanno aggiunti con `-f`),
+`SHA256SUMS-U18MAX-A.txt`, i log delle build e della guardia. Niente committato (richiesta dell'utente: dopo la prova
+su console).
+
+### 2.28 U18 MAX-A letto sulla console; il disco della lampada spiegato; MAX-B: porte 157-181, clamp 7e3 spento per GTA IV, barriera delle texture nei vertex shader, nativo del filtro audio (2026-11-18)
+
+**Identità.** NRO SHA-256 `4485221B57BF…`, stamp `168baa62b651-dirty+u18max-a` in tutte e cinque le run (A, L, L2, L3, P);
+nel log di ogni run: `gta4_hand_limiter: ON`, `gta4_hand_reverb: ON`, `[window blocks]` e `[code blocks]` (memoria del
+gioco e codice dell'NRO su blocchi da 2 MB), 0 compilazioni in A e P, 0 draw in attesa di compilazione in tutte.
+
+**Misure (A e P contro U18-B0 e U17-A; `u18_scenes.py`, `mixcost.py`, `street_agg.py`, `cores.py`).** La run A è più
+corta del percorso (~180 s: cucina ~10 s, strada, filmato, niente garage): la cucina si legge da P.
+
+| scena | U17-A | U18-B0 | MAX-A | MAX-P |
+|---|---|---|---|---|
+| cucina fps / GPU ms | 24,6 / 39,2 | 25,2 / 38,7 | (10 s) | 25,8 / 37,6 |
+| strada fps (p10) / thread di rendering ms / draw | 9,4 (7,8) / 53,9 / 4747 | 9,7 (7,9) / 47,9 / 4038 | 9,3 (7,4) / 59,0 / 4616 | 9,3 (7,7) / 62,5 / 4475 |
+| filmato fps | 25,1 | 24,2 | - | 24,5 |
+| CPU strada (400 % = 4 core) | 350 % | 354 % | 346 % | 349 % |
+
+Strada: nessun guadagno misurabile di fps (differenze dentro lo scarto fra percorsi). I core 0-2 restano saturi (mask
+0x7 + render thread sul core 1: 338 % su 300 % disponibili misurati con le scale del profiler); il thread di rendering
+dell'host costa ~12,6 µs per draw contro 11,9 di B0 (+6 %), da guardare con il batch dell'host (porta 177).
+
+**Audio (il risultato reale dei due nativi).** Mixer (thread a 0x2D): 4,37 ms per blocco in A e 4,44 in P contro 5,12
+di U18-B0 e 4,94 di U17-A (-15 %); CPU del mixer 92-96 % di un core contro 102-106 %; attese nel kernel 14-15 % contro 5-7
+%; consegna 100 % dei blocchi (A: 0-6 richieste senza dati ogni 10 s) contro 92,8 % di B0. Per funzione, strada, % di un
+core: limiter 12,5 -> 2,5 (nativo), riverbero 15,7 -> 12,7 (nativo: le combs sono limitate dalla memoria), router
+`8216D7E0` 30,5 -> 31,6, filtro `828C2D28` 16,0 -> 16,3, `82185E38` 10,0 -> 10,1, `828C7848` 4,9 -> 5,6. Il router è il mix
+XAudio già nativo e vettoriale (16 float per iterazione; i campioni cadono su `ldp`/`stp`: limite di memoria, non di
+calcolo). Il thread audio RAGE (`828A0A38`, `8289F7A8`) sale da 19,8 a 28,1 % di un core: con la consegna al 100 % lavora a
+ogni richiesta. Stima del ciclo precedente: 105 -> 85 %; reale: 102 -> 92-96 %.
+
+**Il disco della lampada: causa.** Le catture di L (clamp acceso) mostrano un disco chiaro dal bordo netto attorno alla
+lampada che compare e sparisce fra catture a 120 ms (zona 70-93 di luma nella stessa raffica); L2 (regola halo3 spenta)
+uguale (4,7-4,9 % dei pixel cambiano a camera ferma): halo3 non è la causa. L3 (`dishonored_renut_clamp_7e3 = false`):
+nessun disco in nessuna cattura, zona della lampada 110,3-110,4 per 16 catture in 16 s, la cucina come sul PC. Il clamp
+(porta 106 di dishonored-nx) aggiunge a ogni pixel shader che scrive un target 7e3 con bias 0 `clamp(rgb, 0, 31.875)`,
+`clamp(a, 0, 1)`, NaN -> 0 (costante 990): 223 pipeline di GTA IV lo ricevono. Nessuna pipeline esiste sia con sia senza
+la costante (`clamp_pairs.py` sulle varianti di L): la classificazione del target è stabile, quindi l'alternanza non
+viene da una chiave che cambia ma dal clamp applicato ai valori della luce. Il D3D12 del PC (riferimento di ogni correzione
+dell'illuminazione dalla U12) non ha mai avuto il clamp e disegna un alone morbido. Quale valore la luce scrive oltre il
+campo (alfa sopra 1 o colore sopra 31,875 in una miscela SRC_ALPHA) resta da vedere su una cattura GPU: non serve per la
+correzione, che è per GTA IV soltanto (`gta4_switch_defaults.toml`); gli altri giochi tengono il default del base.
+
+**Bicchieri e luci esterne (ancora aperti, separati dall'alone).** L3, raffiche a camera ferma: il bicchiere alto e quello
+piccolo sul tavolo cambiano riflesso/contorno fra catture a 120 ms (89-101 s); in strada (141 s) solo personaggi animati
+più due piccole sorgenti (la lampada di una porta, un'insegna al neon) che si accendono e spengono; le ombre del carretto
+non cambiano. 124 dei 666 vertex shader di GTA IV campionano texture, 34 nelle run MAX-A, alcuni con cinque prelievi di
+profondità attorno a un punto (`vs_44297F746E7C4B27`: il test di visibilità delle luci). Su deko3d una texture resa
+leggibile passa per una barriera Fragments che non trattiene il lavoro dei vertici (porta 161 della base, da fnxf_xiii:
+il suo flare lampeggiava allo stesso modo). IPOTESI per le luci esterne, da verificare in MAX-B (run L contro V0). Per i
+bicchieri nessuna causa trovata: candidati l'ordine/composizione dei trasparenti e il riflesso; la run L di MAX-B li
+inquadra 30 s fermi.
+
+**MAX-B: contenuto.** Porte 157-181 della base (commit `956824b9`, `2f5cd495`, `66bb4eb6`, `ult_port_sync.py`, 0
+conflitti; `device.cpp` e `katamari_keys.cpp` adattati a mano: la contabilità del frame dopo il present nella forma di
+GTA IV, il censimento del batch dell'host nelle attese della fence, il limite dei fotogrammi letto dal menu di gioco),
+`dishonored_renut_clamp_7e3 = false` e `banjo_deko3d_vertex_texture_barrier = true` in `gta4_switch_defaults.toml`, il
+nativo del filtro `gta4_hand_biquad` (`tools/ultimate/gen_biquad_native.py` -> `app/src/cpu/hot/gta4_biquad_native.inc`):
+il ciclo della copia eseguito una seconda volta, davanti, con i 18 slot dello stack 96-176(r1) (coefficienti e stati)
+in variabili locali; le stesse istruzioni nello stesso ordine, i campioni letti e scritti in memoria guest come
+nell'originale, gli stati dei filtri accesi riscritti sullo stack all'uscita. Rinuncia (le istruzioni originali) se i
+campioni toccati (`r11-8 .. r11+1016`) si sovrappongono agli slot (`r1+96 .. r1+180`) o con la chiave spenta.
+
+**MAX-B: verifiche sul PC (2026-11-18).**
+- *Prova strutturale.* Tolto il blocco inserito, il nativo è la copia riga per riga (il generatore la compone come
+  `righe[:e1] + blocco + righe[e1:]`); il blocco non ha altre uscite (un `goto` fuori dalla regione rinominata non
+  compilerebbe); la seconda entrata del ciclo (`loc_F0000002`) usa sempre le istruzioni originali. Il `.inc` compilato è
+  l'uscita attuale del generatore sulla copia attuale (rigenerato e confrontato).
+- *Test di sovrapposizione* (`scratchpad/biquad_overlap_check.py`): la condizione C++ (aritmetica a 64 bit) contro
+  l'intersezione degli intervalli: 0 discordanze su 2.013.000 casi (limiti, casuali, vicini) e 0 su 2.200 distanze
+  controllate byte per byte. I limiti sono quelli degli accessi del ciclo (offset -8..+20 per 32 passate da 32 byte).
+- *Guardia densa* (`banjo_hot_guard_calls` 4000, periodo 64, 240 s dal salvataggio di U16): **guard B1** 274 copie
+  raggiunte, 1.390.395 chiamate confrontate, **0 differenze**; `sub_828C2D28` 4.643 confronti con le istruzioni
+  originali, 0 differenze; **guard B2** (binario finale) 273 copie, 1.389.579 confronti, 0 differenze, `sub_828C2D28`
+  4.667, riverbero 4.024, 0 differenze; controlli del codice generato (costanti piegate, mirror di r1, 5,9 M stack
+  forward) 0 differenze.
+- *Il nativo gira davvero* (run di conteggio, `banjo_hot_count`, 180 s): il blocco nativo conta con `s.Hand` (nullo
+  nelle forme reale e di guardia) 770.261 esecuzioni (670.093 col solo filtro A, 100.168 col filtro B); il blocco
+  d'ingresso del ciclo 770.213 entrate, la seconda entrata 0: **ogni esecuzione del ciclo passa dal nativo**, nessuna
+  rinuncia per sovrapposizione. 1.719.234 chiamate in tutto: le altre (filtri spenti) escono prima del ciclo.
+- *Chiave spenta* (guard B5off, `gta4_hand_biquad = false` in un `renut.toml` temporaneo accanto all'eseguibile, poi
+  rinominato): `GTA IV filter (gta4_hand_biquad): off`, la copia senza nativo 4.225 confronti, 0 differenze (1,34 M in
+  tutto, 0). **Dalla riga di comando del PC le chiavi booleane `--chiave=false` e `--no-chiave` non hanno effetto**
+  (prova: `--no-gta4_hand_biquad`, `--gta4_hand_biquad=false` e `--log_level=debug` ignorati; `--banjo_hot_count=true`,
+  le chiavi intere e le stringhe delle catture prese): difetto della riga di comando dell'SDK (`cvar::Init`, CLI11), già
+  visto in MAX-A con `gta4_hand_limiter_verify`; non corretto in questo ciclo. Sulla console le chiavi arrivano dal toml
+  (`ApplyTomlTable`), il percorso provato qui.
+- *Due correzioni trovate dalle prove:* `kNames` dei nativi a mano non aveva il nome del 27° (la riga "ON" del filtro
+  non usciva nel log: spdlog scartava il formato col puntatore nullo); aggiunto `"GTA IV filter"`. Il blocco nativo ora
+  chiama `s.Hand(kRageBiquad, filtri)` (il conteggio sopra).
+- *Hook adattati e porte:* build PC completa senza errori, 240 s dal salvataggio con catture: la stanza disegnata come
+  prima; gli avvisi del log uguali a quelli della guardia di MAX-A (cambiano solo le letture lente, che dipendono dalla
+  cache dei file); il ramo "dopo il present" di `device.cpp` ha la forma della base `66bb4eb6`. Il clamp 7e3 e la barriera
+  dei vertex shader agiscono solo su deko3d: il PC non li esercita, la prova è la run L / V0 sulla console.
+
+**Il codice generato rielaborato dalla build PC (trovato e corretto in questo ciclo).** `tools/ultimate/build_pc.bat`
+configura a ogni chiamata; la configurazione riscrive `rex/version.h` (`REXGLUE_BUILD_TIMESTAMP`), quindi `rexglue.exe`
+si ricollega e il passo "Generating recompiled code" (codegen + `tools/post_codegen.py`, stesso comando) riparte. Il
+codegen non riscrive nulla ("0 written, 1 module up to date") e `post_codegen` ripassa sull'albero già elaborato: dopo le
+porte di MAX-B questo **non è idempotente** (stack_forward 58 load inoltrati invece di 67, barriere dei cicli 14.021
+invece di 13.990, flush_hoist 102 invece di 105, `fnm_sign` 1.456 ripristini): 182 file diversi dalla generazione
+registrata (`gen-u18max-b.json`). La prima build PC (interrotta per memoria a 203/414) e la seconda l'avevano fatto.
+Correzione: l'albero rielaborato salvato in `D:\theft4-backups\generated-u18max-b-pcbuild-rerun`; rigenerazione da
+zero (`regenerate.ps1`, manifest `gen-u18max-b-2.json`): 934 file su 935 identici alla generazione delle 09:27 (solo
+`codegen.times.json`); poi la build senza riconfigurare (`cmake --build`), con `codegen.stamp` messo da parte
+(`codegen.stamp.bak-1430`) perché il passo del generatore riscrivesse i 321 file del codegen da zero e `post_codegen`
+girasse su codice nuovo: **931 file identici al manifest**, gli altri 4 sono stamp, dipendenze e tempi. MAX-A non era
+stata colpita: il suo backup coincide con `gen-u18-max.json` (935 su 935). La build Switch non ha il passo del generatore
+e fissa `version.h` con `SOURCE_DATE_EPOCH`; per il PC la stessa cosa in `build_pc.bat` è il rimedio (prossimo ciclo:
+riconfigurare oggi rilancerebbe proprio quel passo).
+
+**Build Switch (non finita).** `tools/ultimate/build_switch.bat everyday`, 1 job, `THEFT4_BUILD_LABEL=u18max-b`: fermata da Claude Code per memoria
+scarsa del sistema (non un errore della build) a 166/407, senza errori di compilazione fino lì; gli oggetti restano e la build
+riprende incrementale. Nessuna NRO MAX-B ancora: il pacchetto `u18max-b` (run L, A, V0 in quest'ordine) si prepara dopo.
+
 ## 5. Rischi noti
 
 - **Layout e XDK:** la base è a 2.0.5632 (Katamari), GTA IV a 2.0.6274: ogni offset si riprende da `gta4_d3d.h`, non si
@@ -1811,3 +2151,7 @@ generato: tipi 2, 3 e 5): difetto latente dell'SDK, da correggere quando lo si t
 | U17 | 2026-11-16 | (vedi U17, console) | Analisi CPU: strada con core 0-2 saturi (~357 % su 300 %), mixer ~105 % di un core, core 3 libero; vetri e fari che si alternano a scena ferma (catture). Nell'albero: copia del gioco sul percorso completo (ripristino veloce su deko3d), `gta4_xaudio_supervisor_core3` (spenta). PC compilato; console da autorizzare. §2.23 |
 | U17, build | 2026-11-16 | (vedi U17, console) | Build Switch a 1 job (incrementale: 3 file), NRO `15da0fff…` (`6be295853eed-dirty+u17`, `THEFT4_BUILD_LABEL`), pacchetto `u17` con A, C1, C2 (facoltativa), G0-G3, cache U10. TW2DE-NX esaminato: PGO, LTO, -O3, batched già presenti nella base; trasferibili `vec_neon_forms` e (via la base) i port 142-147 di oggi. Console da eseguire. §2.24 |
 | U17, console | 2026-11-16 | (questo commit) | Console (NRO `15da0fff…`, A/C1/C2/G0-G3): **ripristino in due passaggi attivo** (8.001 su 8.001), GPU cucina 59,3 -> 39,2 ms, **cucina 16,6 -> 24,6 fps**, filmato 20,0 -> 25,1; strada e garage invariati (CPU). **C1/C2 respinte**: il mixer sul core 3 riceve meno CPU (audio 80,9 / 72 % in strada); C2 affama anche il file system (letture SD 10 -> 51 ms, filmato caricato in 86 s). G1-G3 non tolgono i lampeggiamenti; l'alone alterna due stati solo sulla console (PC stabile anche a 30 fps). PC, nuova partita: la prima missione parte; 4 copie native diverse dall'originale trovate dalla guardia (correzione preparata). Port 142-147 divisi in gruppi applicabili. §2.25 |
+| U18-1, build | 2026-11-16 | (non committato) | Build Switch autorizzata a 1 job (363 passi, 86 min), NRO `315669d3…` (`168baa62b651-dirty+u18-1`): U17 + port 142, 143, 145, 146 + 4 copie native tolte (147 tolto: dipende dal 144, non entra nell'NRO; rigenerazione completa: differenze dall'albero U17 verificate una per una). Pacchetto `u18-1` con B0-B4, B5 facoltativa, V, N; ogni chiave e ogni differenza dei toml verificate. Console da eseguire. §2.26 |
+| U18 MAX-A, build | 2026-11-17 | (non committato) | U18-1 letta (port 142-146 neutri; N: **la prima missione parte**; V: causa dell'alone intermittente = bias dei target fuori dal numero dello stato del percorso veloce). NRO `4485221b…` (`168baa62b651-dirty+u18max-a`, 1 job, 74 min): correzione del percorso veloce, nativi bit-exact del riverbero e del limiter (mixer), port 144 e 147-156 (155 colore spento), cache per sito su 14.161 chiamate indirette, 6 copie nuove, XAudio 0x2D incorporata. PC: guardia 0 differenze (1,42 M), riverbero 4.028 confronti 0 differenze, limiter esatto su 240.000 finestre. Pacchetto `u18max-a` (A, L, P, L2, L3). Console da eseguire. §2.27 |
+| U18 MAX-A, console | 2026-11-18 | (questo commit) | Console (NRO `4485221b…`, A/L/P/L2/L3): **audio risolto** (mixer 5,12 -> 4,37 ms per blocco, consegna 92,8 -> 100 %), strada invariata (9,3 fps, core 0-2 saturi), **disco della lampada = clamp 7e3** (L3 senza clamp: nessun disco), nessuna chiave diversa del percorso veloce (P). §2.28 |
+| U18 MAX-B, PC | 2026-11-18 | (questo commit) | Porte 157-181 della base, clamp 7e3 spento per GTA IV, nativo del filtro `828C2D28` (`gta4_hand_biquad`): guardia 0 differenze (1,39 M chiamate, filtro 4.667), il nativo esegue ogni passata del ciclo (770.213), chiave spenta -> copia 0 differenze; codice generato rielaborato dalla build PC (post_codegen non idempotente) trovato, rigenerato e controllato col manifest. Build Switch fermata per memoria a 166/407. §2.28 |
